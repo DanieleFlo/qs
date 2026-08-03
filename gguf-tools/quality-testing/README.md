@@ -150,3 +150,56 @@ Output fields:
   local top-N for the same position.
 - `api_top_mae`: local-vs-API logprob MAE over mapped API top alternatives.
 - `api_pair_rate`: pairwise ordering agreement among mapped API alternatives.
+
+## 6. Qwen3.6 Fixture Staging
+
+Qwen3.6 uses the same data-set layout as the existing quality fixtures.  The
+tracked manifests live under `data/qwen36-27b` and `data/qwen36-27b-mtp`, with
+`prompts`, `continuations`, and `responses` directories.  Shared scripts stay
+in this directory alongside `collect_official.py` and the existing scorers.
+
+Validate both manifests without loading a model:
+
+```sh
+python3 gguf-tools/quality-testing/validate_qwen36.py \
+  gguf-tools/quality-testing/data/qwen36-27b/manifest.json \
+  gguf-tools/quality-testing/data/qwen36-27b-mtp/manifest.json
+
+make -C gguf-tools quality-qwen36-test
+```
+
+Materialize the deterministic long prompt into an ignored staging directory:
+
+```sh
+python3 gguf-tools/quality-testing/generate_qwen36_prompt.py \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b/manifest.json \
+  --case long_canary_4096 \
+  --staging-dir gguf-tools/quality-testing/staging/local
+```
+
+Generate an oracle candidate by choosing `llama.cpp`, `transformers`, or
+`vllm`.  Every run requires complete provenance and writes the familiar
+`prompts/`, `continuations/`, `responses/`, and `manifest.tsv` structure:
+
+```sh
+python3 gguf-tools/quality-testing/generate_qwen36_oracle.py \
+  --manifest /path/to/local-manifest.json \
+  --oracle llama.cpp \
+  --staging-dir /path/to/qwen36-staging \
+  --run-id llama-q4-cuda-001 \
+  --engine-commit LLAMA_CPP_FULL_COMMIT \
+  --build-flags '-DGGML_CUDA=ON' \
+  --backend CUDA \
+  --hardware 'NVIDIA GPU model and driver' \
+  --dtype 'GGUF Q4_K_M'
+```
+
+The llama.cpp adapter records full-vocabulary logits against the exact pinned
+GGUF.  Transformers and vLLM are labelled semantic upstream oracles because
+their weights and precision differ.  vLLM records top-logprob slices because
+its public generation API does not expose full logits.
+
+Generators reject `golden` and `goldens` paths, reject non-empty unmarked
+staging directories, and provide no promotion or acceptance command.  Review
+and copy approved fixture data manually.  Missing models, runtimes, or hardware
+remain `not_verified`; they are never treated as passing.

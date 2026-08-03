@@ -10,3 +10,7 @@ quality-testing/data/*
 !quality-testing/data/pro/**
 !quality-testing/data/flash/
 !quality-testing/data/flash/**
+!quality-testing/data/qwen36-27b/
+!quality-testing/data/qwen36-27b/**
+!quality-testing/data/qwen36-27b-mtp/
+!quality-testing/data/qwen36-27b-mtp/**

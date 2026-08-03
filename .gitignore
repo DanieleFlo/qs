@@ -31,5 +31,6 @@
 __pycache__/
 *.pyc
 /misc/
+/gguf-tools/quality-testing/staging/
 .*.swp
 .DS_Store

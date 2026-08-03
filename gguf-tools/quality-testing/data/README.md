@@ -9,6 +9,11 @@ safe to commit and use in release QA.
   slices.
 - `pro`: 100 DeepSeek V4 PRO official continuations with API top-logprob
   slices.
+- `qwen36-27b`: shared English Qwen3.6 input corpus and pinned target
+  manifest; reviewed output uses the same prompts/continuations/responses
+  layout as the existing sets.
+- `qwen36-27b-mtp`: pinned target-plus-MTP manifest, reusing the exact target
+  prompt set.
 
 Each fixture directory contains:
 

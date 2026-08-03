@@ -1,5 +1,9 @@
 # Agent Notes
 
+Before starting any task, read `PROJECT_INDEX.md` and `todo.md`. Keep
+`PROJECT_INDEX.md` updated when a relevant file is added, removed, renamed, or
+changes responsibility.
+
 `ds4.c` is a DeepSeek V4 Flash specific inference engine. It is not a generic
 GGUF runner. The goal is a small, readable, high-performance C codebase with
 Objective-C only where Metal requires it and Metal kernels under `metal/`.

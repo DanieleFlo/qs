@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ds4.local/schemas/qwen36-fixture-manifest-v1.json",
+  "title": "DS4 Qwen3.6 quality fixture manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "model",
+    "artifacts",
+    "tokenizer",
+    "chat_template",
+    "oracle_environments",
+    "corpus",
+    "output_format",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": {"const": "ds4-qwen36-fixture-manifest-v1"},
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "variant", "architecture", "context_length", "source", "source_revision"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "variant": {"enum": ["target", "target-with-mtp"]},
+        "architecture": {"const": "qwen35"},
+        "context_length": {"type": "integer", "minimum": 1},
+        "source": {"type": "string", "format": "uri"},
+        "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "tokenizer": {"$ref": "#/$defs/sourceFile"},
+    "chat_template": {"$ref": "#/$defs/sourceFile"},
+    "oracle_environments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["llama.cpp", "transformers", "vllm"],
+      "properties": {
+        "llama.cpp": {"$ref": "#/$defs/oracle"},
+        "transformers": {"$ref": "#/$defs/oracle"},
+        "vllm": {"$ref": "#/$defs/oracle"}
+      }
+    },
+    "corpus": {"type": "string", "minLength": 1},
+    "output_format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "index", "large_logits", "checksums"],
+      "properties": {
+        "version": {"const": "ds4-qwen36-oracle-v1"},
+        "index": {"const": "JSON"},
+        "large_logits": {"const": "float32-le"},
+        "checksums": {"const": "SHA-256"}
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reasons"],
+      "properties": {
+        "status": {"enum": ["verified", "not_verified"]},
+        "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "url", "filename", "size_bytes", "sha256", "quantization", "local_path", "metadata"],
+      "properties": {
+        "role": {"enum": ["target", "mtp"]},
+        "url": {"type": "string", "format": "uri"},
+        "filename": {"type": "string", "minLength": 1},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "quantization": {"type": "string", "minLength": 1},
+        "local_path": {"type": ["string", "null"]},
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "repository_revision", "general.architecture", "context_length", "expected_model", "header_inspection"],
+          "properties": {
+            "source": {"type": "string", "minLength": 1},
+            "repository_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "general.architecture": {"const": "qwen35"},
+            "context_length": {"type": "integer", "minimum": 1},
+            "expected_model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model_type", "hidden_size", "num_hidden_layers", "num_attention_heads", "num_key_value_heads", "head_dim", "partial_rotary_factor", "rope_theta", "intermediate_size", "vocab_size", "mtp_num_hidden_layers", "tie_word_embeddings"],
+              "properties": {
+                "model_type": {"const": "qwen3_5_text"},
+                "hidden_size": {"const": 5120},
+                "num_hidden_layers": {"const": 64},
+                "num_attention_heads": {"const": 24},
+                "num_key_value_heads": {"const": 4},
+                "head_dim": {"const": 256},
+                "partial_rotary_factor": {"const": 0.25},
+                "rope_theta": {"const": 10000000},
+                "intermediate_size": {"const": 17408},
+                "vocab_size": {"const": 248320},
+                "mtp_num_hidden_layers": {"const": 1},
+                "tie_word_embeddings": {"const": false}
+              }
+            },
+            "header_inspection": {"enum": ["verified", "not_verified"]}
+          }
+        }
+      }
+    },
+    "sourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "revision", "size_bytes", "sha256", "embedded_gguf_sha256", "verification"],
+      "properties": {
+        "url": {"type": "string", "format": "uri"},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "embedded_gguf_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "verification": {"enum": ["source_verified", "gguf_not_verified"]}
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "status", "version", "commit", "build_flags", "backend", "hardware", "dtype", "parameters", "reason"],
+      "properties": {
+        "kind": {"enum": ["numeric_same_gguf", "semantic_upstream"]},
+        "status": {"enum": ["verified", "not_verified"]},
+        "version": {"type": ["string", "null"]},
+        "commit": {"type": ["string", "null"]},
+        "build_flags": {"type": ["string", "null"]},
+        "backend": {"type": ["string", "null"]},
+        "hardware": {"type": ["string", "null"]},
+        "dtype": {"type": ["string", "null"]},
+        "parameters": {"type": "object"},
+        "reason": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

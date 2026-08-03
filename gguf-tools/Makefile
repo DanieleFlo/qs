@@ -36,7 +36,7 @@ endif
 CFLAGS ?= -O3 -Wall -Wextra -std=c11 $(NATIVE_CPU_FLAG)
 CPPFLAGS ?= -D_GNU_SOURCE
 
-.PHONY: all clean quality-score quality-llama-score
+.PHONY: all clean quality-score quality-llama-score quality-qwen36-test
 
 all: deepseek4-quantize
 
@@ -49,6 +49,9 @@ quality-score:
 
 quality-llama-score:
 	$(CXX) $(LLAMA_CPP_CXXFLAGS) -o quality-testing/score_llama quality-testing/score_llama.cpp $(LLAMA_CPP_LDLIBS)
+
+quality-qwen36-test:
+	python3 ../tests/test_qwen36_fixtures.py -v
 
 clean:
 	rm -f deepseek4-quantize quality-testing/score_official quality-testing/score_llama
