@@ -3,6 +3,8 @@ set -e
 
 GLM_UNSLOTH_REPO="unsloth/GLM-5.2-GGUF"
 GLM_ANTIREZ_REPO="antirez/GLM-5.2-GGUF"
+QWEN36_REPO="ggml-org/Qwen3.6-27B-GGUF"
+QWEN36_REVISION="8a7ee08e8b9bfb857107ecc25a5599d2f38b76f8"
 REPO="antirez/deepseek-v4-gguf"
 Q2_IMATRIX_FILE="DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix.gguf"
 Q4_IMATRIX_FILE="DeepSeek-V4-Flash-Q4KExperts-F16HC-F16Compressor-F16Indexer-Q8Attn-Q8Shared-Q8Out-chat-v2-imatrix.gguf"
@@ -18,6 +20,10 @@ GLM_UNSLOTH_Q4_FIRST_FILE="$GLM_UNSLOTH_Q4_LOCAL_BASE-00001-of-00011.gguf"
 GLM_ANTIREZ_IQ2XXS_FILE="GLM-5.2-UD-IQ2_XXS_RoutedIQ2XXS_blk78Q2K.gguf"
 GLM_ANTIREZ_Q2_FILE="GLM-5.2-UD-Q2_K_RoutedQ2K.gguf"
 GLM_ANTIREZ_Q4_FILE="GLM-5.2-UD-Q4_K_RoutedQ4K.gguf"
+QWEN36_Q4_FILE="Qwen3.6-27B-Q4_K_M.gguf"
+QWEN36_Q4_SHA256="65b753ea835627f7b511143c6ceb976525c7f21f5df8c664bc0a9c23d1c49921"
+QWEN36_MTP_FILE="mtp-Qwen3.6-27B-Q4_0.gguf"
+QWEN36_MTP_SHA256="3d593f9e2788d59bb30d6024706b1efd5219fea466b6397c46159e3540937173"
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT_DIR=${DS4_GGUF_DIR:-"$ROOT/gguf"}
@@ -45,6 +51,9 @@ Usage:
   ./download_model.sh glm-antirez-iq2xxs [--token TOKEN]
   ./download_model.sh glm-antirez-q2 [--token TOKEN]
   ./download_model.sh glm-antirez-q4 [--token TOKEN]
+  ./download_model.sh qwen36-q4 [--token TOKEN]
+  ./download_model.sh qwen36-mtp [--token TOKEN]
+  ./download_model.sh qwen36-q4-mtp [--token TOKEN]
 
 Targets:
 
@@ -103,6 +112,16 @@ Targets:
        GLM 5.2 antirez routed Q4_K GGUF from antirez/GLM-5.2-GGUF.
        About 434 GB on disk.
 
+  qwen36-q4
+       Qwen3.6 27B Q4_K_M target GGUF, about 19 GB on disk.
+
+  qwen36-mtp
+       Optional Qwen3.6 27B MTP Q4_0 GGUF, about 1.7 GB on disk.
+
+  qwen36-q4-mtp
+       Downloads both Qwen3.6 files, verifies their SHA-256 checksums, and
+       links ./ds4flash.gguf to the Q4_K_M target model.
+
 Options:
   --token TOKEN  Hugging Face token. Otherwise HF_TOKEN or the local HF token
                  cache is used if present.
@@ -141,6 +160,7 @@ MODEL_FILES=
 LINK_MODEL=1
 FORCE_HF_DOWNLOAD=0
 FLATTEN_DOWNLOADS=0
+HF_REVISION=
 
 case "$MODEL" in
     q2-imatrix) MODEL_FILE=$Q2_IMATRIX_FILE ;;
@@ -178,6 +198,26 @@ case "$MODEL" in
     glm-antirez-q4)
         REPO=$GLM_ANTIREZ_REPO
         MODEL_FILE=$GLM_ANTIREZ_Q4_FILE
+        FORCE_HF_DOWNLOAD=1
+        ;;
+    qwen36-q4)
+        REPO=$QWEN36_REPO
+        HF_REVISION=$QWEN36_REVISION
+        MODEL_FILE=$QWEN36_Q4_FILE
+        FORCE_HF_DOWNLOAD=1
+        ;;
+    qwen36-mtp)
+        REPO=$QWEN36_REPO
+        HF_REVISION=$QWEN36_REVISION
+        MODEL_FILE=$QWEN36_MTP_FILE
+        FORCE_HF_DOWNLOAD=1
+        LINK_MODEL=0
+        ;;
+    qwen36-q4-mtp)
+        REPO=$QWEN36_REPO
+        HF_REVISION=$QWEN36_REVISION
+        MODEL_FILE=$QWEN36_Q4_FILE
+        MODEL_FILES="$QWEN36_Q4_FILE $QWEN36_MTP_FILE"
         FORCE_HF_DOWNLOAD=1
         ;;
     -h|--help|help)
@@ -284,8 +324,12 @@ download_one_hf() {
     echo "using $HF_CMD download"
     echo "If the download stops, run the same command again to resume it."
 
-    if [ -n "$TOKEN" ]; then
+    if [ -n "$TOKEN" ] && [ -n "$HF_REVISION" ]; then
+        "$HF_CMD" download "$REPO" "$file" --repo-type model --revision "$HF_REVISION" --local-dir "$OUT_DIR" --token "$TOKEN"
+    elif [ -n "$TOKEN" ]; then
         "$HF_CMD" download "$REPO" "$file" --repo-type model --local-dir "$OUT_DIR" --token "$TOKEN"
+    elif [ -n "$HF_REVISION" ]; then
+        "$HF_CMD" download "$REPO" "$file" --repo-type model --revision "$HF_REVISION" --local-dir "$OUT_DIR"
     else
         "$HF_CMD" download "$REPO" "$file" --repo-type model --local-dir "$OUT_DIR"
     fi
@@ -299,6 +343,35 @@ download_one_hf() {
         echo "Hugging Face download finished but expected file is missing: $out" >&2
         exit 1
     fi
+}
+
+verify_sha256() {
+    file=$1
+    expected=
+    case "$(basename "$file")" in
+        "$QWEN36_Q4_FILE") expected=$QWEN36_Q4_SHA256 ;;
+        "$QWEN36_MTP_FILE") expected=$QWEN36_MTP_SHA256 ;;
+        *) return 0 ;;
+    esac
+
+    path="$OUT_DIR/$(local_download_name "$file")"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$path" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$path" | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+        actual=$(openssl dgst -sha256 "$path" | awk '{print $NF}')
+    else
+        echo "Cannot verify SHA-256: install sha256sum, shasum, or openssl." >&2
+        exit 1
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "SHA-256 mismatch for $path" >&2
+        echo "Expected: $expected" >&2
+        echo "Actual:   $actual" >&2
+        exit 1
+    fi
+    echo "Verified SHA-256: $path"
 }
 
 download_one() {
@@ -343,9 +416,11 @@ download_one() {
 if [ -n "$MODEL_FILES" ]; then
     for file in $MODEL_FILES; do
         download_one "$file"
+        verify_sha256 "$file"
     done
 else
     download_one "$MODEL_FILE"
+    verify_sha256 "$MODEL_FILE"
 fi
 
 if [ "$MODEL" = "mtp" ]; then
@@ -357,6 +432,9 @@ elif [ "$MODEL" = "dspark-support" ]; then
     echo
     echo "DSpark support downloaded. Enable it explicitly in greedy mode:"
     echo "  ./ds4 --dspark -m ./ds4flash.gguf --mtp $OUT_DIR/$DSPARK_SUPPORT_FILE --temp 0"
+elif [ "$MODEL" = "qwen36-mtp" ]; then
+    echo
+    echo "Qwen3.6 MTP downloaded to $OUT_DIR/$QWEN36_MTP_FILE."
 elif [ "$MODEL" = "pro-q4-layers00-30" ] || [ "$MODEL" = "pro-q4-layers31-output" ] || [ "$MODEL" = "pro-q4-split" ]; then
     echo
     echo "Downloaded PRO Q4 distributed split file(s). Use them with --layers,"
