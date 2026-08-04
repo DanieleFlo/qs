@@ -1,0 +1,251 @@
+{
+  "format": "ds4-qwen36-gguf-snapshot-v1",
+  "artifact": {
+    "filename": "mtp-Qwen3.6-27B-Q4_0.gguf",
+    "size_bytes": 1680270560,
+    "sha256": "3d593f9e2788d59bb30d6024706b1efd5219fea466b6397c46159e3540937173"
+  },
+  "gguf": {
+    "version": 3,
+    "metadata_count": 41,
+    "tensor_count": 18,
+    "header_size_bytes": 10943686,
+    "data_offset_bytes": 10943712,
+    "tokenizer_metadata_sha256": "bdd677ca4411e337857a9a66b35f313468f4d6aad1f5c34928f2f44577cccb94"
+  },
+  "metadata": {
+    "general.architecture": "qwen35",
+    "general.type": "model",
+    "general.sampling.top_k": 20,
+    "general.sampling.top_p": 0.949999988079071,
+    "general.sampling.temp": 1.0,
+    "general.name": "Qwen3.6-27B",
+    "general.size_label": "3.0B",
+    "general.license": "apache-2.0",
+    "general.license.link": "https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE",
+    "general.tags": {
+      "element_type": "string",
+      "count": 1,
+      "encoded_sha256": "7d77cbba33207f9699a6eae1471a0dd708451b83c38fc3f573edd85f231bd8de",
+      "values": [
+        "image-text-to-text"
+      ]
+    },
+    "qwen35.block_count": 65,
+    "qwen35.context_length": 262144,
+    "qwen35.embedding_length": 5120,
+    "qwen35.feed_forward_length": 17408,
+    "qwen35.attention.head_count": 24,
+    "qwen35.attention.head_count_kv": 4,
+    "qwen35.rope.dimension_sections": {
+      "element_type": "int32",
+      "count": 4,
+      "encoded_sha256": "df74bd2dd954d1f1271e4adfc1067c5bd3058a1b25ca62b49977e2280c5a128e",
+      "values": [
+        11,
+        11,
+        10,
+        0
+      ]
+    },
+    "qwen35.rope.freq_base": 10000000.0,
+    "qwen35.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+    "qwen35.attention.key_length": 256,
+    "qwen35.attention.value_length": 256,
+    "qwen35.ssm.conv_kernel": 4,
+    "qwen35.ssm.state_size": 128,
+    "qwen35.ssm.group_count": 16,
+    "qwen35.ssm.time_step_rank": 48,
+    "qwen35.ssm.inner_size": 6144,
+    "qwen35.full_attention_interval": 4,
+    "qwen35.rope.dimension_count": 64,
+    "qwen35.nextn_predict_layers": 1,
+    "tokenizer.ggml.model": "gpt2",
+    "tokenizer.ggml.pre": "qwen35",
+    "tokenizer.ggml.tokens": {
+      "element_type": "string",
+      "count": 248320,
+      "encoded_sha256": "8602a5aeb57ffeab205af479d8d776f6d26a87ea71908599b5beef21a9e10001"
+    },
+    "tokenizer.ggml.token_type": {
+      "element_type": "int32",
+      "count": 248320,
+      "encoded_sha256": "76adce07e4c8d6808a375cf050fc14ac9028c821be794047709bae160387353a"
+    },
+    "tokenizer.ggml.merges": {
+      "element_type": "string",
+      "count": 247587,
+      "encoded_sha256": "a284225c6b7eb3356459a6594322984eeb28a45ca0e5c7621459743f55fefa2b"
+    },
+    "tokenizer.ggml.eos_token_id": 248046,
+    "tokenizer.ggml.padding_token_id": 248044,
+    "tokenizer.ggml.bos_token_id": 248044,
+    "tokenizer.ggml.add_bos_token": false,
+    "tokenizer.chat_template": {
+      "utf8_size_bytes": 7764,
+      "utf8_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259"
+    },
+    "general.quantization_version": 2,
+    "general.file_type": 2
+  },
+  "tensor_type_counts": {
+    "F32": 8,
+    "Q4_0": 10
+  },
+  "tensors": [
+    {
+      "name": "output.weight",
+      "shape": [
+        5120,
+        248320
+      ],
+      "type": "Q4_0",
+      "offset": 0
+    },
+    {
+      "name": "output_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 715161600
+    },
+    {
+      "name": "token_embd.weight",
+      "shape": [
+        5120,
+        248320
+      ],
+      "type": "Q4_0",
+      "offset": 715182080
+    },
+    {
+      "name": "blk.64.attn_k.weight",
+      "shape": [
+        5120,
+        1024
+      ],
+      "type": "Q4_0",
+      "offset": 1430343680
+    },
+    {
+      "name": "blk.64.attn_k_norm.weight",
+      "shape": [
+        256
+      ],
+      "type": "F32",
+      "offset": 1433292800
+    },
+    {
+      "name": "blk.64.attn_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1433293824
+    },
+    {
+      "name": "blk.64.attn_output.weight",
+      "shape": [
+        6144,
+        5120
+      ],
+      "type": "Q4_0",
+      "offset": 1433314304
+    },
+    {
+      "name": "blk.64.attn_q.weight",
+      "shape": [
+        5120,
+        12288
+      ],
+      "type": "Q4_0",
+      "offset": 1451009024
+    },
+    {
+      "name": "blk.64.attn_q_norm.weight",
+      "shape": [
+        256
+      ],
+      "type": "F32",
+      "offset": 1486398464
+    },
+    {
+      "name": "blk.64.attn_v.weight",
+      "shape": [
+        5120,
+        1024
+      ],
+      "type": "Q4_0",
+      "offset": 1486399488
+    },
+    {
+      "name": "blk.64.ffn_down.weight",
+      "shape": [
+        17408,
+        5120
+      ],
+      "type": "Q4_0",
+      "offset": 1489348608
+    },
+    {
+      "name": "blk.64.ffn_gate.weight",
+      "shape": [
+        5120,
+        17408
+      ],
+      "type": "Q4_0",
+      "offset": 1539483648
+    },
+    {
+      "name": "blk.64.ffn_up.weight",
+      "shape": [
+        5120,
+        17408
+      ],
+      "type": "Q4_0",
+      "offset": 1589618688
+    },
+    {
+      "name": "blk.64.nextn.eh_proj.weight",
+      "shape": [
+        10240,
+        5120
+      ],
+      "type": "Q4_0",
+      "offset": 1639753728
+    },
+    {
+      "name": "blk.64.nextn.enorm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1669244928
+    },
+    {
+      "name": "blk.64.nextn.hnorm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1669265408
+    },
+    {
+      "name": "blk.64.nextn.shared_head_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1669285888
+    },
+    {
+      "name": "blk.64.post_attention_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1669306368
+    }
+  ]
+}

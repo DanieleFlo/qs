@@ -86,7 +86,7 @@
         "metadata": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["source", "repository_revision", "general.architecture", "context_length", "expected_model", "header_inspection"],
+          "required": ["source", "repository_revision", "general.architecture", "context_length", "expected_model", "header_inspection", "snapshot_file", "snapshot_sha256"],
           "properties": {
             "source": {"type": "string", "minLength": 1},
             "repository_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
@@ -111,7 +111,9 @@
                 "tie_word_embeddings": {"const": false}
               }
             },
-            "header_inspection": {"enum": ["verified", "not_verified"]}
+            "header_inspection": {"enum": ["verified", "not_verified"]},
+            "snapshot_file": {"type": ["string", "null"]},
+            "snapshot_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
           }
         }
       }
@@ -126,7 +128,7 @@
         "size_bytes": {"type": "integer", "minimum": 1},
         "sha256": {"$ref": "#/$defs/sha256"},
         "embedded_gguf_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-        "verification": {"enum": ["source_verified", "gguf_not_verified"]}
+        "verification": {"enum": ["source_verified", "source_and_gguf_verified", "gguf_not_verified"]}
       }
     },
     "oracle": {

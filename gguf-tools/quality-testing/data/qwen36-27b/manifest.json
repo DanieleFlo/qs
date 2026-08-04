@@ -35,7 +35,9 @@
         "mtp_num_hidden_layers": 1,
         "tie_word_embeddings": false
       },
-      "header_inspection": "not_verified"
+      "header_inspection": "verified",
+      "snapshot_file": "../qwen36-metadata/target.json",
+      "snapshot_sha256": "3e50ec8443dbbf23ff63af6ec7b62976fcfe4e26e435f8d55fa6ec90371375c0"
     }
   }],
   "tokenizer": {
@@ -43,23 +45,23 @@
     "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
     "size_bytes": 12807982,
     "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
-    "embedded_gguf_sha256": null,
-    "verification": "gguf_not_verified"
+    "embedded_gguf_sha256": "bdd677ca4411e337857a9a66b35f313468f4d6aad1f5c34928f2f44577cccb94",
+    "verification": "source_and_gguf_verified"
   },
   "chat_template": {
     "url": "https://huggingface.co/Qwen/Qwen3.6-27B/resolve/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9/chat_template.jinja",
     "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
     "size_bytes": 7764,
     "sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
-    "embedded_gguf_sha256": null,
-    "verification": "gguf_not_verified"
+    "embedded_gguf_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+    "verification": "source_and_gguf_verified"
   },
   "oracle_environments": {
-    "llama.cpp": {"kind": "numeric_same_gguf", "status": "not_verified", "version": null, "commit": null, "build_flags": null, "backend": null, "hardware": null, "dtype": "GGUF Q4_K_M", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20}, "reason": "GGUF and llama.cpp runtime are not installed on this host"},
+    "llama.cpp": {"kind": "numeric_same_gguf", "status": "verified", "version": "llama-cpp-python 0.3.23 (v0.3.23-cu124)", "commit": "llama.cpp 7d442abf5c6244117fd5a1dc51a5d19f00792491; binding 4a1a8ecd8047149b24a6d997f6f8c992d49aa99a", "build_flags": "prebuilt CUDA 12.4 wheel; CUDA ARCHS=700,750,800,860,890,900; FORCE_MMQ=1; USE_GRAPHS=1", "backend": "CUDA", "hardware": "NVIDIA GeForce RTX 3090 24GB; driver 610.62", "dtype": "GGUF Q4_K_M", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20, "context": 24576, "n_gpu_layers": -1, "verified_runs": ["llama-q4-cuda-001", "llama-q4-cuda-002"]}, "reason": null},
     "transformers": {"kind": "semantic_upstream", "status": "not_verified", "version": null, "commit": null, "build_flags": null, "backend": null, "hardware": null, "dtype": "bfloat16", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20}, "reason": "Transformers, PyTorch and upstream weights are not installed on this host"},
     "vllm": {"kind": "semantic_upstream", "status": "not_verified", "version": null, "commit": null, "build_flags": null, "backend": null, "hardware": null, "dtype": "bfloat16", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20}, "reason": "vLLM and a supported CUDA host are not available"}
   },
   "corpus": "prompts/cases.json",
   "output_format": {"version": "ds4-qwen36-oracle-v1", "index": "JSON", "large_logits": "float32-le", "checksums": "SHA-256"},
-  "verification": {"status": "not_verified", "reasons": ["GGUF header, embedded tokenizer and chat template have not been inspected", "No numeric or semantic oracle has been generated on this host"]}
+  "verification": {"status": "not_verified", "reasons": ["No reviewed numeric oracle has been promoted", "Transformers and vLLM semantic upstream oracles have not been executed on this host"]}
 }

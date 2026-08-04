@@ -223,7 +223,10 @@ def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -
         _validate_sha(artifact["sha256"], f"artifacts[{index}].sha256")
         _require_string(artifact["quantization"], f"artifacts[{index}].quantization")
         metadata = _require_object(artifact["metadata"], f"artifacts[{index}].metadata")
-        _require_fields(metadata, {"source", "repository_revision", "general.architecture", "context_length", "expected_model", "header_inspection"}, f"artifacts[{index}].metadata")
+        _require_fields(metadata, {
+            "source", "repository_revision", "general.architecture", "context_length",
+            "expected_model", "header_inspection", "snapshot_file", "snapshot_sha256",
+        }, f"artifacts[{index}].metadata")
         _validate_revision(metadata["repository_revision"], f"artifacts[{index}].metadata.repository_revision")
         if metadata["general.architecture"] != "qwen35":
             raise FixtureError(f"artifacts[{index}]: architecture mismatch")
@@ -248,6 +251,27 @@ def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -
             raise FixtureError(f"artifacts[{index}]: expected upstream model metadata mismatch")
         if metadata["header_inspection"] not in {"verified", "not_verified"}:
             raise FixtureError(f"artifacts[{index}]: invalid header_inspection")
+        snapshot_file = metadata["snapshot_file"]
+        snapshot_sha256 = metadata["snapshot_sha256"]
+        if metadata["header_inspection"] == "verified":
+            snapshot_path = _resolve_declared_file(
+                manifest_path,
+                _require_string(snapshot_file, f"artifacts[{index}].metadata.snapshot_file"),
+            )
+            _validate_sha(snapshot_sha256, f"artifacts[{index}].metadata.snapshot_sha256")
+            if not snapshot_path.is_file():
+                raise FixtureError(f"GGUF metadata snapshot does not exist: {snapshot_path}")
+            if sha256_file(snapshot_path) != snapshot_sha256:
+                raise FixtureError(f"GGUF metadata snapshot SHA-256 mismatch: {snapshot_path}")
+            snapshot = load_json(snapshot_path)
+            if snapshot.get("format") != "ds4-qwen36-gguf-snapshot-v1":
+                raise FixtureError(f"invalid GGUF metadata snapshot format: {snapshot_path}")
+            recorded = snapshot.get("artifact", {})
+            for field in ("filename", "size_bytes", "sha256"):
+                if recorded.get(field) != artifact[field]:
+                    raise FixtureError(f"GGUF metadata snapshot {field} mismatch: {snapshot_path}")
+        elif snapshot_file is not None or snapshot_sha256 is not None:
+            raise FixtureError(f"artifacts[{index}]: unverified header cannot reference a verified snapshot")
         local_path = artifact["local_path"]
         if local_path is not None:
             local_file = _resolve_declared_file(manifest_path, _require_string(local_path, f"artifacts[{index}].local_path"))
@@ -275,7 +299,7 @@ def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -
         _validate_sha(source_file["sha256"], f"{field}.sha256")
         if source_file["embedded_gguf_sha256"] is not None:
             _validate_sha(source_file["embedded_gguf_sha256"], f"{field}.embedded_gguf_sha256")
-        if source_file["verification"] not in {"source_verified", "gguf_not_verified"}:
+        if source_file["verification"] not in {"source_verified", "source_and_gguf_verified", "gguf_not_verified"}:
             raise FixtureError(f"{field}.verification is invalid")
 
     environments = _require_object(manifest["oracle_environments"], "oracle_environments")

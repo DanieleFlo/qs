@@ -9,11 +9,15 @@ engine, then records each engine's own tokenization separately.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import importlib.metadata
 import json
 import math
+import os
 import sys
+import sysconfig
 from pathlib import Path
+from urllib.parse import urlparse
 
 from qwen36_fixtures import (
     FixtureError,
@@ -22,9 +26,30 @@ from qwen36_fixtures import (
     inventory_files,
     materialize_case,
     platform_provenance,
+    sha256_file,
     validate_manifest,
     write_json,
 )
+
+
+_DLL_HANDLES = []
+
+
+def activate_nvidia_dll_dirs() -> None:
+    """Expose CUDA DLLs installed by NVIDIA pip wheels on Windows."""
+    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
+        return
+    site_packages = Path(sysconfig.get_paths()["purelib"])
+    candidates = [site_packages / "llama_cpp" / "lib"]
+    candidates.extend(sorted((site_packages / "nvidia").glob("*/bin")))
+    for path in candidates:
+        if path.is_dir():
+            _DLL_HANDLES.append(os.add_dll_directory(str(path)))
+    llama_lib = site_packages / "llama_cpp" / "lib"
+    for name in ("ggml-base.dll", "ggml.dll", "ggml-cpu.dll", "ggml-cuda.dll"):
+        path = llama_lib / name
+        if path.is_file():
+            _DLL_HANDLES.append(ctypes.CDLL(str(path)))
 
 
 def package_version(name: str) -> str:
@@ -90,6 +115,8 @@ class BinaryLogits:
             "dtype": "float32-le",
             "shape": [self.rows, self.vocab_size],
             "row_stride_bytes": self.vocab_size * 4,
+            "size_bytes": self.path.stat().st_size,
+            "sha256": sha256_file(self.path),
         }
 
 
@@ -98,11 +125,20 @@ def load_renderer(manifest: dict):
         from transformers import AutoTokenizer
     except ImportError as exc:
         raise FixtureError("transformers is required for pinned Qwen chat rendering") from exc
+    source = upstream_model_id(manifest)
     return AutoTokenizer.from_pretrained(
-        manifest["model"]["source"],
+        source,
         revision=manifest["model"]["source_revision"],
         trust_remote_code=False,
     )
+
+
+def upstream_model_id(manifest: dict) -> str:
+    source = manifest["model"]["source"]
+    parsed = urlparse(source)
+    if parsed.netloc == "huggingface.co":
+        source = parsed.path.strip("/")
+    return source
 
 
 def render_case(tokenizer, case: dict) -> tuple[str, list[int]]:
@@ -125,55 +161,102 @@ def render_case(tokenizer, case: dict) -> tuple[str, list[int]]:
     return rendered, [int(value) for value in upstream_ids]
 
 
-def target_artifact(manifest: dict) -> dict:
-    return next(item for item in manifest["artifacts"] if item["role"] == "target")
+def parse_artifact_path(value: str) -> tuple[str, Path]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("expected ROLE=PATH")
+    role, raw_path = value.split("=", 1)
+    if role not in {"target", "mtp"} or not raw_path:
+        raise argparse.ArgumentTypeError("artifact role must be target or mtp")
+    return role, Path(raw_path)
 
 
-def generate_llama(
-    manifest: dict,
-    case: dict,
-    rendered: str,
-    upstream_ids: list[int],
-    logits_path: Path,
-    steps: int,
-    top_k: int,
-) -> dict:
+def resolve_artifact_paths(manifest: dict, overrides: list[tuple[str, Path]]) -> dict[str, Path]:
+    supplied = dict(overrides)
+    declared = {artifact["role"]: artifact for artifact in manifest["artifacts"]}
+    if not set(supplied).issubset(declared):
+        raise FixtureError("artifact override has a role not declared by the manifest")
+    result: dict[str, Path] = {}
+    for role, artifact in declared.items():
+        raw_path = supplied.get(role)
+        if raw_path is None and artifact["local_path"] is not None:
+            raw_path = Path(artifact["local_path"])
+        if raw_path is None:
+            continue
+        path = raw_path.expanduser().resolve()
+        if not path.is_file():
+            raise FixtureError(f"artifact file does not exist: {path}")
+        if path.stat().st_size != artifact["size_bytes"]:
+            raise FixtureError(f"artifact size mismatch: {path}")
+        if sha256_file(path) != artifact["sha256"]:
+            raise FixtureError(f"artifact SHA-256 mismatch: {path}")
+        result[role] = path
+    return result
+
+
+def target_artifact_summary(manifest: dict) -> dict[str, object]:
+    target = next(artifact for artifact in manifest["artifacts"] if artifact["role"] == "target")
+    return {
+        "filename": target["filename"],
+        "sha256": target["sha256"],
+        "quantization": target["quantization"],
+    }
+
+
+def create_llama(model_path: Path, context: int, n_gpu_layers: int):
+    activate_nvidia_dll_dirs()
     try:
         from llama_cpp import Llama
     except ImportError as exc:
         raise FixtureError("llama-cpp-python is required for the llama.cpp oracle") from exc
-    artifact = target_artifact(manifest)
-    model_path = artifact["local_path"]
-    if not model_path:
-        raise FixtureError("llama.cpp oracle requires artifacts[target].local_path")
-    model_path = Path(model_path).expanduser().resolve()
-    context = min(manifest["model"]["context_length"], max(8192, len(upstream_ids) + 2 * steps + 16))
-    llm = Llama(model_path=str(model_path), n_ctx=context, logits_all=True, verbose=False)
+    return Llama(
+        model_path=str(model_path), n_ctx=context, n_gpu_layers=n_gpu_layers,
+        logits_all=True, verbose=False,
+    )
+
+
+def generate_llama(
+    llm,
+    manifest: dict,
+    case: dict,
+    rendered: str,
+    upstream_ids: list[int],
+    logits_dir: Path,
+    steps: int,
+    top_k: int,
+    context: int,
+    n_gpu_layers: int,
+) -> dict:
+    required_context = len(upstream_ids) + 2 * steps + 16
+    if context < required_context:
+        raise FixtureError(f"{case['id']}: --context {context} is below required {required_context}")
+    context = min(manifest["model"]["context_length"], context)
     prompt_ids = [int(value) for value in llm.tokenize(rendered.encode("utf-8"), add_bos=False, special=True)]
     if not prompt_ids:
         raise FixtureError(f"{case['id']}: llama.cpp produced an empty prompt")
     vocab_size = int(llm.n_vocab())
-    logits_file = BinaryLogits(logits_path, vocab_size)
+    greedy_logits = BinaryLogits(logits_dir / f"{case['id']}.greedy.f32", vocab_size)
     llm.reset()
     llm.eval(prompt_ids)
     greedy: list[int] = []
     top_rows: list[list[dict[str, float | int]]] = []
     for _ in range(steps):
         values = llm._scores[llm.n_tokens - 1]
-        logits_file.append(values)
+        greedy_logits.append(values)
         row = top_k_python(values, top_k)
         token = int(row[0]["token_id"])
         greedy.append(token)
         top_rows.append(row)
         llm.eval([token])
-    logits_info = logits_file.close()
+    greedy_logits_info = greedy_logits.close()
 
     # A separate pass proves that the saved continuation can be teacher-forced.
     llm.reset()
     llm.eval(prompt_ids)
     teacher_rows = []
+    teacher_logits = BinaryLogits(logits_dir / f"{case['id']}.teacher.f32", vocab_size)
     for token in greedy:
         values = llm._scores[llm.n_tokens - 1]
+        teacher_logits.append(values)
         row = top_k_python(values, top_k)
         selected = next((item for item in row if item["token_id"] == token), None)
         if selected is None:
@@ -182,6 +265,7 @@ def generate_llama(
             selected = {"token_id": token, "logit": float(values[token]), "logprob": float(values[token]) - logsumexp}
         teacher_rows.append(selected)
         llm.eval([token])
+    teacher_logits_info = teacher_logits.close()
     return {
         "engine": "llama.cpp",
         "engine_version": package_version("llama-cpp-python"),
@@ -193,21 +277,13 @@ def generate_llama(
         "teacher_forced_source": "same-run greedy continuation",
         "teacher_forced": teacher_rows,
         "top_k": top_rows,
-        "full_logits": logits_info,
+        "full_logits": {"greedy": greedy_logits_info, "teacher_forced": teacher_logits_info},
+        "runtime": {"context": context, "n_gpu_layers": n_gpu_layers},
     }
 
 
-def generate_transformers(
-    manifest: dict,
-    tokenizer,
-    case: dict,
-    rendered: str,
-    prompt_ids: list[int],
-    logits_path: Path,
-    steps: int,
-    top_k: int,
-    dtype: str,
-) -> dict:
+def create_transformers(manifest: dict, dtype: str):
+    """Load the large upstream model once and reuse it for the whole run."""
     try:
         import torch
         from transformers import AutoModelForMultimodalLM
@@ -220,24 +296,41 @@ def generate_transformers(
     if dtype not in dtype_map:
         raise FixtureError(f"unsupported Transformers dtype: {dtype}")
     model = AutoModelForMultimodalLM.from_pretrained(
-        manifest["model"]["source"],
+        upstream_model_id(manifest),
         revision=manifest["model"]["source_revision"],
         torch_dtype=dtype_map[dtype],
         device_map="auto",
         trust_remote_code=False,
     )
+    model.eval()
     device = model.get_input_embeddings().weight.device
-    tokens = torch.tensor([prompt_ids], dtype=torch.long, device=device)
     text_config = getattr(model.config, "text_config", model.config)
-    vocab_size = int(text_config.vocab_size)
-    logits_file = BinaryLogits(logits_path, vocab_size)
+    return model, device, int(text_config.vocab_size)
+
+
+def generate_transformers(
+    runtime,
+    tokenizer,
+    case: dict,
+    rendered: str,
+    prompt_ids: list[int],
+    logits_dir: Path,
+    steps: int,
+    top_k: int,
+    dtype: str,
+) -> dict:
+    import torch
+
+    model, device, vocab_size = runtime
+    tokens = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+    greedy_logits = BinaryLogits(logits_dir / f"{case['id']}.greedy.f32", vocab_size)
     greedy: list[int] = []
     top_rows = []
     with torch.inference_mode():
         outputs = model(input_ids=tokens, use_cache=True)
         for step in range(steps):
             values = outputs.logits[0, -1].float().cpu().numpy()
-            logits_file.append(values)
+            greedy_logits.append(values)
             row = top_k_python(values, top_k)
             token = int(row[0]["token_id"])
             greedy.append(token)
@@ -248,14 +341,17 @@ def generate_transformers(
                     past_key_values=outputs.past_key_values,
                     use_cache=True,
                 )
-    logits_info = logits_file.close()
+    greedy_logits_info = greedy_logits.close()
 
     teacher_rows = []
+    teacher_logits = BinaryLogits(logits_dir / f"{case['id']}.teacher.f32", vocab_size)
     tokens = torch.tensor([prompt_ids], dtype=torch.long, device=device)
     with torch.inference_mode():
         outputs = model(input_ids=tokens, use_cache=True)
         for step, token in enumerate(greedy):
-            values = outputs.logits[0, -1].float().cpu().tolist()
+            values_array = outputs.logits[0, -1].float().cpu().numpy()
+            teacher_logits.append(values_array)
+            values = values_array.tolist()
             row = top_k_python(values, top_k)
             selected = next((item for item in row if item["token_id"] == token), None)
             if selected is None:
@@ -269,8 +365,10 @@ def generate_transformers(
                     past_key_values=outputs.past_key_values,
                     use_cache=True,
                 )
+    teacher_logits_info = teacher_logits.close()
     return {
         "engine": "transformers",
+        "oracle_kind": "semantic_upstream",
         "engine_version": package_version("transformers"),
         "torch_version": package_version("torch"),
         "prompt_token_ids": prompt_ids,
@@ -279,7 +377,13 @@ def generate_transformers(
         "teacher_forced_source": "same-run greedy continuation",
         "teacher_forced": teacher_rows,
         "top_k": top_rows,
-        "full_logits": logits_info,
+        "full_logits": {"greedy": greedy_logits_info, "teacher_forced": teacher_logits_info},
+        "target_difference": {
+            "model_identity": "same pinned upstream model family and revision",
+            "weights": "upstream Transformers weights, not the target GGUF payload",
+            "precision": f"{dtype}, not GGUF Q4_K_M",
+            "numeric_equivalence_expected": False,
+        },
     }
 
 
@@ -331,6 +435,7 @@ def generate_vllm(
     teacher_rows = [_vllm_logprobs(value) for value in raw_prompt[-steps:]]
     return {
         "engine": "vllm",
+        "oracle_kind": "semantic_upstream",
         "engine_version": package_version("vllm"),
         "prompt_token_ids": prompt_ids,
         "greedy_token_ids": greedy,
@@ -340,13 +445,19 @@ def generate_vllm(
         "top_k": top_rows,
         "full_logits": None,
         "full_logits_unavailable_reason": "vLLM public generation API exposes logprob slices, not full-vocabulary logits",
+        "target_difference": {
+            "model_identity": "same pinned upstream model family and revision",
+            "weights": "upstream vLLM weights, not the target GGUF payload",
+            "precision": f"{dtype}, not GGUF Q4_K_M",
+            "numeric_equivalence_expected": False,
+        },
     }
 
 
 def write_case_inputs(run_dir: Path, case: dict, rendered: str, upstream_ids: list[int]) -> None:
     prompts = run_dir / "prompts"
     write_json(prompts / f"{case['id']}.case.json", materialize_case(case))
-    (prompts / f"{case['id']}.txt").write_text(rendered, encoding="utf-8")
+    (prompts / f"{case['id']}.txt").write_text(rendered, encoding="utf-8", newline="")
     (prompts / f"{case['id']}.bytes").write_bytes(rendered.encode("utf-8"))
     write_json(prompts / f"{case['id']}.tokens.json", upstream_ids)
 
@@ -365,8 +476,14 @@ def main() -> int:
     parser.add_argument("--staging-dir", required=True, type=Path)
     parser.add_argument("--run-id", required=True, help="stable, human-selected audit identifier")
     parser.add_argument("--case", action="append", dest="cases")
+    parser.add_argument(
+        "--artifact-path", action="append", default=[], type=parse_artifact_path,
+        metavar="ROLE=PATH", help="local artifact override; paths are never written to the tracked manifest",
+    )
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--context", type=int, default=8192)
+    parser.add_argument("--n-gpu-layers", type=int, default=-1)
     parser.add_argument("--engine-commit", required=True)
     parser.add_argument("--build-flags", required=True)
     parser.add_argument("--backend", required=True)
@@ -378,7 +495,10 @@ def main() -> int:
             raise FixtureError("--steps must be at least 32")
         if args.top_k < 1:
             raise FixtureError("--top-k must be positive")
-        manifest, corpus = validate_manifest(args.manifest, require_artifacts=args.oracle == "llama.cpp")
+        manifest, corpus = validate_manifest(args.manifest)
+        artifact_paths = resolve_artifact_paths(manifest, args.artifact_path)
+        if args.oracle == "llama.cpp" and "target" not in artifact_paths:
+            raise FixtureError("llama.cpp oracle requires --artifact-path target=PATH or artifacts[target].local_path")
         tokenizer = load_renderer(manifest)
         staging = ensure_staging(args.staging_dir)
         run_dir = staging / args.run_id
@@ -388,21 +508,36 @@ def main() -> int:
         for name in ("prompts", "continuations", "responses", "logits"):
             (run_dir / name).mkdir()
         selected = [find_case(corpus, value) for value in args.cases] if args.cases else corpus["cases"]
+        rendered_cases = [(case, *render_case(tokenizer, case)) for case in selected]
+        llama_runtime = None
+        transformers_runtime = None
+        if args.oracle == "llama.cpp":
+            required_context = max(len(ids) + 2 * args.steps + 16 for _, _, ids in rendered_cases)
+            if args.context < required_context:
+                raise FixtureError(f"--context {args.context} is below corpus requirement {required_context}")
+            llama_runtime = create_llama(artifact_paths["target"], args.context, args.n_gpu_layers)
+        elif args.oracle == "transformers":
+            transformers_runtime = create_transformers(manifest, args.dtype)
         cases_index = []
         manifest_rows = ["# id\tprompt_file\tcontinuation_file\tresponse_file"]
-        for case in selected:
-            rendered, upstream_ids = render_case(tokenizer, case)
+        for case, rendered, upstream_ids in rendered_cases:
             write_case_inputs(run_dir, case, rendered, upstream_ids)
-            logits_path = run_dir / "logits" / f"{case['id']}.f32"
             if args.oracle == "llama.cpp":
-                result = generate_llama(manifest, case, rendered, upstream_ids, logits_path, args.steps, args.top_k)
+                result = generate_llama(
+                    llama_runtime, manifest, case, rendered, upstream_ids, run_dir / "logits",
+                    args.steps, args.top_k, args.context,
+                    args.n_gpu_layers,
+                )
             elif args.oracle == "transformers":
-                result = generate_transformers(manifest, tokenizer, case, rendered, upstream_ids, logits_path, args.steps, args.top_k, args.dtype)
+                result = generate_transformers(
+                    transformers_runtime, tokenizer, case, rendered, upstream_ids,
+                    run_dir / "logits", args.steps, args.top_k, args.dtype,
+                )
             else:
                 result = generate_vllm(manifest, tokenizer, case, rendered, upstream_ids, run_dir, args.steps, args.top_k, args.dtype)
             continuation_path = run_dir / "continuations" / f"{case['id']}.txt"
             response_path = run_dir / "responses" / f"{case['id']}.json"
-            continuation_path.write_text(result["greedy_text"], encoding="utf-8")
+            continuation_path.write_text(result["greedy_text"], encoding="utf-8", newline="")
             write_json(response_path, result)
             prompt_path = run_dir / "prompts" / f"{case['id']}.txt"
             manifest_rows.append(
@@ -426,10 +561,26 @@ def main() -> int:
             "backend": args.backend,
             "hardware": args.hardware,
             "dtype": args.dtype,
-            "parameters": {"temperature": 0, "steps": args.steps, "top_k": args.top_k},
+            "parameters": {
+                "temperature": 0, "steps": args.steps, "top_k": args.top_k,
+                "context": args.context, "n_gpu_layers": args.n_gpu_layers,
+            },
+            "artifacts": {
+                role: {"filename": path.name, "size_bytes": path.stat().st_size, "sha256": sha256_file(path)}
+                for role, path in sorted(artifact_paths.items())
+            },
             "host": platform_provenance(),
             "review_status": "generated_unreviewed",
         }
+        if args.oracle in {"transformers", "vllm"}:
+            environment["target_difference"] = {
+                "target": target_artifact_summary(manifest),
+                "upstream_model": upstream_model_id(manifest),
+                "upstream_revision": manifest["model"]["source_revision"],
+                "weights_differ": True,
+                "precision_differ": args.dtype != "GGUF Q4_K_M",
+                "numeric_equivalence_expected": False,
+            }
         index = {
             "format": "ds4-qwen36-oracle-v1",
             "manifest": str(args.manifest.resolve()),

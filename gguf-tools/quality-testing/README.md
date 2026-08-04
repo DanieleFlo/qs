@@ -168,6 +168,27 @@ python3 gguf-tools/quality-testing/validate_qwen36.py \
 make -C gguf-tools quality-qwen36-test
 ```
 
+Inspect local GGUF headers and regenerate the tracked, deterministic metadata
+snapshots.  Local model paths are command-line inputs and are never stored in
+the manifests:
+
+```sh
+python3 gguf-tools/quality-testing/inspect_qwen36_gguf.py \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b/manifest.json \
+  --artifact target=gguf/Qwen3.6-27B-Q4_K_M.gguf \
+  --snapshot-dir gguf-tools/quality-testing/data/qwen36-metadata
+
+python3 gguf-tools/quality-testing/inspect_qwen36_gguf.py \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b-mtp/manifest.json \
+  --artifact mtp=gguf/mtp-Qwen3.6-27B-Q4_0.gguf \
+  --snapshot-dir gguf-tools/quality-testing/data/qwen36-metadata
+```
+
+The inspector validates the complete artifact SHA-256 and size, GGUF v3
+structure, semantic metadata, tokenizer/chat-template hashes, tensor names,
+shapes, offsets and quantization types.  Duplicate or truncated directory
+entries are rejected.
+
 Materialize the deterministic long prompt into an ignored staging directory:
 
 ```sh
@@ -194,6 +215,34 @@ python3 gguf-tools/quality-testing/generate_qwen36_oracle.py \
   --dtype 'GGUF Q4_K_M'
 ```
 
+For the pinned local target, pass the model without editing the manifest and
+size the runtime context for the selected corpus:
+
+```sh
+python3 gguf-tools/quality-testing/generate_qwen36_oracle.py \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b/manifest.json \
+  --oracle llama.cpp \
+  --artifact-path target=gguf/Qwen3.6-27B-Q4_K_M.gguf \
+  --staging-dir gguf-tools/quality-testing/staging/oracles \
+  --run-id llama-q4-cuda-001 \
+  --steps 32 --top-k 20 --context 24576 --n-gpu-layers -1 \
+  --engine-commit LLAMA_CPP_FULL_COMMIT \
+  --build-flags 'EXACT BUILD FLAGS' \
+  --backend CUDA --hardware 'EXACT GPU AND DRIVER' --dtype 'GGUF Q4_K_M'
+```
+
+llama.cpp and Transformers save separate greedy and teacher-forced
+full-vocabulary float32 streams.  Every stream records shape, byte size and
+SHA-256.  After producing a second run, validate both candidates and their
+render/token determinism:
+
+```sh
+python3 gguf-tools/quality-testing/verify_qwen36_run.py \
+  gguf-tools/quality-testing/staging/oracles/llama-q4-cuda-001 \
+  --repeat gguf-tools/quality-testing/staging/oracles/llama-q4-cuda-002 \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b/manifest.json
+```
+
 The llama.cpp adapter records full-vocabulary logits against the exact pinned
 GGUF.  Transformers and vLLM are labelled semantic upstream oracles because
 their weights and precision differ.  vLLM records top-logprob slices because
@@ -203,3 +252,9 @@ Generators reject `golden` and `goldens` paths, reject non-empty unmarked
 staging directories, and provide no promotion or acceptance command.  Review
 and copy approved fixture data manually.  Missing models, runtimes, or hardware
 remain `not_verified`; they are never treated as passing.
+
+The Q4 target was verified on an RTX 3090 with llama-cpp-python 0.3.23,
+llama.cpp commit `7d442abf5c6244117fd5a1dc51a5d19f00792491`, CUDA full offload and two
+independent 32-step runs over all nine corpus categories.  The generated runs
+remain ignored, unreviewed staging candidates.  Transformers, vLLM and MTP
+execution are still `not_verified` on this host.

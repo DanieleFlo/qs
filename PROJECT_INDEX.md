@@ -292,6 +292,15 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   report di qualità.
 - `gguf-tools/quality-testing/collect_official.py` — acquisizione controllata
   delle continuazioni e top-logprob da API esterne.
+- `gguf-tools/quality-testing/inspect_qwen36_gguf.py` — ispettore offline degli
+  header Qwen3.6: verifica artefatti, metadata, tokenizer/template e directory
+  tensor, producendo gli snapshot condivisi in `data/qwen36-metadata/`.
+- `gguf-tools/quality-testing/generate_qwen36_oracle.py` — generatore in
+  staging per llama.cpp, Transformers e vLLM; conserva path locali fuori dai
+  manifest e separa i logits greedy e teacher-forced con checksum.
+- `gguf-tools/quality-testing/verify_qwen36_run.py` — valida inventario,
+  copertura, lunghezza e determinismo fra due candidati oracle senza
+  promuoverli a golden.
 
 ### Test rilevanti per comprendere la correttezza
 
