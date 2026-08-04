@@ -301,6 +301,14 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `gguf-tools/quality-testing/verify_qwen36_run.py` — valida inventario,
   copertura, lunghezza e determinismo fra due candidati oracle senza
   promuoverli a golden.
+- `gguf-tools/quality-testing/generate_qwen36_score.py` — prepara un run DS4 o
+  llama.cpp sulla sequenza canonica di token di un oracle, lasciando agli
+  scorer nativi inferenza e dump float32 e registrando checksum e provenienza
+  nello stesso layout del task 2.
+- `gguf-tools/quality-testing/compare_qwen36_equivalence.py` — harness unico
+  DS4-vs-llama.cpp e DS4-vs-DS4: valida inventari, calcola metriche
+  full-vocabulary per posizione, applica gate versionati e produce report
+  auditabili `PASS`, `FAIL`, `NOT_VERIFIED` o `ERROR`.
 
 ### Test rilevanti per comprendere la correttezza
 
@@ -319,6 +327,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/glm_long_context_smoke.sh` — integrazione GLM su prompt lunghi.
 - `tests/test_server_batching.py` — concorrenza e batching osservati tramite
   API server.
+- `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py` — schema,
+  staging, checksum e metriche/gate sintetici dell'harness Qwen3.6.
 - `tests/test_sampling.c` — comportamento deterministico e filtri del sampling.
 - `tests/test_gpu_args.c`, `tests/test_gpu_args_cli.sh` — parsing e propagazione
   della configurazione GPU.

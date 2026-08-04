@@ -21,8 +21,12 @@ static void usage(const char *prog) {
             "usage: %s MODEL manifest.tsv OUT.tsv [ctx] "
             "[--ssd-streaming] [--ssd-streaming-cold] "
             "[--ssd-streaming-cache-experts N|NGB] "
+            "[--ssd-streaming-preload-experts N]\n"
+            "       %s --token-manifest MODEL cases.tsv [ctx] "
+            "[--ssd-streaming] [--ssd-streaming-cold] "
+            "[--ssd-streaming-cache-experts N|NGB] "
             "[--ssd-streaming-preload-experts N]\n",
-            prog);
+            prog, prog);
 }
 
 static const char *need_arg(int *i, int argc, char **argv, const char *opt) {
@@ -65,6 +69,49 @@ static char *read_file(const char *path) {
 static void strip_newline(char *s) {
     size_t n = strlen(s);
     while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = '\0';
+}
+
+static bool load_token_array(const char *path, ds4_tokens *out) {
+    char *json = read_file(path);
+    const char *p = json;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p++ != '[') {
+        free(json);
+        return false;
+    }
+    while (1) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == ']') {
+            p++;
+            while (*p && isspace((unsigned char)*p)) p++;
+            free(json);
+            return *p == '\0';
+        }
+        char *end = NULL;
+        errno = 0;
+        long value = strtol(p, &end, 10);
+        if (errno || end == p || value < 0 || value > INT_MAX) {
+            free(json);
+            return false;
+        }
+        ds4_tokens_push(out, (int)value);
+        p = end;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == ',') p++;
+        else if (*p != ']') {
+            free(json);
+            return false;
+        }
+    }
+}
+
+static void write_token_array(FILE *fp, const ds4_tokens *tokens) {
+    fputc('[', fp);
+    for (int i = 0; i < tokens->len; i++) {
+        if (i) fputc(',', fp);
+        fprintf(fp, "%d", tokens->v[i]);
+    }
+    fputc(']', fp);
 }
 
 typedef struct {
@@ -506,15 +553,150 @@ static double safe_ratio(long num, long den) {
     return den ? (double)num / (double)den : 0.0;
 }
 
+/* Numeric-equivalence collection deliberately consumes token IDs rather than
+ * text.  The Python fixture layer owns directories, checksums and provenance;
+ * this scorer owns only model execution and the raw float32 result. */
+static int score_token_manifest(ds4_engine *engine, ds4_session *session,
+                                const char *manifest_path, int ctx_size) {
+    FILE *mf = fopen(manifest_path, "rb");
+    if (!mf) {
+        fprintf(stderr, "open %s: %s\n", manifest_path, strerror(errno));
+        return 1;
+    }
+    const int n_vocab = ds4_engine_vocab_size(engine);
+    float *logits = malloc((size_t)n_vocab * sizeof(logits[0]));
+    if (!logits) die("out of memory");
+    char line[32768];
+    char err[256];
+    int cases = 0;
+    while (fgets(line, sizeof(line), mf)) {
+        strip_newline(line);
+        if (!line[0] || line[0] == '#') continue;
+        char *id = strtok(line, "\t");
+        char *rendered_path = strtok(NULL, "\t");
+        char *prompt_tokens_path = strtok(NULL, "\t");
+        char *target_tokens_path = strtok(NULL, "\t");
+        char *greedy_path = strtok(NULL, "\t");
+        char *teacher_path = strtok(NULL, "\t");
+        char *response_path = strtok(NULL, "\t");
+        if (!id || !rendered_path || !prompt_tokens_path || !target_tokens_path ||
+            !greedy_path || !teacher_path || !response_path) {
+            fprintf(stderr, "score_official: bad token manifest row\n");
+            free(logits);
+            fclose(mf);
+            return 1;
+        }
+
+        ds4_tokens prompt = {0};
+        ds4_tokens target = {0};
+        ds4_tokens native_prompt = {0};
+        ds4_tokens greedy = {0};
+        if (!load_token_array(prompt_tokens_path, &prompt) ||
+            !load_token_array(target_tokens_path, &target)) {
+            fprintf(stderr, "%s: invalid token array\n", id);
+            return 1;
+        }
+        char *rendered = read_file(rendered_path);
+        ds4_tokenize_rendered_chat(engine, rendered, &native_prompt);
+        free(rendered);
+        if (!prompt.len || !target.len || prompt.len + target.len + 1 >= ctx_size) {
+            fprintf(stderr, "%s exceeds ctx=%d or has an empty token sequence\n", id, ctx_size);
+            return 1;
+        }
+
+        FILE *greedy_fp = fopen(greedy_path, "wb");
+        FILE *teacher_fp = fopen(teacher_path, "wb");
+        if (!greedy_fp || !teacher_fp) {
+            fprintf(stderr, "%s: failed to open logits output: %s\n", id, strerror(errno));
+            return 1;
+        }
+        if (ds4_session_sync(session, &prompt, err, sizeof(err)) != 0) {
+            fprintf(stderr, "%s sync failed: %s\n", id, err);
+            return 1;
+        }
+        for (int i = 0; i < target.len; i++) {
+            double logsum = 0.0;
+            int token = -1;
+            if (!local_logits(session, logits, n_vocab, &logsum, &token) ||
+                fwrite(logits, sizeof(float), (size_t)n_vocab, greedy_fp) != (size_t)n_vocab) {
+                fprintf(stderr, "%s greedy logits failed at position %d\n", id, i);
+                return 1;
+            }
+            ds4_tokens_push(&greedy, token);
+            if (ds4_session_eval(session, token, err, sizeof(err)) != 0) {
+                fprintf(stderr, "%s greedy eval failed at position %d: %s\n", id, i, err);
+                return 1;
+            }
+        }
+        if (fclose(greedy_fp) != 0) die("failed to close greedy logits");
+
+        double *teacher_logprobs = malloc((size_t)target.len * sizeof(teacher_logprobs[0]));
+        if (!teacher_logprobs) die("out of memory");
+        if (ds4_session_sync(session, &prompt, err, sizeof(err)) != 0) {
+            fprintf(stderr, "%s teacher sync failed: %s\n", id, err);
+            return 1;
+        }
+        for (int i = 0; i < target.len; i++) {
+            double logsum = 0.0;
+            int ignored = -1;
+            if (!local_logits(session, logits, n_vocab, &logsum, &ignored) ||
+                fwrite(logits, sizeof(float), (size_t)n_vocab, teacher_fp) != (size_t)n_vocab) {
+                fprintf(stderr, "%s teacher logits failed at position %d\n", id, i);
+                return 1;
+            }
+            teacher_logprobs[i] = local_logprob(logits, n_vocab, target.v[i], logsum);
+            if (!isfinite(teacher_logprobs[i]) ||
+                ds4_session_eval(session, target.v[i], err, sizeof(err)) != 0) {
+                fprintf(stderr, "%s teacher eval failed at position %d: %s\n", id, i, err);
+                return 1;
+            }
+        }
+        if (fclose(teacher_fp) != 0) die("failed to close teacher logits");
+
+        FILE *response = fopen(response_path, "wb");
+        if (!response) {
+            fprintf(stderr, "open %s: %s\n", response_path, strerror(errno));
+            return 1;
+        }
+        fputs("{\n  \"engine\": \"ds4\",\n  \"canonical_prompt_token_ids\": ", response);
+        write_token_array(response, &prompt);
+        fputs(",\n  \"native_prompt_token_ids\": ", response);
+        write_token_array(response, &native_prompt);
+        fputs(",\n  \"native_rendering_status\": \"tokenizer_only\",\n  \"prompt_token_ids\": ", response);
+        write_token_array(response, &prompt);
+        fputs(",\n  \"greedy_token_ids\": ", response);
+        write_token_array(response, &greedy);
+        fputs(",\n  \"teacher_forced_source\": \"canonical token manifest\",\n  \"teacher_forced\": [", response);
+        for (int i = 0; i < target.len; i++) {
+            if (i) fputc(',', response);
+            fprintf(response, "{\"token_id\":%d,\"logprob\":%.17g}", target.v[i], teacher_logprobs[i]);
+        }
+        fprintf(response, "]\n}\n");
+        if (fclose(response) != 0) die("failed to close response");
+        fprintf(stderr, "%s cases=%d prompt=%d target=%d vocab=%d token_manifest=1\n",
+                id, ++cases, prompt.len, target.len, n_vocab);
+        free(teacher_logprobs);
+        ds4_tokens_free(&prompt);
+        ds4_tokens_free(&target);
+        ds4_tokens_free(&native_prompt);
+        ds4_tokens_free(&greedy);
+    }
+    free(logits);
+    fclose(mf);
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    if (argc < 4) {
+    const bool token_manifest_mode = argc > 1 && !strcmp(argv[1], "--token-manifest");
+    const int base = token_manifest_mode ? 2 : 1;
+    if (argc < base + (token_manifest_mode ? 2 : 3)) {
         usage(argv[0]);
         return 2;
     }
 
-    const char *model_path = argv[1];
-    const char *manifest_path = argv[2];
-    const char *out_path = argv[3];
+    const char *model_path = argv[base];
+    const char *manifest_path = argv[base + 1];
+    const char *out_path = token_manifest_mode ? NULL : argv[base + 2];
     int ctx_size = 4096;
     bool ctx_set = false;
     bool ssd_streaming = false;
@@ -523,7 +705,7 @@ int main(int argc, char **argv) {
     uint64_t ssd_streaming_cache_bytes = 0;
     uint32_t ssd_streaming_preload_experts = 0;
 
-    for (int i = 4; i < argc; i++) {
+    for (int i = base + (token_manifest_mode ? 2 : 3); i < argc; i++) {
         const char *arg = argv[i];
         if (!strcmp(arg, "--ssd-streaming")) {
             ssd_streaming = true;
@@ -576,6 +758,12 @@ int main(int argc, char **argv) {
     if (ds4_session_create(&session, engine, ctx_size) != 0) die("failed to create session");
 
     const int n_vocab = ds4_engine_vocab_size(engine);
+    if (token_manifest_mode) {
+        const int rc = score_token_manifest(engine, session, manifest_path, ctx_size);
+        ds4_session_free(session);
+        ds4_engine_close(engine);
+        return rc;
+    }
     float *logits = malloc((size_t)n_vocab * sizeof(logits[0]));
     if (!logits) die("out of memory");
 

@@ -258,3 +258,48 @@ llama.cpp commit `7d442abf5c6244117fd5a1dc51a5d19f00792491`, CUDA full offload a
 independent 32-step runs over all nine corpus categories.  The generated runs
 remain ignored, unreviewed staging candidates.  Transformers, vLLM and MTP
 execution are still `not_verified` on this host.
+
+## 7. Qwen3.6 Numerical Equivalence
+
+The structured scorer mode bypasses templates and tokenization during the
+numeric pass. It consumes canonical prompt and teacher-forced token IDs from
+an existing, validated oracle run and keeps the model resident while writing
+greedy and teacher-forced `float32-le` logits. Python owns the same directory,
+checksum and provenance format introduced in section 6:
+
+```sh
+python3 gguf-tools/quality-testing/generate_qwen36_score.py \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b/manifest.json \
+  --source-run gguf-tools/quality-testing/staging/oracles/llama-q4-cuda-001 \
+  --scorer gguf-tools/quality-testing/score_official \
+  --model gguf/Qwen3.6-27B-Q4_K_M.gguf --engine ds4 \
+  --staging-dir gguf-tools/quality-testing/staging/oracles \
+  --run-id ds4-q4-cuda-001 --context 24576 --top-k 20 \
+  --engine-commit DS4_FULL_COMMIT --build-flags 'EXACT BUILD FLAGS' \
+  --backend CUDA --hardware 'EXACT GPU AND DRIVER' --dtype 'GGUF Q4_K_M' \
+  --prefill-chunk 2048
+```
+
+Use `score_llama` and `--engine llama.cpp` to collect the same token-driven
+layout from the C++ scorer. Existing positional TSV invocations of both
+scorers remain unchanged. Until native Qwen chat rendering exists, a DS4 run
+records `native_rendering_status=tokenizer_only`; this prevents a report from
+passing while still allowing numeric diagnostics.
+
+Compare two complete runs with one command:
+
+```sh
+python3 gguf-tools/quality-testing/compare_qwen36_equivalence.py \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b/manifest.json \
+  --mode ds4-vs-llama \
+  --left-run gguf-tools/quality-testing/staging/oracles/llama-q4-cuda-001 \
+  --right-run gguf-tools/quality-testing/staging/oracles/ds4-q4-cuda-001 \
+  --report gguf-tools/quality-testing/staging/oracles/ds4-vs-llama.json
+```
+
+`ds4-vs-ds4` additionally requires every float32 bit pattern to be identical.
+Exit statuses are `0` for `PASS`, `1` for a failed gate, `2` for invalid input,
+and `3` for `NOT_VERIFIED`. `--diagnostic` permits nonstandard engine roles
+for tooling checks but can never produce `PASS`. Unreviewed runs or missing
+cross-engine calibration likewise remain `NOT_VERIFIED`; neither collection
+nor comparison can promote golden files or update thresholds automatically.

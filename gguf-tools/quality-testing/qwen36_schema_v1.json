@@ -11,6 +11,7 @@
     "tokenizer",
     "chat_template",
     "oracle_environments",
+    "equivalence_thresholds",
     "corpus",
     "output_format",
     "verification"
@@ -45,6 +46,16 @@
         "llama.cpp": {"$ref": "#/$defs/oracle"},
         "transformers": {"$ref": "#/$defs/oracle"},
         "vllm": {"$ref": "#/$defs/oracle"}
+      }
+    },
+    "equivalence_thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "internal", "cross_engine"],
+      "properties": {
+        "version": {"const": "ds4-qwen36-equivalence-thresholds-v1"},
+        "internal": {"$ref": "#/$defs/thresholdProfile"},
+        "cross_engine": {"$ref": "#/$defs/thresholdProfile"}
       }
     },
     "corpus": {"type": "string", "minLength": 1},
@@ -145,6 +156,34 @@
         "hardware": {"type": ["string", "null"]},
         "dtype": {"type": ["string", "null"]},
         "parameters": {"type": "object"},
+        "reason": {"type": ["string", "null"]}
+      }
+    },
+    "thresholdProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "metrics", "calibration", "reason"],
+      "properties": {
+        "status": {"enum": ["verified", "not_verified"]},
+        "metrics": {"type": ["object", "null"], "additionalProperties": {"type": "number"}},
+        "calibration": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["model_sha256", "ds4_commit", "oracle", "oracle_version", "hardware", "backend", "dtype", "context", "prefill_chunk", "date", "command"],
+          "properties": {
+            "model_sha256": {"$ref": "#/$defs/sha256"},
+            "ds4_commit": {"type": "string", "minLength": 1},
+            "oracle": {"const": "llama.cpp"},
+            "oracle_version": {"type": "string", "minLength": 1},
+            "hardware": {"type": "string", "minLength": 1},
+            "backend": {"type": "string", "minLength": 1},
+            "dtype": {"type": "string", "minLength": 1},
+            "context": {"type": "integer", "minimum": 1},
+            "prefill_chunk": {"type": "integer", "minimum": 1},
+            "date": {"type": "string", "format": "date"},
+            "command": {"type": "string", "minLength": 1}
+          }
+        },
         "reason": {"type": ["string", "null"]}
       }
     }

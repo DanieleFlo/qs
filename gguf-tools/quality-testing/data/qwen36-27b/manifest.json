@@ -61,6 +61,11 @@
     "transformers": {"kind": "semantic_upstream", "status": "not_verified", "version": null, "commit": null, "build_flags": null, "backend": null, "hardware": null, "dtype": "bfloat16", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20}, "reason": "Transformers, PyTorch and upstream weights are not installed on this host"},
     "vllm": {"kind": "semantic_upstream", "status": "not_verified", "version": null, "commit": null, "build_flags": null, "backend": null, "hardware": null, "dtype": "bfloat16", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20}, "reason": "vLLM and a supported CUDA host are not available"}
   },
+  "equivalence_thresholds": {
+    "version": "ds4-qwen36-equivalence-thresholds-v1",
+    "internal": {"status": "verified", "metrics": {"different_float_count": 0}, "calibration": null, "reason": null},
+    "cross_engine": {"status": "not_verified", "metrics": null, "calibration": null, "reason": "Calibration requires the first correct Qwen3.6 CUDA path from task 6"}
+  },
   "corpus": "prompts/cases.json",
   "output_format": {"version": "ds4-qwen36-oracle-v1", "index": "JSON", "large_logits": "float32-le", "checksums": "SHA-256"},
   "verification": {"status": "not_verified", "reasons": ["No reviewed numeric oracle has been promoted", "Transformers and vLLM semantic upstream oracles have not been executed on this host"]}

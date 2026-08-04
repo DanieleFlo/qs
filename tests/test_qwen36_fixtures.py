@@ -134,6 +134,20 @@ class Qwen36FixtureTests(unittest.TestCase):
         with self.assertRaisesRegex(FixtureError, "corpus file does not exist"):
             validate_manifest(self.manifest_path)
 
+    def test_unverified_thresholds_cannot_hide_numeric_gates(self) -> None:
+        manifest = self.load_manifest()
+        manifest["equivalence_thresholds"]["cross_engine"]["metrics"] = {"mae": 1.0}
+        self.save_manifest(manifest)
+        with self.assertRaisesRegex(FixtureError, "cannot contain gates"):
+            validate_manifest(self.manifest_path)
+
+    def test_internal_threshold_is_bit_exact(self) -> None:
+        manifest = self.load_manifest()
+        manifest["equivalence_thresholds"]["internal"]["metrics"] = {"different_float_count": 1}
+        self.save_manifest(manifest)
+        with self.assertRaisesRegex(FixtureError, "different_float_count=0"):
+            validate_manifest(self.manifest_path)
+
     def test_long_prompt_is_deterministic_and_has_canaries(self) -> None:
         _, corpus = validate_manifest(self.manifest_path)
         case = next(item for item in corpus["cases"] if item["category"] == "long-canary")

@@ -68,8 +68,13 @@ def verify_run(run: Path, manifest_path: Path, allow_partial: bool) -> dict:
         upstream_ids = json.loads(prompt_base.with_suffix(".tokens.json").read_text(encoding="utf-8"))
         require(isinstance(upstream_ids, list), f"{case_id}: rendered token file must contain an array")
         response = load_json(run / "responses" / f"{case_id}.json")
-        recorded_upstream = response.get("upstream_render_token_ids", response.get("prompt_token_ids"))
-        require(recorded_upstream == upstream_ids, f"{case_id}: upstream rendered token IDs mismatch")
+        recorded_native = response.get(
+            "native_prompt_token_ids",
+            response.get("upstream_render_token_ids", response.get("prompt_token_ids")),
+        )
+        require(recorded_native == upstream_ids, f"{case_id}: native rendered token IDs mismatch")
+        canonical = response.get("canonical_prompt_token_ids", response.get("prompt_token_ids"))
+        require(isinstance(canonical, list) and canonical, f"{case_id}: canonical prompt token IDs are missing")
         require(len(response.get("greedy_token_ids", [])) == steps, f"{case_id}: incomplete greedy continuation")
         require(len(response.get("teacher_forced", [])) == steps, f"{case_id}: incomplete teacher-forced continuation")
         require(len(response.get("top_k", [])) == steps, f"{case_id}: incomplete top-k rows")
@@ -89,7 +94,10 @@ def compare_runs(first: Path, first_data: dict, second: Path, second_data: dict)
             require(left.read_bytes() == right.read_bytes(), f"{case_id}: repeat rendering differs for {suffix}")
         left = first_data["responses"][case_id]
         right = second_data["responses"][case_id]
-        for field in ("prompt_token_ids", "upstream_render_token_ids", "greedy_token_ids"):
+        for field in (
+            "prompt_token_ids", "canonical_prompt_token_ids", "native_prompt_token_ids",
+            "upstream_render_token_ids", "greedy_token_ids",
+        ):
             require(left.get(field) == right.get(field), f"{case_id}: repeat {field} differs")
 
 

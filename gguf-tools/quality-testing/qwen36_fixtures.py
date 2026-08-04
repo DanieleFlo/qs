@@ -192,7 +192,7 @@ def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -
     manifest = load_json(manifest_path)
     required = {
         "schema_version", "model", "artifacts", "tokenizer", "chat_template",
-        "oracle_environments", "corpus", "output_format", "verification",
+        "oracle_environments", "equivalence_thresholds", "corpus", "output_format", "verification",
     }
     _require_fields(manifest, required, str(manifest_path))
     if manifest["schema_version"] != SCHEMA_VERSION:
@@ -323,6 +323,54 @@ def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -
             raise FixtureError(f"oracle_environments.{name}.status is invalid")
         _require_object(environment["parameters"], f"oracle_environments.{name}.parameters")
 
+    thresholds = _require_object(manifest["equivalence_thresholds"], "equivalence_thresholds")
+    _require_fields(thresholds, {"version", "internal", "cross_engine"}, "equivalence_thresholds")
+    if thresholds["version"] != "ds4-qwen36-equivalence-thresholds-v1":
+        raise FixtureError("unsupported equivalence threshold version")
+    for name in ("internal", "cross_engine"):
+        profile = _require_object(thresholds[name], f"equivalence_thresholds.{name}")
+        _require_fields(profile, {"status", "metrics", "calibration", "reason"}, f"equivalence_thresholds.{name}")
+        status = profile["status"]
+        if status == "verified":
+            metrics = _require_object(profile["metrics"], f"equivalence_thresholds.{name}.metrics")
+            if not metrics or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in metrics.values()):
+                raise FixtureError(f"equivalence_thresholds.{name}.metrics must contain numeric gates")
+            if name == "internal":
+                if metrics != {"different_float_count": 0}:
+                    raise FixtureError("internal equivalence requires different_float_count=0")
+                if profile["calibration"] is not None:
+                    raise FixtureError("internal bit-exact profile does not use calibration metadata")
+            else:
+                expected_metrics = {
+                    "mae", "rmse", "max_error", "cosine_similarity",
+                    "kl_left_right", "js_divergence", "top_k_overlap",
+                    "top_k_spearman", "top_k_rank_agreement",
+                    "oracle_logprob_abs_error",
+                }
+                if set(metrics) != expected_metrics:
+                    raise FixtureError("cross-engine threshold metric set is incomplete or unknown")
+                calibration = _require_object(profile["calibration"], "equivalence_thresholds.cross_engine.calibration")
+                fields = {"model_sha256", "ds4_commit", "oracle", "oracle_version", "hardware", "backend", "dtype", "context", "prefill_chunk", "date", "command"}
+                _require_fields(calibration, fields, "equivalence_thresholds.cross_engine.calibration")
+                _validate_sha(calibration["model_sha256"], "equivalence_thresholds.cross_engine.calibration.model_sha256")
+                target_sha = next(item["sha256"] for item in artifacts if item["role"] == "target")
+                if calibration["model_sha256"] != target_sha:
+                    raise FixtureError("cross-engine calibration model SHA-256 differs from target artifact")
+                if calibration["oracle"] != "llama.cpp":
+                    raise FixtureError("cross-engine calibration oracle must be llama.cpp")
+                for field in ("ds4_commit", "oracle_version", "hardware", "backend", "dtype", "date", "command"):
+                    _require_string(calibration[field], f"equivalence_thresholds.cross_engine.calibration.{field}")
+                _require_int(calibration["context"], "equivalence_thresholds.cross_engine.calibration.context")
+                _require_int(calibration["prefill_chunk"], "equivalence_thresholds.cross_engine.calibration.prefill_chunk")
+            if profile["reason"] is not None:
+                raise FixtureError(f"verified threshold profile {name} must not have a reason")
+        elif status == "not_verified":
+            if profile["metrics"] is not None or profile["calibration"] is not None:
+                raise FixtureError(f"unverified threshold profile {name} cannot contain gates or calibration")
+            _require_string(profile["reason"], f"equivalence_thresholds.{name}.reason")
+        else:
+            raise FixtureError(f"equivalence_thresholds.{name}.status is invalid")
+
     output = _require_object(manifest["output_format"], "output_format")
     if output != {"version": OUTPUT_VERSION, "index": "JSON", "large_logits": "float32-le", "checksums": "SHA-256"}:
         raise FixtureError("output_format must match the documented v1 format")
@@ -336,6 +384,8 @@ def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -
             raise FixtureError("manifest cannot be verified while an oracle is not verified")
         if any(item["metadata"]["header_inspection"] != "verified" for item in artifacts):
             raise FixtureError("manifest cannot be verified before every GGUF header is inspected")
+        if any(profile["status"] != "verified" for profile in (thresholds["internal"], thresholds["cross_engine"])):
+            raise FixtureError("manifest cannot be verified before equivalence thresholds are verified")
     elif verification["status"] == "not_verified":
         if not reasons or not all(isinstance(reason, str) and reason for reason in reasons):
             raise FixtureError("not_verified manifest needs at least one reason")

@@ -2,6 +2,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
@@ -47,6 +48,38 @@ static std::vector<std::string> split_tab(const std::string &line) {
         out.push_back(line.substr(start, tab - start));
         start = tab + 1;
     }
+}
+
+static std::vector<llama_token> load_token_array(const char *path) {
+    const std::string json = read_file(path);
+    const char *p = json.c_str();
+    while (*p && std::isspace((unsigned char)*p)) p++;
+    if (*p++ != '[') die("token file must contain a JSON array");
+    std::vector<llama_token> out;
+    for (;;) {
+        while (*p && std::isspace((unsigned char)*p)) p++;
+        if (*p == ']') return out;
+        char *end = nullptr;
+        errno = 0;
+        long value = std::strtol(p, &end, 10);
+        if (errno || end == p || value < 0 || value > std::numeric_limits<llama_token>::max()) {
+            die("invalid token ID in JSON array");
+        }
+        out.push_back((llama_token)value);
+        p = end;
+        while (*p && std::isspace((unsigned char)*p)) p++;
+        if (*p == ',') p++;
+        else if (*p != ']') die("invalid token JSON array separator");
+    }
+}
+
+static void write_token_array(std::ostream &out, const std::vector<llama_token> &tokens) {
+    out << '[';
+    for (size_t i = 0; i < tokens.size(); i++) {
+        if (i) out << ',';
+        out << tokens[i];
+    }
+    out << ']';
 }
 
 static std::vector<llama_token> tokenize(
@@ -153,20 +186,108 @@ static double token_logprob(
     return (double)logits[token] - ((double)max_logit + std::log(sum));
 }
 
+static int score_token_manifest(
+        llama_context *ctx,
+        const llama_vocab *vocab,
+        int n_vocab,
+        int n_batch,
+        const char *manifest_path,
+        int ctx_size) {
+    std::ifstream manifest(manifest_path, std::ios::binary);
+    if (!manifest) die("failed to open token manifest");
+    llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    std::string line;
+    int cases = 0;
+    while (std::getline(manifest, line)) {
+        strip_newline(line);
+        if (line.empty() || line[0] == '#') continue;
+        const std::vector<std::string> cols = split_tab(line);
+        if (cols.size() != 7) die("bad token manifest row");
+        const std::string &id = cols[0];
+        const std::string rendered = read_file(cols[1].c_str());
+        const std::vector<llama_token> prompt = load_token_array(cols[2].c_str());
+        const std::vector<llama_token> target = load_token_array(cols[3].c_str());
+        const std::vector<llama_token> native_prompt = tokenize(vocab, rendered, false, true);
+        if (prompt.empty() || target.empty() || (int)(prompt.size() + target.size() + 1) >= ctx_size) {
+            die("empty token sequence or context exceeded");
+        }
+        std::ofstream greedy_out(cols[4], std::ios::binary);
+        std::ofstream teacher_out(cols[5], std::ios::binary);
+        if (!greedy_out || !teacher_out) die("failed to open logits output");
+
+        llama_memory_clear(llama_get_memory(ctx), true);
+        if (!decode_tokens(ctx, batch, prompt, 0, n_batch, true)) die("prompt decode failed");
+        std::vector<llama_token> greedy;
+        for (size_t i = 0; i < target.size(); i++) {
+            const float *logits = llama_get_logits_ith(ctx, -1);
+            if (!logits) die("greedy logits unavailable");
+            greedy_out.write(reinterpret_cast<const char *>(logits), (std::streamsize)n_vocab * sizeof(float));
+            llama_token token = 0;
+            (void)token_logprob(logits, n_vocab, target[i], &token);
+            greedy.push_back(token);
+            if (!decode_chunk(ctx, batch, &token, 1, (int)prompt.size() + (int)i, true)) {
+                die("greedy token decode failed");
+            }
+        }
+        greedy_out.close();
+
+        llama_memory_clear(llama_get_memory(ctx), true);
+        if (!decode_tokens(ctx, batch, prompt, 0, n_batch, true)) die("teacher prompt decode failed");
+        std::vector<double> teacher_logprobs;
+        for (size_t i = 0; i < target.size(); i++) {
+            const float *logits = llama_get_logits_ith(ctx, -1);
+            if (!logits) die("teacher logits unavailable");
+            teacher_out.write(reinterpret_cast<const char *>(logits), (std::streamsize)n_vocab * sizeof(float));
+            llama_token ignored = 0;
+            teacher_logprobs.push_back(token_logprob(logits, n_vocab, target[i], &ignored));
+            if (!decode_chunk(ctx, batch, &target[i], 1, (int)prompt.size() + (int)i, true)) {
+                die("teacher token decode failed");
+            }
+        }
+        teacher_out.close();
+
+        std::ofstream response(cols[6], std::ios::binary);
+        if (!response) die("failed to open response output");
+        response << "{\n  \"engine\": \"llama.cpp\",\n  \"canonical_prompt_token_ids\": ";
+        write_token_array(response, prompt);
+        response << ",\n  \"native_prompt_token_ids\": ";
+        write_token_array(response, native_prompt);
+        response << ",\n  \"native_rendering_status\": \"tokenizer_only\",\n  \"prompt_token_ids\": ";
+        write_token_array(response, prompt);
+        response << ",\n  \"greedy_token_ids\": ";
+        write_token_array(response, greedy);
+        response << ",\n  \"teacher_forced_source\": \"canonical token manifest\",\n  \"teacher_forced\": [";
+        for (size_t i = 0; i < target.size(); i++) {
+            if (i) response << ',';
+            response << "{\"token_id\":" << target[i] << ",\"logprob\":" << teacher_logprobs[i] << '}';
+        }
+        response << "]\n}\n";
+        std::fprintf(stderr, "%s cases=%d prompt=%zu target=%zu vocab=%d token_manifest=1\n",
+                     id.c_str(), ++cases, prompt.size(), target.size(), n_vocab);
+    }
+    llama_batch_free(batch);
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 4 && argc != 5 && argc != 6) {
+    const bool token_manifest_mode = argc > 1 && std::strcmp(argv[1], "--token-manifest") == 0;
+    const int base = token_manifest_mode ? 2 : 1;
+    if ((!token_manifest_mode && argc != 4 && argc != 5 && argc != 6) ||
+        (token_manifest_mode && argc != 4 && argc != 5)) {
         std::fprintf(stderr,
-                     "usage: %s MODEL manifest.tsv OUT.tsv [ctx] [auto|glm-ds4]\n",
+                     "usage: %s MODEL manifest.tsv OUT.tsv [ctx] [auto|glm-ds4]\n"
+                     "       %s --token-manifest MODEL cases.tsv [ctx]\n",
+                     argv[0],
                      argv[0]);
         return 2;
     }
 
-    const char *model_path = argv[1];
-    const char *manifest_path = argv[2];
-    const char *out_path = argv[3];
-    int ctx_size = argc >= 5 ? std::atoi(argv[4]) : 4096;
+    const char *model_path = argv[base];
+    const char *manifest_path = argv[base + 1];
+    const char *out_path = token_manifest_mode ? nullptr : argv[base + 2];
+    int ctx_size = argc > base + (token_manifest_mode ? 2 : 3) ? std::atoi(argv[base + (token_manifest_mode ? 2 : 3)]) : 4096;
     if (ctx_size < 1024) ctx_size = 1024;
-    const std::string template_mode = argc == 6 ? argv[5] : "auto";
+    const std::string template_mode = !token_manifest_mode && argc == 6 ? argv[5] : "auto";
     if (template_mode != "auto" && template_mode != "glm-ds4") {
         die("template mode must be auto or glm-ds4");
     }
@@ -194,6 +315,13 @@ int main(int argc, char **argv) {
     llama_context *ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) die("failed to create context");
     const int n_batch = std::min<int>((int)llama_n_batch(ctx), 2048);
+    if (token_manifest_mode) {
+        const int rc = score_token_manifest(ctx, vocab, n_vocab, n_batch, manifest_path, ctx_size);
+        llama_free(ctx);
+        llama_model_free(model);
+        llama_backend_free();
+        return rc;
+    }
     llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
     std::ifstream mf(manifest_path, std::ios::binary);

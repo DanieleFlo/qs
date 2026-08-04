@@ -52,6 +52,7 @@ quality-llama-score:
 
 quality-qwen36-test:
 	python3 ../tests/test_qwen36_fixtures.py -v
+	python3 ../tests/test_qwen36_equivalence.py -v
 
 clean:
 	rm -f deepseek4-quantize quality-testing/score_official quality-testing/score_llama
