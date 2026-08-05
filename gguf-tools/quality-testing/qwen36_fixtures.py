@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 SCHEMA_VERSION = "ds4-qwen36-fixture-manifest-v1"
 CORPUS_VERSION = "ds4-qwen36-corpus-v1"
 OUTPUT_VERSION = "ds4-qwen36-oracle-v1"
+CONTEXT_PROFILE_VERSION = "ds4-qwen36-context-profile-v1"
 STAGING_MARKER = ".ds4-qwen36-staging"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -172,6 +173,10 @@ def validate_corpus(corpus_path: Path) -> dict:
         canaries = _require_list(case["canaries"], f"{case_id}.canaries")
         if category == "long-canary":
             _require_fields(case, {"generator"}, case_id)
+            if "context_frontier" in case:
+                frontier = _require_int(case["context_frontier"], f"{case_id}.context_frontier")
+                if frontier < 1024:
+                    raise FixtureError(f"{case_id}.context_frontier must be at least 1024")
             generator = _require_object(case["generator"], f"{case_id}.generator")
             _require_fields(generator, {"seed", "paragraphs", "words_per_paragraph"}, f"{case_id}.generator")
             _require_int(generator["seed"], f"{case_id}.generator.seed")
@@ -187,12 +192,48 @@ def validate_corpus(corpus_path: Path) -> dict:
     return corpus
 
 
+def validate_context_profile(path: Path) -> dict:
+    profile = load_json(path)
+    _require_fields(
+        profile,
+        {
+            "schema_version", "context_limit", "frontiers", "frontier_cases", "prefill_chunks",
+            "repetitions", "steps", "safety_margin_tokens", "minimum_free_vram_mib",
+        },
+        str(path),
+    )
+    if profile["schema_version"] != CONTEXT_PROFILE_VERSION:
+        raise FixtureError(f"{path}: unsupported context profile schema")
+    context_limit = _require_int(profile["context_limit"], "context_limit")
+    if context_limit != 16384:
+        raise FixtureError("the temporary Qwen context profile must use context_limit=16384")
+    frontiers = _require_list(profile["frontiers"], "frontiers")
+    if frontiers != [4096, 16384]:
+        raise FixtureError("the temporary Qwen context profile must use frontiers [4096, 16384]")
+    frontier_cases = _require_object(profile["frontier_cases"], "frontier_cases")
+    if set(frontier_cases) != {"4096", "16384"} or not all(
+        isinstance(value, str) and value for value in frontier_cases.values()
+    ):
+        raise FixtureError("frontier_cases must map the 4096 and 16384 contexts to case IDs")
+    chunks = _require_list(profile["prefill_chunks"], "prefill_chunks")
+    if chunks != [128, 512, 2048, 4096]:
+        raise FixtureError("the Qwen prefill matrix must use chunks [128, 512, 2048, 4096]")
+    if _require_int(profile["repetitions"], "repetitions") != 3:
+        raise FixtureError("the Qwen context matrix requires exactly three repetitions")
+    if _require_int(profile["steps"], "steps") < 32:
+        raise FixtureError("the Qwen context matrix requires at least 32 steps")
+    _require_int(profile["safety_margin_tokens"], "safety_margin_tokens")
+    _require_int(profile["minimum_free_vram_mib"], "minimum_free_vram_mib")
+    return profile
+
+
 def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -> tuple[dict, dict]:
     manifest_path = manifest_path.resolve()
     manifest = load_json(manifest_path)
     required = {
         "schema_version", "model", "artifacts", "tokenizer", "chat_template",
-        "oracle_environments", "equivalence_thresholds", "corpus", "output_format", "verification",
+        "oracle_environments", "equivalence_thresholds", "short_message_gates",
+        "corpus", "output_format", "verification",
     }
     _require_fields(manifest, required, str(manifest_path))
     if manifest["schema_version"] != SCHEMA_VERSION:
@@ -370,6 +411,21 @@ def validate_manifest(manifest_path: Path, *, require_artifacts: bool = False) -
             _require_string(profile["reason"], f"equivalence_thresholds.{name}.reason")
         else:
             raise FixtureError(f"equivalence_thresholds.{name}.status is invalid")
+
+    short_gates = _require_object(manifest["short_message_gates"], "short_message_gates")
+    expected_short_gates = {
+        "version": "ds4-qwen36-short-gates-v2",
+        "excluded_categories": ["long-canary"],
+        "minimum_greedy_tokens": 32,
+        "minimum_teacher_forced_tokens": 32,
+        "top_k": 20,
+        "top_k_overlap_min": 0.95,
+        "top_k_rank_agreement_min": 0.95,
+        "oracle_logprob_mae_max": 0.05,
+        "low_margin_max": 0.10,
+    }
+    if short_gates != expected_short_gates:
+        raise FixtureError("short_message_gates must match the calibrated task-4 profile")
 
     output = _require_object(manifest["output_format"], "output_format")
     if output != {"version": OUTPUT_VERSION, "index": "JSON", "large_logits": "float32-le", "checksums": "SHA-256"}:

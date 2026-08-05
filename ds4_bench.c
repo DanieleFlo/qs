@@ -616,11 +616,6 @@ int main(int argc, char **argv) {
     } else if (ds4_engine_open(&engine, &opt) != 0) {
         return 1;
     }
-    log_context_memory(opt.backend,
-                       cfg.ctx_alloc,
-                       ds4_engine_prefill_chunk(engine),
-                       cfg.ssd_streaming);
-
     char *text = read_file(cfg.prompt_path ? cfg.prompt_path : cfg.chat_prompt_path);
     ds4_tokens prompt = {0};
     if (cfg.chat_prompt_path) {
@@ -647,6 +642,10 @@ int main(int argc, char **argv) {
         ds4_engine_close(engine);
         return 1;
     }
+    log_context_memory(opt.backend,
+                       cfg.ctx_alloc,
+                       (uint32_t)ds4_session_prefill_cap(session),
+                       cfg.ssd_streaming);
     if (cfg.dist.role == DS4_DISTRIBUTED_COORDINATOR &&
         wait_distributed_route(session) != 0)
     {

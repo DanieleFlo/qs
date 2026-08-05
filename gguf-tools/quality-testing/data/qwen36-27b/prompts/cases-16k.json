@@ -1,0 +1,131 @@
+{
+  "schema_version": "ds4-qwen36-corpus-v1",
+  "minimum_greedy_tokens": 32,
+  "minimum_teacher_forced_tokens": 32,
+  "cases": [
+    {
+      "id": "single_token_ascii",
+      "category": "single-token",
+      "thinking": false,
+      "messages": [{"role": "user", "content": "A"}],
+      "tools": [],
+      "expected_min_prompt_tokens": 1,
+      "canaries": []
+    },
+    {
+      "id": "short_fact_english",
+      "category": "short-multilingual",
+      "thinking": false,
+      "messages": [{"role": "user", "content": "Answer in one sentence: why does the sky appear blue?"}],
+      "tools": [],
+      "expected_min_prompt_tokens": 8,
+      "canaries": []
+    },
+    {
+      "id": "unicode_multilingual",
+      "category": "unicode-multilingual",
+      "thinking": false,
+      "messages": [{"role": "user", "content": "Preserve these exact symbols in the answer: cafÃ©, Î•Î»Î»Î·Î½Î¹ÎºÎ¬, æ—¥æœ¬èªž, Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©, ðŸ‘©ðŸ½â€ðŸ’», e\u0301."}],
+      "tools": [],
+      "expected_min_prompt_tokens": 12,
+      "canaries": []
+    },
+    {
+      "id": "system_thinking_off",
+      "category": "system-thinking-off",
+      "thinking": false,
+      "messages": [
+        {"role": "system", "content": "You are a concise C reviewer. Do not invent APIs."},
+        {"role": "user", "content": "List two checks that prevent integer overflow during allocation."}
+      ],
+      "tools": [],
+      "expected_min_prompt_tokens": 16,
+      "canaries": []
+    },
+    {
+      "id": "system_thinking_on",
+      "category": "system-thinking-on",
+      "thinking": true,
+      "messages": [
+        {"role": "system", "content": "Solve carefully and return only the final result."},
+        {"role": "user", "content": "Calculate the sum of the first 25 odd numbers."}
+      ],
+      "tools": [],
+      "expected_min_prompt_tokens": 14,
+      "canaries": []
+    },
+    {
+      "id": "multi_turn_preserve_thinking",
+      "category": "multi-turn",
+      "thinking": true,
+      "preserve_thinking": true,
+      "messages": [
+        {"role": "user", "content": "Let x = 17. Remember the value."},
+        {"role": "assistant", "reasoning_content": "I must retain x for the next turn.", "content": "Remembered."},
+        {"role": "user", "content": "What is x * 3?"}
+      ],
+      "tools": [],
+      "expected_min_prompt_tokens": 20,
+      "canaries": []
+    },
+    {
+      "id": "code_completion_c",
+      "category": "code-completion",
+      "thinking": false,
+      "messages": [{"role": "user", "content": "Complete this C function without Markdown:\nsize_t checked_mul(size_t a, size_t b, bool *ok) {\n"}],
+      "tools": [],
+      "expected_min_prompt_tokens": 16,
+      "canaries": []
+    },
+    {
+      "id": "tool_call_weather",
+      "category": "tool-calling",
+      "thinking": false,
+      "messages": [{"role": "user", "content": "What is the weather in London? Use the available tool."}],
+      "tools": [{
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Return the current weather for a city.",
+          "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+          }
+        }
+      }],
+      "expected_min_prompt_tokens": 24,
+      "canaries": []
+    },
+    {
+      "id": "long_canary_ctx4096",
+      "category": "long-canary",
+      "thinking": false,
+      "messages": [{"role": "user", "content_generator": "deterministic_canary_text_v1"}],
+      "tools": [],
+      "expected_min_prompt_tokens": 3800,
+      "context_frontier": 4096,
+      "canaries": [
+        {"position": "start", "value": "DS4-CANARY-START-004096"},
+        {"position": "middle", "value": "DS4-CANARY-MIDDLE-004096"},
+        {"position": "end", "value": "DS4-CANARY-END-004096"}
+      ],
+      "generator": {"seed": 4096, "paragraphs": 640, "words_per_paragraph": 18}
+    },
+    {
+      "id": "long_canary_ctx16384",
+      "category": "long-canary",
+      "thinking": false,
+      "messages": [{"role": "user", "content_generator": "deterministic_canary_text_v1"}],
+      "tools": [],
+      "expected_min_prompt_tokens": 15000,
+      "context_frontier": 16384,
+      "canaries": [
+        {"position": "start", "value": "DS4-CANARY-START-016384"},
+        {"position": "middle", "value": "DS4-CANARY-MIDDLE-016384"},
+        {"position": "end", "value": "DS4-CANARY-END-016384"}
+      ],
+      "generator": {"seed": 16384, "paragraphs": 640, "words_per_paragraph": 18}
+    }
+  ]
+}

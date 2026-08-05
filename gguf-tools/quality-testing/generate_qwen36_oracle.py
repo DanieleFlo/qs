@@ -27,6 +27,7 @@ from qwen36_fixtures import (
     materialize_case,
     platform_provenance,
     sha256_file,
+    validate_context_profile,
     validate_manifest,
     write_json,
 )
@@ -141,7 +142,7 @@ def upstream_model_id(manifest: dict) -> str:
     return source
 
 
-def render_case(tokenizer, case: dict) -> tuple[str, list[int]]:
+def render_case(tokenizer, case: dict, *, enforce_minimum: bool = True) -> tuple[str, list[int]]:
     case = materialize_case(case)
     kwargs = {
         "tokenize": False,
@@ -153,12 +154,55 @@ def render_case(tokenizer, case: dict) -> tuple[str, list[int]]:
         kwargs["tools"] = case["tools"]
     rendered = tokenizer.apply_chat_template(case["messages"], **kwargs)
     upstream_ids = tokenizer.encode(rendered, add_special_tokens=False)
-    if len(upstream_ids) < case["expected_min_prompt_tokens"]:
+    if enforce_minimum and len(upstream_ids) < case["expected_min_prompt_tokens"]:
         raise FixtureError(
             f"{case['id']}: rendered prompt has {len(upstream_ids)} tokens, "
             f"expected at least {case['expected_min_prompt_tokens']}"
         )
     return rendered, [int(value) for value in upstream_ids]
+
+
+def fit_long_case_to_context(
+    tokenizer, case: dict, context: int, steps: int, safety_margin: int,
+) -> tuple[dict, str, list[int]]:
+    """Fit deterministic long text using real tokenizer counts, never estimates."""
+    if case["category"] != "long-canary":
+        rendered, token_ids = render_case(tokenizer, case)
+        return case, rendered, token_ids
+    if "context_frontier" not in case:
+        raise FixtureError(
+            f"{case['id']}: long case has no context_frontier for tokenizer-aware fitting"
+        )
+    frontier = int(case["context_frontier"])
+    if frontier > context:
+        raise FixtureError(
+            f"{case['id']}: context frontier {frontier} exceeds --context {context}"
+        )
+    maximum_prompt = frontier - 2 * steps - safety_margin
+    if maximum_prompt < int(case["expected_min_prompt_tokens"]):
+        raise FixtureError(
+            f"{case['id']}: expected minimum does not fit context frontier {frontier}"
+        )
+    lower = 1
+    upper = int(case["generator"]["paragraphs"])
+    best: tuple[dict, str, list[int]] | None = None
+    while lower <= upper:
+        paragraphs = (lower + upper) // 2
+        candidate = json.loads(json.dumps(case, ensure_ascii=False))
+        candidate["generator"]["paragraphs"] = paragraphs
+        rendered, token_ids = render_case(tokenizer, candidate, enforce_minimum=False)
+        if len(token_ids) <= maximum_prompt:
+            best = candidate, rendered, token_ids
+            lower = paragraphs + 1
+        else:
+            upper = paragraphs - 1
+    if best is None or len(best[2]) < int(case["expected_min_prompt_tokens"]):
+        observed = 0 if best is None else len(best[2])
+        raise FixtureError(
+            f"{case['id']}: tokenizer-aware fit produced {observed} prompt tokens, "
+            f"expected {case['expected_min_prompt_tokens']}..{maximum_prompt}"
+        )
+    return best
 
 
 def parse_artifact_path(value: str) -> tuple[str, Path]:
@@ -266,14 +310,21 @@ def generate_llama(
         teacher_rows.append(selected)
         llm.eval([token])
     teacher_logits_info = teacher_logits.close()
+    # Token IDs are the canonical generation result.  Preserve control-token
+    # bytes as well: tokenize() above already opts into special tokens, and
+    # silently dropping them here makes equal token streams look different
+    # from DS4/Transformers during decoded-byte verification.
+    greedy_bytes = llm.detokenize(greedy, special=True)
     return {
         "engine": "llama.cpp",
         "engine_version": package_version("llama-cpp-python"),
         "prompt_token_ids": prompt_ids,
         "upstream_render_token_ids": upstream_ids,
+        "native_rendered_bytes_hex": rendered.encode("utf-8").hex(),
+        "native_rendering_status": "verified",
         "greedy_token_ids": greedy,
-        "greedy_text": llm.detokenize(greedy).decode("utf-8", "replace"),
-        "greedy_bytes_hex": llm.detokenize(greedy).hex(),
+        "greedy_text": greedy_bytes.decode("utf-8", "replace"),
+        "greedy_bytes_hex": greedy_bytes.hex(),
         "teacher_forced_source": "same-run greedy continuation",
         "teacher_forced": teacher_rows,
         "top_k": top_rows,
@@ -372,8 +423,11 @@ def generate_transformers(
         "engine_version": package_version("transformers"),
         "torch_version": package_version("torch"),
         "prompt_token_ids": prompt_ids,
+        "native_rendered_bytes_hex": rendered.encode("utf-8").hex(),
+        "native_rendering_status": "verified",
         "greedy_token_ids": greedy,
         "greedy_text": tokenizer.decode(greedy, skip_special_tokens=False),
+        "greedy_bytes_hex": tokenizer.decode(greedy, skip_special_tokens=False).encode("utf-8").hex(),
         "teacher_forced_source": "same-run greedy continuation",
         "teacher_forced": teacher_rows,
         "top_k": top_rows,
@@ -438,8 +492,11 @@ def generate_vllm(
         "oracle_kind": "semantic_upstream",
         "engine_version": package_version("vllm"),
         "prompt_token_ids": prompt_ids,
+        "native_rendered_bytes_hex": rendered.encode("utf-8").hex(),
+        "native_rendering_status": "verified",
         "greedy_token_ids": greedy,
         "greedy_text": tokenizer.decode(greedy, skip_special_tokens=False),
+        "greedy_bytes_hex": tokenizer.decode(greedy, skip_special_tokens=False).encode("utf-8").hex(),
         "teacher_forced_source": "same-run greedy continuation",
         "teacher_forced_top_k": teacher_rows,
         "top_k": top_rows,
@@ -483,6 +540,7 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--context", type=int, default=8192)
+    parser.add_argument("--context-profile", type=Path)
     parser.add_argument("--n-gpu-layers", type=int, default=-1)
     parser.add_argument("--engine-commit", required=True)
     parser.add_argument("--build-flags", required=True)
@@ -496,6 +554,16 @@ def main() -> int:
         if args.top_k < 1:
             raise FixtureError("--top-k must be positive")
         manifest, corpus = validate_manifest(args.manifest)
+        context_profile = validate_context_profile(args.context_profile) if args.context_profile else None
+        if context_profile is not None:
+            if args.context > context_profile["context_limit"]:
+                raise FixtureError(
+                    f"--context {args.context} exceeds profile limit {context_profile['context_limit']}"
+                )
+            if args.steps != context_profile["steps"]:
+                raise FixtureError(
+                    f"--steps {args.steps} differs from profile steps {context_profile['steps']}"
+                )
         artifact_paths = resolve_artifact_paths(manifest, args.artifact_path)
         if args.oracle == "llama.cpp" and "target" not in artifact_paths:
             raise FixtureError("llama.cpp oracle requires --artifact-path target=PATH or artifacts[target].local_path")
@@ -508,7 +576,11 @@ def main() -> int:
         for name in ("prompts", "continuations", "responses", "logits"):
             (run_dir / name).mkdir()
         selected = [find_case(corpus, value) for value in args.cases] if args.cases else corpus["cases"]
-        rendered_cases = [(case, *render_case(tokenizer, case)) for case in selected]
+        safety_margin = context_profile["safety_margin_tokens"] if context_profile else 16
+        rendered_cases = [
+            fit_long_case_to_context(tokenizer, case, args.context, args.steps, safety_margin)
+            for case in selected
+        ]
         llama_runtime = None
         transformers_runtime = None
         if args.oracle == "llama.cpp":

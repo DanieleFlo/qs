@@ -13,7 +13,7 @@ from pathlib import Path
 
 from qwen36_fixtures import (
     FixtureError, ensure_staging, inventory_files, load_json, platform_provenance,
-    sha256_file, validate_manifest, write_json,
+    sha256_file, validate_context_profile, validate_manifest, write_json,
 )
 from verify_qwen36_run import verify_run
 
@@ -68,6 +68,7 @@ def main() -> int:
     parser.add_argument("--staging-dir", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--context", required=True, type=int)
+    parser.add_argument("--context-profile", type=Path)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--engine-commit", required=True)
     parser.add_argument("--build-flags", required=True)
@@ -75,6 +76,8 @@ def main() -> int:
     parser.add_argument("--hardware", required=True)
     parser.add_argument("--dtype", required=True)
     parser.add_argument("--prefill-chunk", type=int)
+    parser.add_argument("--suite", choices=("all", "short"), default="all")
+    parser.add_argument("--case", action="append", dest="cases")
     parser.add_argument("--scorer-arg", action="append", default=[])
     args = parser.parse_args()
     try:
@@ -87,7 +90,25 @@ def main() -> int:
         if not args.scorer.is_file():
             raise FixtureError(f"scorer does not exist: {args.scorer}")
         manifest, _ = validate_manifest(args.manifest)
-        source = verify_run(args.source_run, args.manifest, allow_partial=False)
+        context_profile = validate_context_profile(args.context_profile) if args.context_profile else None
+        if context_profile is not None:
+            if args.context > context_profile["context_limit"]:
+                raise FixtureError(
+                    f"--context {args.context} exceeds profile limit {context_profile['context_limit']}"
+                )
+            if args.prefill_chunk is not None and args.prefill_chunk not in context_profile["prefill_chunks"]:
+                raise FixtureError(
+                    f"--prefill-chunk {args.prefill_chunk} is not declared by the context profile"
+                )
+        # A short or explicitly selected suite only needs the cases it will
+        # score.  Requiring unrelated long-canary coverage here made a valid
+        # eight-case oracle unusable even though selection below excludes the
+        # missing cases and the verifier still checks every supplied artifact.
+        source = verify_run(
+            args.source_run,
+            args.manifest,
+            allow_partial=(args.suite == "short" or bool(args.cases)),
+        )
         target = artifact_target(manifest)
         if not args.model.is_file():
             raise FixtureError(f"model does not exist: {args.model}")
@@ -100,9 +121,25 @@ def main() -> int:
         for name in ("prompts", "continuations", "responses", "logits"):
             (run_dir / name).mkdir(parents=True, exist_ok=True)
 
+        requested_cases = set(args.cases or [])
+        available_cases = {entry["id"] for entry in source["index"]["cases"]}
+        unknown_cases = requested_cases - available_cases
+        if unknown_cases:
+            raise FixtureError(f"unknown source case(s): {', '.join(sorted(unknown_cases))}")
+        excluded_categories = (
+            set(manifest["short_message_gates"]["excluded_categories"])
+            if args.suite == "short" else set()
+        )
+        selected_entries = [
+            entry for entry in source["index"]["cases"]
+            if entry.get("category") not in excluded_categories
+            and (not requested_cases or entry["id"] in requested_cases)
+        ]
+        if not selected_entries:
+            raise FixtureError("case selection is empty")
         cases = []
         driver_rows = ["# id\trendered\tprompt_tokens\ttarget_tokens\tgreedy_logits\tteacher_logits\tresponse"]
-        for entry in source["index"]["cases"]:
+        for entry in selected_entries:
             case_id = entry["id"]
             source_response = source["responses"][case_id]
             source_prompt = args.source_run / "prompts" / case_id
@@ -135,7 +172,10 @@ def main() -> int:
             driver.write("\n".join(driver_rows) + "\n")
             driver_path = Path(driver.name)
         try:
-            command = [str(args.scorer), "--token-manifest", str(args.model), str(driver_path), str(args.context), *args.scorer_arg]
+            command = [str(args.scorer), "--token-manifest", str(args.model), str(driver_path), str(args.context)]
+            if args.prefill_chunk is not None and args.engine == "ds4":
+                command.extend(("--prefill-chunk", str(args.prefill_chunk)))
+            command.extend(args.scorer_arg)
             completed = subprocess.run(command, check=False)
             if completed.returncode != 0:
                 raise FixtureError(f"scorer exited with status {completed.returncode}")

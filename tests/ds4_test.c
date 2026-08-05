@@ -6695,6 +6695,20 @@ static void test_server_unit_group(void) {
     ds4_server_unit_tests_run();
 }
 
+static void test_qwen35_layer_pattern(void) {
+    int recurrent = 0;
+    int full = 0;
+    for (uint32_t il = 0; il < 64u; il++) {
+        const int kind = ds4_test_qwen35_layer_is_recurrent(il);
+        TEST_ASSERT(kind == (((il + 1u) % 4u) != 0u));
+        recurrent += kind == 1;
+        full += kind == 0;
+    }
+    TEST_ASSERT(recurrent == 48);
+    TEST_ASSERT(full == 16);
+    TEST_ASSERT(ds4_test_qwen35_layer_is_recurrent(64u) == -1);
+}
+
 typedef void (*test_fn)(void);
 
 typedef struct {
@@ -6719,6 +6733,7 @@ static const ds4_test_entry test_entries[] = {
     {"--mtp-verify-depth", "mtp-verify-depth", "MTP speculative verify commits autoregressive-identical tokens at draft depth > 2", test_mtp_verify_depth},
     {"--dspark-verify-depth", "dspark-verify-depth", "DSpark speculative verify commits autoregressive-identical tokens at draft depth > 2", test_dspark_verify_depth},
 #endif
+    {"--qwen35-layer-pattern", "qwen35-layer-pattern", "Qwen hybrid recurrent/full-attention layer pattern", test_qwen35_layer_pattern},
     {"--server", "server", "server parser/rendering/cache unit tests", test_server_unit_group},
 };
 

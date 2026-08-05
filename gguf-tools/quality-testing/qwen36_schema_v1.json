@@ -12,6 +12,7 @@
     "chat_template",
     "oracle_environments",
     "equivalence_thresholds",
+    "short_message_gates",
     "corpus",
     "output_format",
     "verification"
@@ -56,6 +57,30 @@
         "version": {"const": "ds4-qwen36-equivalence-thresholds-v1"},
         "internal": {"$ref": "#/$defs/thresholdProfile"},
         "cross_engine": {"$ref": "#/$defs/thresholdProfile"}
+      }
+    },
+    "short_message_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version", "excluded_categories", "minimum_greedy_tokens",
+        "minimum_teacher_forced_tokens", "top_k", "top_k_overlap_min",
+        "top_k_rank_agreement_min", "oracle_logprob_mae_max",
+        "low_margin_max"
+      ],
+      "properties": {
+        "version": {"const": "ds4-qwen36-short-gates-v1"},
+        "excluded_categories": {
+          "type": "array", "prefixItems": [{"const": "long-canary"}],
+          "items": false, "minItems": 1, "maxItems": 1
+        },
+        "minimum_greedy_tokens": {"const": 32},
+        "minimum_teacher_forced_tokens": {"const": 32},
+        "top_k": {"const": 20},
+        "top_k_overlap_min": {"const": 0.95},
+        "top_k_rank_agreement_min": {"const": 0.98},
+        "oracle_logprob_mae_max": {"const": 0.05},
+        "low_margin_max": {"const": 0.1}
       }
     },
     "corpus": {"type": "string", "minLength": 1},

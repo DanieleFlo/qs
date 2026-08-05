@@ -15,6 +15,14 @@ def require(condition: bool, message: str) -> None:
         raise FixtureError(message)
 
 
+def decode_hex_bytes(value: object, where: str) -> bytes:
+    require(isinstance(value, str) and len(value) % 2 == 0, f"{where}: invalid byte hex")
+    try:
+        return bytes.fromhex(value)
+    except ValueError as exc:
+        raise FixtureError(f"{where}: invalid byte hex") from exc
+
+
 def verify_inventory(run: Path, index: dict) -> None:
     expected = index.get("files")
     require(isinstance(expected, list), f"{run}: index has no file inventory")
@@ -45,7 +53,14 @@ def verify_run(run: Path, manifest_path: Path, allow_partial: bool) -> dict:
     run = run.resolve()
     index = load_json(run / "index.json")
     require(index.get("format") == "ds4-qwen36-oracle-v1", f"{run}: unsupported index format")
-    require(index.get("environment", {}).get("review_status") == "generated_unreviewed", f"{run}: invalid review status")
+    environment = index.get("environment", {})
+    review_status = environment.get("review_status")
+    require(review_status in ("generated_unreviewed", "reviewed"), f"{run}: invalid review status")
+    if review_status == "reviewed":
+        review = environment.get("review")
+        require(isinstance(review, dict), f"{run}: reviewed run is missing review metadata")
+        require(isinstance(review.get("date"), str) and review["date"], f"{run}: reviewed run is missing review date")
+        require(isinstance(review.get("basis"), str) and review["basis"], f"{run}: reviewed run is missing review basis")
     _, corpus = validate_manifest(manifest_path)
     cases_by_id = {case["id"]: case for case in corpus["cases"]}
     listed = index.get("cases", [])
@@ -73,9 +88,16 @@ def verify_run(run: Path, manifest_path: Path, allow_partial: bool) -> dict:
             response.get("upstream_render_token_ids", response.get("prompt_token_ids")),
         )
         require(recorded_native == upstream_ids, f"{case_id}: native rendered token IDs mismatch")
+        native_bytes = decode_hex_bytes(
+            response.get("native_rendered_bytes_hex", rendered.hex()),
+            f"{case_id}: native rendered bytes",
+        )
+        if response.get("native_rendering_status", "verified") == "verified":
+            require(native_bytes == rendered, f"{case_id}: native rendered bytes mismatch")
         canonical = response.get("canonical_prompt_token_ids", response.get("prompt_token_ids"))
         require(isinstance(canonical, list) and canonical, f"{case_id}: canonical prompt token IDs are missing")
         require(len(response.get("greedy_token_ids", [])) == steps, f"{case_id}: incomplete greedy continuation")
+        decode_hex_bytes(response.get("greedy_bytes_hex"), f"{case_id}: greedy bytes")
         require(len(response.get("teacher_forced", [])) == steps, f"{case_id}: incomplete teacher-forced continuation")
         require(len(response.get("top_k", [])) == steps, f"{case_id}: incomplete top-k rows")
         verify_logits(run, case_id, response.get("full_logits"), steps)
@@ -96,7 +118,8 @@ def compare_runs(first: Path, first_data: dict, second: Path, second_data: dict)
         right = second_data["responses"][case_id]
         for field in (
             "prompt_token_ids", "canonical_prompt_token_ids", "native_prompt_token_ids",
-            "upstream_render_token_ids", "greedy_token_ids",
+            "upstream_render_token_ids", "native_rendered_bytes_hex",
+            "greedy_token_ids", "greedy_bytes_hex",
         ):
             require(left.get(field) == right.get(field), f"{case_id}: repeat {field} differs")
 

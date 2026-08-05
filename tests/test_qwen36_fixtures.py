@@ -23,7 +23,7 @@ sys.path.insert(0, str(QUALITY_ROOT))
 
 from qwen36_fixtures import (  # noqa: E402
     FixtureError, ensure_staging, generate_long_content, inventory_files,
-    sha256_file, validate_manifest, write_json,
+    sha256_file, validate_context_profile, validate_manifest, write_json,
 )
 import generate_qwen36_oracle as oracle_generator  # noqa: E402
 import inspect_qwen36_gguf as gguf_inspector  # noqa: E402
@@ -39,6 +39,14 @@ class FakeTokenizer:
 
     def decode(self, token_ids, skip_special_tokens=False):
         return "fixture continuation"
+
+
+class CountingTokenizer:
+    def apply_chat_template(self, messages, **kwargs):
+        return "\n".join(message["content"] for message in messages)
+
+    def encode(self, rendered, add_special_tokens=False):
+        return list(range(len(rendered.split())))
 
 
 def gguf_string(value: str) -> bytes:
@@ -63,6 +71,15 @@ def write_synthetic_gguf(path: Path, *, duplicate_tensor: bool = False, metadata
 
 
 class Qwen36FixtureTests(unittest.TestCase):
+
+    def test_llama_oracle_preserves_special_tokens_when_detokenizing(self) -> None:
+        source = Path(oracle_generator.__file__).read_text(encoding="utf-8")
+        self.assertIn("llm.detokenize(greedy, special=True)", source)
+
+    def test_short_scorer_accepts_a_partial_source_run(self) -> None:
+        scorer_source = (QUALITY_ROOT / "generate_qwen36_score.py").read_text(encoding="utf-8")
+        self.assertIn('allow_partial=(args.suite == "short" or bool(args.cases))', scorer_source)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -111,6 +128,7 @@ class Qwen36FixtureTests(unittest.TestCase):
         artifact["local_path"] = artifact_file.name
         artifact["size_bytes"] = artifact_file.stat().st_size
         artifact["sha256"] = hashlib.sha256(artifact_file.read_bytes()).hexdigest()
+        manifest["equivalence_thresholds"]["cross_engine"]["calibration"]["model_sha256"] = artifact["sha256"]
         self.save_manifest(manifest)
         validate_manifest(self.manifest_path, require_artifacts=True)
 
@@ -136,7 +154,11 @@ class Qwen36FixtureTests(unittest.TestCase):
 
     def test_unverified_thresholds_cannot_hide_numeric_gates(self) -> None:
         manifest = self.load_manifest()
-        manifest["equivalence_thresholds"]["cross_engine"]["metrics"] = {"mae": 1.0}
+        profile = manifest["equivalence_thresholds"]["cross_engine"]
+        profile.update({
+            "status": "not_verified", "metrics": {"mae": 1.0},
+            "calibration": None, "reason": "test",
+        })
         self.save_manifest(manifest)
         with self.assertRaisesRegex(FixtureError, "cannot contain gates"):
             validate_manifest(self.manifest_path)
@@ -148,6 +170,13 @@ class Qwen36FixtureTests(unittest.TestCase):
         with self.assertRaisesRegex(FixtureError, "different_float_count=0"):
             validate_manifest(self.manifest_path)
 
+    def test_short_message_gates_are_fixed(self) -> None:
+        manifest = self.load_manifest()
+        manifest["short_message_gates"]["top_k_overlap_min"] = 0.90
+        self.save_manifest(manifest)
+        with self.assertRaisesRegex(FixtureError, "calibrated task-4 profile"):
+            validate_manifest(self.manifest_path)
+
     def test_long_prompt_is_deterministic_and_has_canaries(self) -> None:
         _, corpus = validate_manifest(self.manifest_path)
         case = next(item for item in corpus["cases"] if item["category"] == "long-canary")
@@ -156,6 +185,21 @@ class Qwen36FixtureTests(unittest.TestCase):
         self.assertEqual(first, second)
         for canary in case["canaries"]:
             self.assertEqual(first.count(canary["value"]), 1)
+
+    def test_context_profile_and_tokenizer_aware_long_fit(self) -> None:
+        profile = validate_context_profile(DATA_ROOT / "context-profile-16k.json")
+        self.assertEqual(profile["context_limit"], 16384)
+        _, corpus = validate_manifest(DATA_ROOT / "manifest-16k.json")
+        case = next(item for item in corpus["cases"] if item.get("context_frontier") == 4096)
+        fitted, rendered, token_ids = oracle_generator.fit_long_case_to_context(
+            CountingTokenizer(), case, 16384, profile["steps"],
+            profile["safety_margin_tokens"],
+        )
+        self.assertGreaterEqual(len(token_ids), case["expected_min_prompt_tokens"])
+        self.assertLessEqual(len(token_ids), 4096 - 2 * profile["steps"] - 16)
+        self.assertLess(fitted["generator"]["paragraphs"], case["generator"]["paragraphs"])
+        for canary in case["canaries"]:
+            self.assertEqual(rendered.count(canary["value"]), 1)
 
     def test_staging_refuses_golden_directory(self) -> None:
         with self.assertRaisesRegex(FixtureError, "golden directory"):
@@ -277,7 +321,9 @@ class Qwen36FixtureTests(unittest.TestCase):
             }
         response = {
             "prompt_token_ids": [1, 2], "upstream_render_token_ids": [1, 2],
+            "native_rendered_bytes_hex": rendered.hex(),
             "greedy_token_ids": [7] * 32,
+            "greedy_bytes_hex": (b"x" * 32).hex(),
             "teacher_forced": [{"token_id": 7}] * 32,
             "top_k": [[{"token_id": 7}]] * 32,
             "full_logits": logits,
@@ -289,6 +335,13 @@ class Qwen36FixtureTests(unittest.TestCase):
             "cases": [{"id": case_id}],
             "files": inventory_files(run),
         }
+        write_json(run / "index.json", index)
+        data = run_verifier.verify_run(run, self.manifest_path, allow_partial=True)
+        self.assertIn(case_id, data["responses"])
+        index["environment"].update({
+            "review_status": "reviewed",
+            "review": {"date": "2026-08-05", "basis": "unit-test verification"},
+        })
         write_json(run / "index.json", index)
         data = run_verifier.verify_run(run, self.manifest_path, allow_partial=True)
         self.assertIn(case_id, data["responses"])

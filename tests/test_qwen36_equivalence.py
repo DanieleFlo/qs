@@ -18,7 +18,8 @@ MANIFEST = QUALITY_ROOT / "data" / "qwen36-27b" / "manifest.json"
 sys.path.insert(0, str(QUALITY_ROOT))
 
 from compare_qwen36_equivalence import (  # noqa: E402
-    compare_runs, load_run, longest_common_prefix, main, position_metrics,
+    compare_runs, fixed_gate_failed, load_run, longest_common_prefix, main,
+    position_metrics,
 )
 from qwen36_fixtures import FixtureError, inventory_files, load_json, sha256_file, write_json  # noqa: E402
 
@@ -28,6 +29,12 @@ class Qwen36EquivalenceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.manifest = load_json(MANIFEST)
+        # Synthetic runs use CPU/test provenance and exercise metric logic,
+        # not the hardware-bound production calibration profile.
+        self.manifest["equivalence_thresholds"]["cross_engine"] = {
+            "status": "not_verified", "metrics": None, "calibration": None,
+            "reason": "synthetic unit-test profile",
+        }
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -64,13 +71,19 @@ class Qwen36EquivalenceTests(unittest.TestCase):
             "prompt_token_ids": [1, 2],
             "canonical_prompt_token_ids": [1, 2],
             "native_prompt_token_ids": [1, 2],
+            "native_rendered_bytes_hex": rendered.hex(),
             "native_rendering_status": native_status,
             "greedy_token_ids": [int(np.argmax(row)) for row in values],
+            "greedy_bytes_hex": bytes(int(np.argmax(row)) & 0xff for row in values).hex(),
             "teacher_forced": [{"token_id": 0} for _ in values],
             "full_logits": logits,
         }
         write_json(run / "responses" / f"{case_id}.json", response)
-        artifact = {"target": {"filename": "model.gguf", "size_bytes": 1, "sha256": "a" * 64}}
+        target = next(item for item in self.manifest["artifacts"] if item["role"] == "target")
+        artifact = {"target": {
+            "filename": target["filename"], "size_bytes": target["size_bytes"],
+            "sha256": target["sha256"],
+        }}
         index = {
             "format": "ds4-qwen36-oracle-v1", "manifest_model": self.manifest["model"]["id"],
             "run_id": name,
@@ -93,6 +106,25 @@ class Qwen36EquivalenceTests(unittest.TestCase):
         index = load_json(run / "index.json")
         index["files"] = inventory_files(run)
         write_json(run / "index.json", index)
+
+    @staticmethod
+    def short_corpus(*case_ids: str, include_long: bool = False) -> dict:
+        cases = [{"id": case_id, "category": "short-multilingual"} for case_id in case_ids]
+        if include_long:
+            cases.append({"id": "long_canary_4096", "category": "long-canary"})
+        return {"cases": cases}
+
+    def compare_short(self, left: Path, right: Path, corpus: dict | None = None):
+        return compare_runs(
+            load_run(left), load_run(right), self.manifest, "ds4-vs-ds4", 20,
+            False, suite="short", corpus=corpus or self.short_corpus("case"),
+        )
+
+    def compare_short_cross(self, left: Path, right: Path):
+        return compare_runs(
+            load_run(left), load_run(right), self.manifest, "ds4-vs-llama", 20,
+            False, suite="short", corpus=self.short_corpus("case"),
+        )
 
     def test_uniform_shift_is_removed_from_error_metrics(self) -> None:
         left = np.array([1.0, 2.0, 4.0, -3.0], dtype=np.float32)
@@ -128,6 +160,154 @@ class Qwen36EquivalenceTests(unittest.TestCase):
     def test_longest_common_prefix(self) -> None:
         self.assertEqual(longest_common_prefix([1, 2, 3], [1, 2, 4, 5]), 2)
 
+    def test_fixed_gate_boundaries_are_inclusive(self) -> None:
+        self.assertFalse(fixed_gate_failed(0.95, 0.95, minimum=True))
+        self.assertTrue(fixed_gate_failed(0.949999, 0.95, minimum=True))
+        self.assertFalse(fixed_gate_failed(0.98, 0.98, minimum=True))
+        self.assertTrue(fixed_gate_failed(0.979999, 0.98, minimum=True))
+        self.assertFalse(fixed_gate_failed(0.05, 0.05, minimum=False))
+        self.assertTrue(fixed_gate_failed(0.050001, 0.05, minimum=False))
+
+    def test_diagnostic_allows_an_uncalibrated_candidate_commit(self) -> None:
+        values = np.repeat(np.arange(21, dtype=np.float32)[None, :], 2, axis=0)
+        left = self.make_run("left", values, engine="llama.cpp")
+        right = self.make_run("right", values)
+        self.manifest["equivalence_thresholds"]["cross_engine"] = {
+            "status": "verified",
+            "metrics": {"mae": 0.0, "max_error": 0.0},
+            "calibration": {
+                "model_sha256": "intentionally-different",
+                "ds4_commit": "reviewed-old-commit",
+            },
+            "reason": None,
+        }
+        report, code = compare_runs(
+            load_run(left), load_run(right), self.manifest, "ds4-vs-llama", 20,
+            True, suite="all", corpus=None,
+        )
+        self.assertEqual((report["status"], code), ("NOT_VERIFIED", 3))
+        self.assertEqual(report["aggregate"]["nonfinite_positions"], 0)
+
+    def test_short_suite_excludes_long_and_reports_low_margin_nll(self) -> None:
+        row = np.linspace(-5.0, -1.0, 21, dtype=np.float32)
+        row[-1], row[-2] = np.float32(3.0), np.float32(2.95)
+        values = np.repeat(row[None, :], 32, axis=0)
+        left = self.make_run("left", values)
+        right = self.make_run("right", values)
+        report, code = self.compare_short(
+            left, right, self.short_corpus("case", include_long=True),
+        )
+        self.assertEqual((report["status"], code), ("PASS", 0))
+        self.assertEqual([case["id"] for case in report["cases"]], ["case"])
+        self.assertEqual(len(report["aggregate"]["low_margin_positions"]), 64)
+        diagnostics = report["aggregate"]["teacher_forced"]
+        self.assertEqual(diagnostics["positions"], 32)
+        self.assertGreater(diagnostics["left_perplexity"], 0.0)
+
+    def test_short_suite_rejects_missing_case_and_incomplete_steps(self) -> None:
+        values = np.repeat(np.array([[3.0, 2.0, 1.0]], dtype=np.float32), 31, axis=0)
+        left = self.make_run("left", values)
+        right = self.make_run("right", values)
+        with self.assertRaisesRegex(FixtureError, "missing case"):
+            self.compare_short(left, right, self.short_corpus("case", "missing"))
+        with self.assertRaisesRegex(FixtureError, "greedy continuation is incomplete"):
+            self.compare_short(left, right)
+
+    def test_short_suite_blocks_rendering_and_prompt_token_mismatch(self) -> None:
+        values = np.repeat(np.arange(21, dtype=np.float32)[None, :], 32, axis=0)
+        left = self.make_run("left", values)
+        right = self.make_run("right", values)
+        response_path = right / "responses" / "case.json"
+        response = load_json(response_path)
+        response["native_rendered_bytes_hex"] = b"different".hex()
+        write_json(response_path, response)
+        self.refresh_inventory(right)
+        report, code = self.compare_short(left, right)
+        self.assertEqual((report["status"], code), ("FAIL", 1))
+        self.assertIn("rendered prompt differs", report["failures"][0])
+
+        response["native_rendered_bytes_hex"] = b"rendered prompt".hex()
+        response["native_prompt_token_ids"] = [1, 3]
+        write_json(response_path, response)
+        write_json(right / "prompts" / "case.tokens.json", [1, 3])
+        self.refresh_inventory(right)
+        report, code = self.compare_short(left, right)
+        self.assertEqual((report["status"], code), ("FAIL", 1))
+        self.assertEqual(report["aggregate"]["first_divergence"]["metric"], "prompt_token_ids")
+
+    def test_short_suite_blocks_greedy_token_and_decoded_byte_mismatch(self) -> None:
+        values = np.repeat(np.arange(21, dtype=np.float32)[None, :], 32, axis=0)
+        left = self.make_run("left", values)
+        right = self.make_run("right", values)
+        response_path = right / "responses" / "case.json"
+        response = load_json(response_path)
+        response["greedy_token_ids"][0] = 19
+        write_json(response_path, response)
+        self.refresh_inventory(right)
+        report, code = self.compare_short(left, right)
+        self.assertEqual((report["status"], code), ("FAIL", 1))
+        self.assertEqual(report["aggregate"]["first_divergence"]["metric"], "token_id")
+
+        response["greedy_token_ids"][0] = 20
+        response["greedy_bytes_hex"] = b"different".hex()
+        write_json(response_path, response)
+        self.refresh_inventory(right)
+        report, code = self.compare_short(left, right)
+        self.assertEqual((report["status"], code), ("FAIL", 1))
+        self.assertEqual(report["aggregate"]["first_divergence"]["metric"], "decoded_bytes")
+
+    def test_short_suite_applies_overlap_rank_and_logprob_gates(self) -> None:
+        left_row = np.arange(22, 0, -1, dtype=np.float32)
+        exact_overlap = left_row.copy()
+        exact_overlap[20] = np.float32(3.5)
+        left_values = np.repeat(left_row[None, :], 32, axis=0)
+        exact_values = np.repeat(exact_overlap[None, :], 32, axis=0)
+        left = self.make_run("llama", left_values, engine="llama.cpp")
+        right = self.make_run("ds4", exact_values)
+        report, code = self.compare_short_cross(left, right)
+        self.assertEqual((report["status"], code), ("NOT_VERIFIED", 3))
+        self.assertFalse(any("top_k_overlap" in failure for failure in report["failures"]))
+
+        below_overlap = left_row.copy()
+        below_overlap[20:22] = np.array([4.5, 4.25], dtype=np.float32)
+        response_path = right / "responses" / "case.json"
+        for pass_name in ("greedy", "teacher_forced"):
+            path = right / "logits" / f"case.{pass_name}.f32"
+            path.write_bytes(np.repeat(below_overlap[None, :], 32, axis=0).astype("<f4").tobytes())
+        response = load_json(response_path)
+        for pass_name in ("greedy", "teacher_forced"):
+            path = right / "logits" / f"case.{pass_name}.f32"
+            response["full_logits"][pass_name]["sha256"] = sha256_file(path)
+        write_json(response_path, response)
+        self.refresh_inventory(right)
+        report, code = self.compare_short_cross(left, right)
+        self.assertEqual((report["status"], code), ("FAIL", 1))
+        self.assertTrue(any("top_k_overlap" in failure for failure in report["failures"]))
+
+        rank_inversion = left_row.copy()
+        rank_inversion[1:20] = rank_inversion[1:20][::-1]
+        for pass_name in ("greedy", "teacher_forced"):
+            path = right / "logits" / f"case.{pass_name}.f32"
+            path.write_bytes(np.repeat(rank_inversion[None, :], 32, axis=0).astype("<f4").tobytes())
+            response["full_logits"][pass_name]["sha256"] = sha256_file(path)
+        write_json(response_path, response)
+        self.refresh_inventory(right)
+        report, code = self.compare_short_cross(left, right)
+        self.assertEqual((report["status"], code), ("FAIL", 1))
+        self.assertTrue(any("top_k_rank_agreement" in failure for failure in report["failures"]))
+
+        logprob_drift = left_row.copy()
+        logprob_drift[0] -= np.float32(1.0)
+        for pass_name in ("greedy", "teacher_forced"):
+            path = right / "logits" / f"case.{pass_name}.f32"
+            path.write_bytes(np.repeat(logprob_drift[None, :], 32, axis=0).astype("<f4").tobytes())
+            response["full_logits"][pass_name]["sha256"] = sha256_file(path)
+        write_json(response_path, response)
+        self.refresh_inventory(right)
+        report, code = self.compare_short_cross(left, right)
+        self.assertEqual((report["status"], code), ("FAIL", 1))
+        self.assertTrue(any("oracle_logprob_mae" in failure for failure in report["failures"]))
+
     def test_internal_identical_run_passes(self) -> None:
         values = np.array([[3.0, 2.0, 1.0], [1.0, 3.0, 2.0]], dtype=np.float32)
         left = load_run(self.make_run("left", values))
@@ -135,6 +315,21 @@ class Qwen36EquivalenceTests(unittest.TestCase):
         report, code = compare_runs(left, right, self.manifest, "ds4-vs-ds4", 2, False)
         self.assertEqual((report["status"], code), ("PASS", 0))
         self.assertEqual(report["aggregate"]["different_float_count"], 0)
+
+    def test_explicit_case_selection(self) -> None:
+        values = np.array([[3.0, 2.0, 1.0]], dtype=np.float32)
+        left = load_run(self.make_run("left", values))
+        right = load_run(self.make_run("right", values))
+        report, code = compare_runs(
+            left, right, self.manifest, "ds4-vs-ds4", 2, False,
+            selected_cases=["case"],
+        )
+        self.assertEqual((report["status"], code), ("PASS", 0))
+        with self.assertRaisesRegex(FixtureError, "selected case"):
+            compare_runs(
+                left, right, self.manifest, "ds4-vs-ds4", 2, False,
+                selected_cases=["missing"],
+            )
 
     def test_internal_difference_fails_and_records_first_position(self) -> None:
         left_values = np.array([[3.0, 2.0, 1.0], [1.0, 3.0, 2.0]], dtype=np.float32)
@@ -179,7 +374,9 @@ class Qwen36EquivalenceTests(unittest.TestCase):
         with self.assertRaisesRegex(FixtureError, "artifact provenance"):
             compare_runs(load_run(left_path), load_run(right_path), self.manifest, "ds4-vs-ds4", 2, False)
 
-        index["environment"]["artifacts"]["target"]["sha256"] = "a" * 64
+        index["environment"]["artifacts"]["target"]["sha256"] = next(
+            item["sha256"] for item in self.manifest["artifacts"] if item["role"] == "target"
+        )
         index["cases"] = []
         write_json(right_path / "index.json", index)
         with self.assertRaisesRegex(FixtureError, "no cases"):

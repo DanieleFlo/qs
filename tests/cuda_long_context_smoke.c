@@ -3,7 +3,91 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+
+typedef struct {
+    uint8_t ql[128];
+    uint8_t qh[64];
+    int8_t scales[16];
+    uint16_t d;
+} test_block_q6_k;
+
+static float test_f16_to_f32(uint16_t h) {
+    const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+    const uint32_t exp = (h >> 10) & 0x1fu;
+    const uint32_t frac = h & 0x3ffu;
+    uint32_t bits;
+    if (exp == 0) bits = sign;
+    else if (exp == 31) bits = sign | 0x7f800000u | (frac << 13);
+    else bits = sign | ((exp + 112u) << 23) | (frac << 13);
+    float out;
+    memcpy(&out, &bits, sizeof(out));
+    return out;
+}
+
+static float test_q6_value(const test_block_q6_k *b, uint32_t i) {
+    const uint32_t half = i >> 7;
+    const uint32_t within = i & 127u;
+    const uint32_t lane = within & 31u;
+    const uint8_t qh = b->qh[half * 32u + lane];
+    uint8_t q;
+    uint32_t scale;
+    if (within < 32u) {
+        q = (b->ql[half * 64u + lane] & 15u) | ((qh & 3u) << 4);
+        scale = half * 8u + (lane >> 4);
+    } else if (within < 64u) {
+        q = (b->ql[half * 64u + lane + 32u] & 15u) | (((qh >> 2) & 3u) << 4);
+        scale = half * 8u + 2u + (lane >> 4);
+    } else if (within < 96u) {
+        q = (b->ql[half * 64u + lane] >> 4) | (((qh >> 4) & 3u) << 4);
+        scale = half * 8u + 4u + (lane >> 4);
+    } else {
+        q = (b->ql[half * 64u + lane + 32u] >> 4) | (((qh >> 6) & 3u) << 4);
+        scale = half * 8u + 6u + (lane >> 4);
+    }
+    return test_f16_to_f32(b->d) * (float)b->scales[scale] * ((float)q - 32.0f);
+}
+
+static int check_q6k_matmul(void) {
+    test_block_q6_k weights[2];
+    float input[256];
+    float expected[2] = {0.0f, 0.0f};
+    float actual[2] = {0.0f, 0.0f};
+    memset(weights, 0, sizeof(weights));
+    for (uint32_t row = 0; row < 2; row++) {
+        weights[row].d = 0x3c00u;
+        for (uint32_t i = 0; i < 128; i++) weights[row].ql[i] = (uint8_t)(i * 13u + row * 17u);
+        for (uint32_t i = 0; i < 64; i++) weights[row].qh[i] = (uint8_t)(i * 29u + row * 7u);
+        for (uint32_t i = 0; i < 16; i++) weights[row].scales[i] = (int8_t)((int)i - 7 + (int)row);
+    }
+    for (uint32_t i = 0; i < 256; i++) input[i] = ((int)(i % 23u) - 11) * 0.03125f;
+    for (uint32_t row = 0; row < 2; row++) {
+        for (uint32_t i = 0; i < 256; i++) expected[row] += test_q6_value(&weights[row], i) * input[i];
+    }
+    ds4_gpu_tensor *x = ds4_gpu_tensor_alloc(sizeof(input));
+    ds4_gpu_tensor *out = ds4_gpu_tensor_alloc(sizeof(actual));
+    int rc = 1;
+    if (x && out && ds4_gpu_set_model_map(weights, sizeof(weights)) &&
+        ds4_gpu_tensor_write(x, 0, input, sizeof(input)) &&
+        ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0, 14u,
+                                    256u, 2u, x, 1u) &&
+        ds4_gpu_synchronize() &&
+        ds4_gpu_tensor_read(out, 0, actual, sizeof(actual))) {
+        rc = 0;
+        for (uint32_t row = 0; row < 2; row++) {
+            const float err = actual[row] - expected[row];
+            if (err < -1.0e-3f || err > 1.0e-3f) {
+                fprintf(stderr, "Q6_K matmul mismatch row=%u got=%f expected=%f\n",
+                        row, (double)actual[row], (double)expected[row]);
+                rc = 1;
+            }
+        }
+    }
+    ds4_gpu_tensor_free(out);
+    ds4_gpu_tensor_free(x);
+    return rc;
+}
 
 static double monotonic_seconds(void) {
     struct timespec ts;
@@ -160,6 +244,7 @@ int main(void) {
     if (!ds4_gpu_init()) return 1;
     int rc = check_large_topk();
     if (check_decode_attention_overflow_path() != 0) rc = 1;
+    if (check_q6k_matmul() != 0) rc = 1;
     ds4_gpu_cleanup();
     if (rc == 0) puts("cuda long-context regression: OK");
     return rc;

@@ -19,10 +19,13 @@ static void die(const char *msg) {
 static void usage(const char *prog) {
     fprintf(stderr,
             "usage: %s MODEL manifest.tsv OUT.tsv [ctx] "
+            "[--quality] "
             "[--ssd-streaming] [--ssd-streaming-cold] "
             "[--ssd-streaming-cache-experts N|NGB] "
             "[--ssd-streaming-preload-experts N]\n"
             "       %s --token-manifest MODEL cases.tsv [ctx] "
+            "[--prefill-chunk N] [--quality] "
+            "[--output-head-hidden FILE --output-head-logits FILE] "
             "[--ssd-streaming] [--ssd-streaming-cold] "
             "[--ssd-streaming-cache-experts N|NGB] "
             "[--ssd-streaming-preload-experts N]\n",
@@ -66,6 +69,37 @@ static char *read_file(const char *path) {
     return buf;
 }
 
+static void read_f32_file_exact(const char *path, float *values, uint64_t count) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        fprintf(stderr, "open %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    if (count > SIZE_MAX / sizeof(values[0])) die("float32 input is too large");
+    const size_t bytes = (size_t)count * sizeof(values[0]);
+    if (fseek(fp, 0, SEEK_END) != 0) die("fseek failed");
+    const long size = ftell(fp);
+    if (size < 0 || (uint64_t)size != bytes) {
+        fprintf(stderr, "%s must contain exactly %zu bytes\n", path, bytes);
+        exit(1);
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) die("fseek failed");
+    if (bytes && fread(values, 1, bytes, fp) != bytes) die("read failed");
+    fclose(fp);
+}
+
+static void write_f32_file_exact(const char *path, const float *values, uint64_t count) {
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        fprintf(stderr, "open %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    if (count > SIZE_MAX / sizeof(values[0])) die("float32 output is too large");
+    const size_t bytes = (size_t)count * sizeof(values[0]);
+    if (bytes && fwrite(values, 1, bytes, fp) != bytes) die("write failed");
+    if (fclose(fp) != 0) die("close failed");
+}
+
 static void strip_newline(char *s) {
     size_t n = strlen(s);
     while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = '\0';
@@ -84,8 +118,9 @@ static bool load_token_array(const char *path, ds4_tokens *out) {
         if (*p == ']') {
             p++;
             while (*p && isspace((unsigned char)*p)) p++;
+            const bool complete = *p == '\0';
             free(json);
-            return *p == '\0';
+            return complete;
         }
         char *end = NULL;
         errno = 0;
@@ -112,6 +147,35 @@ static void write_token_array(FILE *fp, const ds4_tokens *tokens) {
         fprintf(fp, "%d", tokens->v[i]);
     }
     fputc(']', fp);
+}
+
+static void write_hex_bytes(FILE *fp, const char *bytes, size_t len) {
+    static const char hex[] = "0123456789abcdef";
+    fputc('"', fp);
+    for (size_t i = 0; i < len; i++) {
+        unsigned char byte = (unsigned char)bytes[i];
+        fputc(hex[byte >> 4], fp);
+        fputc(hex[byte & 15], fp);
+    }
+    fputc('"', fp);
+}
+
+static void write_decoded_tokens_hex(
+        FILE *fp, ds4_engine *engine, const ds4_tokens *tokens) {
+    fputc('"', fp);
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < tokens->len; i++) {
+        size_t len = 0;
+        char *piece = ds4_token_text(engine, tokens->v[i], &len);
+        if (!piece) die("failed to decode token");
+        for (size_t j = 0; j < len; j++) {
+            unsigned char byte = (unsigned char)piece[j];
+            fputc(hex[byte >> 4], fp);
+            fputc(hex[byte & 15], fp);
+        }
+        free(piece);
+    }
+    fputc('"', fp);
 }
 
 typedef struct {
@@ -598,7 +662,6 @@ static int score_token_manifest(ds4_engine *engine, ds4_session *session,
         }
         char *rendered = read_file(rendered_path);
         ds4_tokenize_rendered_chat(engine, rendered, &native_prompt);
-        free(rendered);
         if (!prompt.len || !target.len || prompt.len + target.len + 1 >= ctx_size) {
             fprintf(stderr, "%s exceeds ctx=%d or has an empty token sequence\n", id, ctx_size);
             return 1;
@@ -662,10 +725,14 @@ static int score_token_manifest(ds4_engine *engine, ds4_session *session,
         write_token_array(response, &prompt);
         fputs(",\n  \"native_prompt_token_ids\": ", response);
         write_token_array(response, &native_prompt);
+        fputs(",\n  \"native_rendered_bytes_hex\": ", response);
+        write_hex_bytes(response, rendered, strlen(rendered));
         fputs(",\n  \"native_rendering_status\": \"tokenizer_only\",\n  \"prompt_token_ids\": ", response);
         write_token_array(response, &prompt);
         fputs(",\n  \"greedy_token_ids\": ", response);
         write_token_array(response, &greedy);
+        fputs(",\n  \"greedy_bytes_hex\": ", response);
+        write_decoded_tokens_hex(response, engine, &greedy);
         fputs(",\n  \"teacher_forced_source\": \"canonical token manifest\",\n  \"teacher_forced\": [", response);
         for (int i = 0; i < target.len; i++) {
             if (i) fputc(',', response);
@@ -680,6 +747,7 @@ static int score_token_manifest(ds4_engine *engine, ds4_session *session,
         ds4_tokens_free(&target);
         ds4_tokens_free(&native_prompt);
         ds4_tokens_free(&greedy);
+        free(rendered);
     }
     free(logits);
     fclose(mf);
@@ -704,11 +772,23 @@ int main(int argc, char **argv) {
     uint32_t ssd_streaming_cache_experts = 0;
     uint64_t ssd_streaming_cache_bytes = 0;
     uint32_t ssd_streaming_preload_experts = 0;
+    uint32_t prefill_chunk = 0;
+    bool quality = false;
+    const char *output_head_hidden_path = NULL;
+    const char *output_head_logits_path = NULL;
 
     for (int i = base + (token_manifest_mode ? 2 : 3); i < argc; i++) {
         const char *arg = argv[i];
         if (!strcmp(arg, "--ssd-streaming")) {
             ssd_streaming = true;
+        } else if (!strcmp(arg, "--quality")) {
+            quality = true;
+        } else if (!strcmp(arg, "--prefill-chunk")) {
+            prefill_chunk = (uint32_t)parse_positive_int(need_arg(&i, argc, argv, arg), arg);
+        } else if (!strcmp(arg, "--output-head-hidden")) {
+            output_head_hidden_path = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--output-head-logits")) {
+            output_head_logits_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--ssd-streaming-cold")) {
             ssd_streaming_cold = true;
         } else if (!strcmp(arg, "--ssd-streaming-cache-experts")) {
@@ -742,11 +822,12 @@ int main(int argc, char **argv) {
         .backend = DS4_BACKEND_CUDA,
 #endif
         .n_threads = 0,
+        .prefill_chunk = prefill_chunk,
         .ssd_streaming_cache_experts = ssd_streaming_cache_experts,
         .ssd_streaming_cache_bytes = ssd_streaming_cache_bytes,
         .ssd_streaming_preload_experts = ssd_streaming_preload_experts,
         .warm_weights = false,
-        .quality = false,
+        .quality = quality,
         .ssd_streaming = ssd_streaming,
         .ssd_streaming_cold = ssd_streaming_cold,
     };
@@ -758,6 +839,29 @@ int main(int argc, char **argv) {
     if (ds4_session_create(&session, engine, ctx_size) != 0) die("failed to create session");
 
     const int n_vocab = ds4_engine_vocab_size(engine);
+    if ((output_head_hidden_path != NULL) != (output_head_logits_path != NULL)) {
+        die("--output-head-hidden and --output-head-logits must be used together");
+    }
+    if (output_head_hidden_path) {
+        const uint64_t hidden_count = ds4_engine_hidden_f32_values(engine);
+        float *hidden = malloc((size_t)hidden_count * sizeof(hidden[0]));
+        float *head_logits = malloc((size_t)n_vocab * sizeof(head_logits[0]));
+        if (!hidden || !head_logits) die("out of memory");
+        read_f32_file_exact(output_head_hidden_path, hidden, hidden_count);
+        char error[256] = {0};
+        if (ds4_session_eval_output_head_from_hc(
+                session, hidden, 1, head_logits, error, sizeof(error)) != 0) {
+            fprintf(stderr, "score_official: %s\n",
+                    error[0] ? error : "output-head diagnostic failed");
+            return 1;
+        }
+        write_f32_file_exact(output_head_logits_path, head_logits, (uint64_t)n_vocab);
+        free(head_logits);
+        free(hidden);
+        ds4_session_free(session);
+        ds4_engine_close(engine);
+        return 0;
+    }
     if (token_manifest_mode) {
         const int rc = score_token_manifest(engine, session, manifest_path, ctx_size);
         ds4_session_free(session);

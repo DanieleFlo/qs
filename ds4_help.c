@@ -208,7 +208,7 @@ static void print_sampling(FILE *fp, const help_colors *c, bool full) {
     opt(fp, c, "--think-max", "Use Think Max when context is large enough.");
     opt(fp, c, "--nothink", "Disable thinking and ask for direct replies.");
     if (full) {
-        opt(fp, c, "-sys, --system TEXT", "System prompt. Empty string disables the default where supported.");
+        opt(fp, c, "-sys, --system TEXT", "System prompt. Default: 'You are a helpful assistant'; empty disables it.");
         opt(fp, c, "-p, --prompt TEXT", "One-shot prompt text.");
         opt(fp, c, "--prompt-file FILE", "Read one-shot prompt text from FILE.");
         opt(fp, c, "--raw-prompt", "Tokenize the one-shot prompt without chat markers.");

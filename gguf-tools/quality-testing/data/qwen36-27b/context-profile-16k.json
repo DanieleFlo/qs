@@ -1,0 +1,14 @@
+{
+  "schema_version": "ds4-qwen36-context-profile-v1",
+  "context_limit": 16384,
+  "frontiers": [4096, 16384],
+  "frontier_cases": {
+    "4096": "long_canary_ctx4096",
+    "16384": "long_canary_ctx16384"
+  },
+  "prefill_chunks": [128, 512, 2048, 4096],
+  "repetitions": 3,
+  "steps": 32,
+  "safety_margin_tokens": 16,
+  "minimum_free_vram_mib": 22528
+}

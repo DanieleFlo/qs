@@ -47,7 +47,7 @@ DS4_LINK_LIBS ?= $(CUDA_LDLIBS)
 METAL_LDLIBS := $(LDLIBS)
 endif
 
-.PHONY: all help clean test test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression strix-halo rocm
+.PHONY: all help clean test test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics strix-halo rocm
 
 ifeq ($(UNAME_S),Darwin)
 all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
@@ -76,8 +76,8 @@ ds4-eval: ds4_eval.o ds4_help.o $(CORE_OBJS)
 ds4-agent: ds4_agent.o ds4_help.o ds4_web.o ds4_kvstore.o linenoise.o ds4_gpu_args.o $(CORE_OBJS)
 	$(CC) $(CFLAGS) -o $@ ds4_agent.o ds4_help.o ds4_web.o ds4_kvstore.o linenoise.o ds4_gpu_args.o $(CORE_OBJS) $(METAL_LDLIBS)
 
-gguf-tools/quality-testing/score_official: gguf-tools/quality-testing/score_official.c ds4.h $(CORE_OBJS) rax.o
-	$(CC) $(QUALITY_CFLAGS) -I. -o $@ gguf-tools/quality-testing/score_official.c $(CORE_OBJS) rax.o $(METAL_LDLIBS)
+gguf-tools/quality-testing/score_official: gguf-tools/quality-testing/score_official.o $(CORE_OBJS) rax.o
+	$(CC) $(QUALITY_CFLAGS) -o $@ $^ $(METAL_LDLIBS)
 
 tests/test_metal_session_batch.o: tests/test_metal_session_batch.c ds4.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/test_metal_session_batch.c
@@ -151,8 +151,8 @@ ds4-eval: ds4_eval.o ds4_help.o $(CORE_OBJS)
 ds4-agent: ds4_agent.o ds4_help.o ds4_web.o ds4_kvstore.o linenoise.o ds4_gpu_args.o $(CORE_OBJS)
 	$(DS4_LINK) -o $@ $^ $(DS4_LINK_LIBS)
 
-gguf-tools/quality-testing/score_official: gguf-tools/quality-testing/score_official.c ds4.h $(CORE_OBJS) rax.o
-	$(DS4_LINK) $(filter-out -ffast-math,$(QUALITY_CFLAGS)) -I. -o $@ gguf-tools/quality-testing/score_official.c $(CORE_OBJS) rax.o $(DS4_LINK_LIBS)
+gguf-tools/quality-testing/score_official: gguf-tools/quality-testing/score_official.o $(CORE_OBJS) rax.o
+	$(DS4_LINK) -o $@ $^ $(DS4_LINK_LIBS)
 
 cpu: ds4_cli_cpu.o ds4_server_cpu.o ds4_bench_cpu.o ds4_eval_cpu.o ds4_agent_cpu.o ds4_help.o ds4_web.o ds4_kvstore.o linenoise.o rax.o ds4_gpu_args_cpu.o $(CPU_CORE_OBJS)
 	$(CC) $(CFLAGS) -o ds4 ds4_cli_cpu.o ds4_help.o linenoise.o ds4_gpu_args_cpu.o $(CPU_CORE_OBJS) $(LDLIBS)
@@ -163,6 +163,9 @@ cpu: ds4_cli_cpu.o ds4_server_cpu.o ds4_bench_cpu.o ds4_eval_cpu.o ds4_agent_cpu
 
 cuda-regression: tests/cuda_long_context_smoke
 	./tests/cuda_long_context_smoke
+
+qwen-numerics: tests/qwen_numerics_probe
+	./tests/qwen_numerics_probe
 endif
 
 ds4.o: ds4.c ds4.h ds4_ssd.h ds4_distributed.h ds4_gpu.h
@@ -205,13 +208,19 @@ ds4_kvstore.o: ds4_kvstore.c ds4_kvstore.h ds4.h ds4_ssd.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_kvstore.c
 
 ds4_test.o: tests/ds4_test.c ds4_server.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h rax.h
-	$(CC) $(CFLAGS) -Wno-unused-function -c -o $@ tests/ds4_test.c
+	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_TEST_HOOKS -c -o $@ tests/ds4_test.c
+
+gguf-tools/quality-testing/score_official.o: gguf-tools/quality-testing/score_official.c ds4.h
+	$(CC) $(filter-out -ffast-math,$(QUALITY_CFLAGS)) -I. -c -o $@ $<
 
 ds4_agent_test.o: tests/ds4_agent_test.c ds4_agent.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h ds4_web.h linenoise.h
 	$(CC) $(CFLAGS) -Wno-unused-function -c -o $@ tests/ds4_agent_test.c
 
 tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_long_context_smoke.c
+
+tests/qwen_numerics_probe.o: tests/qwen_numerics_probe.c ds4_gpu.h
+	$(CC) $(QUALITY_CFLAGS) -I. -c -o $@ tests/qwen_numerics_probe.c
 
 rax.o: rax.c rax.h rax_malloc.h
 	$(CC) $(CFLAGS) -c -o $@ rax.c
@@ -258,6 +267,9 @@ ds4_rocm_unavailable.o: ds4_rocm_unavailable.cu
 tests/cuda_long_context_smoke: tests/cuda_long_context_smoke.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
+tests/qwen_numerics_probe: tests/qwen_numerics_probe.o ds4_cuda.o
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+
 tests/test_layer_pack.o: tests/test_layer_pack.c ds4_layer_pack.h
 	$(CC) $(CFLAGS) -I. -c -o $@ $<
 
@@ -272,6 +284,9 @@ tests/test_gpu_args: tests/test_gpu_args.o ds4_gpu_args_cpu.o
 
 ds4_cpu_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_layer_pack.h
 	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_NO_GPU -DDS4_TEST_HOOKS -c -o $@ ds4.c
+
+ds4_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_layer_pack.h
+	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_TEST_HOOKS -c -o $@ ds4.c
 
 tests/test_engine_mgpu_placement.o: tests/test_engine_mgpu_placement.c ds4.h ds4_gpu_mgpu.h ds4_layer_pack.h
 	$(CC) $(CFLAGS) -I. -c -o $@ $<
@@ -344,11 +359,11 @@ test-cuda-mixed-batch: tests/test_cuda_mixed_batch
 	DS4_TEST_MODEL="$(DS4_TEST_MODEL)" ./tests/test_cuda_mixed_batch
 endif
 
-ds4_test: ds4_test.o ds4_help.o ds4_kvstore.o rax.o $(CORE_OBJS)
+ds4_test: ds4_test.o ds4_help.o ds4_kvstore.o rax.o ds4_test_hooks.o $(filter-out ds4.o,$(CORE_OBJS))
 ifeq ($(UNAME_S),Darwin)
-	$(CC) $(CFLAGS) -o $@ ds4_test.o ds4_help.o ds4_kvstore.o rax.o $(CORE_OBJS) $(METAL_LDLIBS)
+	$(CC) $(CFLAGS) -o $@ $^ $(METAL_LDLIBS)
 else
-	$(NVCC) $(NVCCFLAGS) -o $@ ds4_test.o ds4_help.o ds4_kvstore.o rax.o $(CORE_OBJS) $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 endif
 
 ds4_agent_test: ds4_agent_test.o ds4_help.o ds4_web.o ds4_kvstore.o linenoise.o $(CORE_OBJS)
@@ -402,4 +417,4 @@ q4k-dot-test: tests/test_q4k_dot.c
 	./tests/test_q4k_dot
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4-agent ds4_cpu ds4_native ds4_server_test ds4_test ds4_agent_test gguf-tools/quality-testing/score_official tests/test_q4k_dot tests/test_metal_session_batch tests/test_gpu_xdev tests/test_gpu_model_cache tests/test_gpu_lookup_cache_strict tests/test_engine_mgpu_refusal tests/test_engine_mgpu_runtime tests/test_engine_correctness tests/test_sampling tests/test_cuda_session_batch tests/test_cuda_mixed_batch tests/*.o *.o tests/cuda_long_context_smoke tests/cuda_long_context_smoke.o
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4-agent ds4_cpu ds4_native ds4_server_test ds4_test ds4_agent_test gguf-tools/quality-testing/score_official tests/test_q4k_dot tests/test_metal_session_batch tests/test_gpu_xdev tests/test_gpu_model_cache tests/test_gpu_lookup_cache_strict tests/test_engine_mgpu_refusal tests/test_engine_mgpu_runtime tests/test_engine_correctness tests/test_sampling tests/test_cuda_session_batch tests/test_cuda_mixed_batch tests/*.o *.o tests/cuda_long_context_smoke tests/cuda_long_context_smoke.o tests/qwen_numerics_probe

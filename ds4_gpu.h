@@ -577,6 +577,75 @@ int ds4_gpu_matmul_quant_rows_scalar_tensor(
         const ds4_gpu_tensor *x,
         uint64_t                n_tok);
 
+/* Qwen3.5/3.6 task-6 primitives. These keep model tensor details inside the
+ * graph implementation and deliberately expose only the two hybrid-layer
+ * operations that cannot be composed from the existing dense primitives. */
+int ds4_gpu_qwen35_full_attention_tensor(
+        ds4_gpu_tensor       *out_heads,
+        ds4_gpu_tensor       *q_gate,
+        ds4_gpu_tensor       *k,
+        ds4_gpu_tensor       *v,
+        ds4_gpu_tensor       *key_cache,
+        ds4_gpu_tensor       *value_cache,
+        const void           *model_map,
+        uint64_t              model_size,
+        uint64_t              q_norm_offset,
+        uint64_t              k_norm_offset,
+        uint32_t              position,
+        uint32_t              context_capacity);
+
+/* Layer-major Qwen prefill variants.  Rows are contiguous token-major and
+ * position_start is the absolute KV position of row zero. */
+int ds4_gpu_qwen35_full_attention_rows_tensor(
+        ds4_gpu_tensor       *out_heads,
+        ds4_gpu_tensor       *q_gate,
+        ds4_gpu_tensor       *k,
+        ds4_gpu_tensor       *v,
+        ds4_gpu_tensor       *key_cache,
+        ds4_gpu_tensor       *value_cache,
+        const void           *model_map,
+        uint64_t              model_size,
+        uint64_t              q_norm_offset,
+        uint64_t              k_norm_offset,
+        uint32_t              position_start,
+        uint32_t              n_tokens,
+        uint32_t              context_capacity);
+
+int ds4_gpu_qwen35_gated_delta_net_tensor(
+        ds4_gpu_tensor       *out_heads,
+        ds4_gpu_tensor       *qkv,
+        const ds4_gpu_tensor *z,
+        const ds4_gpu_tensor *alpha,
+        const ds4_gpu_tensor *beta,
+        ds4_gpu_tensor       *conv_state,
+        ds4_gpu_tensor       *recurrent_state,
+        const void           *model_map,
+        uint64_t              model_size,
+        uint64_t              a_offset,
+        uint64_t              conv_offset,
+        uint64_t              dt_bias_offset,
+        uint64_t              norm_offset);
+
+int ds4_gpu_qwen35_gated_delta_net_rows_tensor(
+        ds4_gpu_tensor       *out_heads,
+        ds4_gpu_tensor       *qkv,
+        const ds4_gpu_tensor *z,
+        const ds4_gpu_tensor *alpha,
+        const ds4_gpu_tensor *beta,
+        ds4_gpu_tensor       *conv_state,
+        ds4_gpu_tensor       *recurrent_state,
+        const void           *model_map,
+        uint64_t              model_size,
+        uint64_t              a_offset,
+        uint64_t              conv_offset,
+        uint64_t              dt_bias_offset,
+        uint64_t              norm_offset,
+        uint32_t              n_tokens);
+
+/* Selects the current Qwen layer for decode policies that keep the final
+ * transformer layers on the high-precision matvec. */
+void ds4_gpu_qwen35_set_decode_layer(uint32_t layer);
+
 /* Optional fused GPU operations.
  *
  * These are acceleration hooks, not required backend primitives.  A backend

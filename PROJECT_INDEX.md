@@ -150,6 +150,16 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `CONTRIBUTING.md` — regole di sviluppo, build, test e contributi.
 - `STRIXHALO.md` — note operative per build ed esecuzione ROCm su Strix Halo.
 - `PROJECT_INDEX.md` — questo indice e ordine della spiegazione tecnica.
+- `docs/qwen36-drift-hypotheses.md` — registro vivo delle ipotesi sul drift
+  Qwen3.6, con evidenze, esperimenti ordinati e gate dei 32 token.
+- `docs/qwen36-numerics-lab.md` — banco differenziale per distinguere errori
+  semantici, roundoff CPU/CUDA e policy aritmetiche Q4_K/Q8_K; include l'audit
+  del percorso Ollama/llama.cpp senza eseguire Ollama.
+- `docs/qwen36-performance-experiments-2026-08-05.md` — registro riproducibile
+  dei test prestazionali Qwen CUDA, inclusi candidati scartati, confronto locale
+  con LM Studio, gate 500/15 e verifiche numeriche associate.
+- `docs/hardware/` — inventario della macchina RTX 3090 e note di riferimento
+  su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
 ### Build ed eseguibili
 
@@ -177,9 +187,14 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `ds4.c` — nucleo verticale del motore: parser GGUF mmap-backed, metadata,
   shape dei modelli, tensor binding, tokenizer, CPU reference, costruzione e
   scheduling del grafo, sessioni, prefill/decode, KV, logits, MTP e payload
-  degli snapshot.
+  degli snapshot. Include il percorso specializzato Qwen `qwen35` text-only:
+  validazione stretta del 27B Q4_K_M, tokenizer/template Qwen e sessione ibrida
+  full-attention/Gated DeltaNet CUDA e prefill layer-major a chunk; checkpoint
+  e fork Qwen restano esclusi.
 - `ds4_gpu.h` — interfaccia tensoriale condivisa fra il grafo C e i backend
-  accelerati; descrive tensori opachi, operazioni, attention e batching.
+  accelerati; descrive tensori opachi, operazioni, attention e batching,
+  incluse le due primitive interne Qwen per full-attention gated e Gated
+  DeltaNet.
 - `ds4_gpu_args.c`, `ds4_gpu_args.h` — parsing condiviso di dispositivi, budget
   VRAM e configurazione multi-GPU.
 - `ds4_layer_pack.c`, `ds4_layer_pack.h` — algoritmo puro C per assegnare
@@ -208,7 +223,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 ### Backend CUDA
 
 - `ds4_cuda.cu` — runtime CUDA principale: allocazione/copie, cuBLAS, kernel
-  custom, quantizzazione, attention, MoE, KV, batching e supporto multi-GPU.
+  custom, quantizzazione, attention, MoE, KV, batching e supporto multi-GPU;
+  contiene inoltre embedding/matvec Q4_K/Q6_K, RoPE parziale, attention gated
+  e aggiornamento ricorrente Qwen task 6, più i kernel multi-riga causali e i
+  GEMM di prefill Qwen.
 - `ds4_iq2_tables_cuda.inc` — tabelle costanti per dequantizzazione/calcolo IQ2
   nel backend CUDA.
 
@@ -285,7 +303,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `gguf-tools/imatrix/` — costruzione dataset e strumenti per importance
   matrix.
 - `gguf-tools/quality-testing/score_official.c` — scorer DS4 teacher-forced:
-  logits locali, NLL e confronto con logprob/top-k ufficiali.
+  logits locali, NLL, token e bytes decodificati e confronto con
+  logprob/top-k ufficiali.
 - `gguf-tools/quality-testing/score_llama.cpp` — scorer oracle equivalente
   basato su llama.cpp.
 - `gguf-tools/quality-testing/compare_scores.py` — confronto e aggregazione dei
@@ -305,10 +324,23 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   llama.cpp sulla sequenza canonica di token di un oracle, lasciando agli
   scorer nativi inferenza e dump float32 e registrando checksum e provenienza
   nello stesso layout del task 2.
+- `gguf-tools/quality-testing/run_qwen36_context_matrix.py` — espande il profilo
+  16K in run sequenziali per frontiera, chunk e ripetizione, controllando la
+  VRAM libera e il gate prestazionale prima di avviare ogni processo modello.
+- `gguf-tools/quality-testing/qwen36_speed_gate.py` — valida il report breve di
+  prefill/decode e blocca i run long-context sotto 500/15 token/s o con
+  provenienza non confrontabile.
+- `gguf-tools/quality-testing/compare_qwen36_trace.py` — confronta i dump
+  float32 per layer/stadio prodotti da DS4 e llama.cpp sullo stesso prefisso e
+  localizza la prima divergenza senza definire nuove soglie semantiche.
+- `gguf-tools/quality-testing/diagnose_qwen36_numerics.py` — triangola le trace
+  DS4, llama.cpp CPU e CUDA, canonicalizza lo stato GDN e classifica le
+  deviazioni rispetto all'inviluppo numerico dei backend.
 - `gguf-tools/quality-testing/compare_qwen36_equivalence.py` — harness unico
   DS4-vs-llama.cpp e DS4-vs-DS4: valida inventari, calcola metriche
-  full-vocabulary per posizione, applica gate versionati e produce report
-  auditabili `PASS`, `FAIL`, `NOT_VERIFIED` o `ERROR`.
+  full-vocabulary per posizione, applica gate versionati inclusa la suite
+  corta del task 4 e produce report auditabili `PASS`, `FAIL`, `NOT_VERIFIED`
+  o `ERROR`.
 
 ### Test rilevanti per comprendere la correttezza
 
@@ -323,12 +355,16 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/test_cuda_mixed_batch.c` — oracle bit-exact per batch misti
   prefill/decode CUDA.
 - `tests/cuda_long_context_smoke.c` — controlli CUDA mirati alle strutture
-  long-context.
+  long-context e regressione sintetica del matmul Q6_K contro la
+  dequantizzazione CPU.
 - `tests/glm_long_context_smoke.sh` — integrazione GLM su prompt lunghi.
 - `tests/test_server_batching.py` — concorrenza e batching osservati tramite
   API server.
-- `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py` — schema,
-  staging, checksum e metriche/gate sintetici dell'harness Qwen3.6.
+- `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py`,
+  `tests/test_qwen36_numerics.py` — schema, staging, checksum, metriche/gate e
+  classificazione sintetica dell'inviluppo numerico Qwen3.6.
+- `tests/qwen_numerics_probe.c` — oracle CPU indipendente per GDN e Q4_K contro
+  i kernel CUDA DS4, eseguibile con `make qwen-numerics CUDA_ARCH=sm_86`.
 - `tests/test_sampling.c` — comportamento deterministico e filtri del sampling.
 - `tests/test_gpu_args.c`, `tests/test_gpu_args_cli.sh` — parsing e propagazione
   della configurazione GPU.
@@ -342,6 +378,19 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/ds4_agent_test.c` — parser, stato e operazioni isolate di Agent Q.
 - `tests/dspark_acceptance_fixture.sh` — correttezza e acceptance del percorso
   speculativo DSpark.
+
+### Verifica del percorso Qwen task 6
+
+I gate locali minimi sono `make cpu`, `make cuda CUDA_ARCH=sm_86`,
+`make ds4_test` e `./ds4_test --qwen35-layer-pattern`. Il confronto numerico
+sul GGUF reale parte da `generate_qwen36_score.py` con lo scorer
+`gguf-tools/quality-testing/score_official`, quindi usa
+`compare_qwen36_equivalence.py` prima con `--suite short` e poi senza filtro.
+`verify_qwen36_run.py` controlla separatamente inventario, 32 passi greedy,
+32 posizioni teacher-forced e determinismo dei nove oracle llama.cpp. Un
+comando non eseguibile per toolchain, backend, memoria o modello mancante va
+registrato `NOT VERIFIED`; i test distribuiti richiedono autorizzazione
+separata.
 
 ## File intenzionalmente non elencati uno per uno
 

@@ -56,6 +56,17 @@
     "internal": {"status": "verified", "metrics": {"different_float_count": 0}, "calibration": null, "reason": null},
     "cross_engine": {"status": "not_verified", "metrics": null, "calibration": null, "reason": "Calibration requires the first correct Qwen3.6 CUDA path from task 6"}
   },
+  "short_message_gates": {
+    "version": "ds4-qwen36-short-gates-v1",
+    "excluded_categories": ["long-canary"],
+    "minimum_greedy_tokens": 32,
+    "minimum_teacher_forced_tokens": 32,
+    "top_k": 20,
+    "top_k_overlap_min": 0.95,
+    "top_k_rank_agreement_min": 0.98,
+    "oracle_logprob_mae_max": 0.05,
+    "low_margin_max": 0.1
+  },
   "corpus": "../qwen36-27b/prompts/cases.json",
   "output_format": {"version": "ds4-qwen36-oracle-v1", "index": "JSON", "large_logits": "float32-le", "checksums": "SHA-256"},
   "verification": {"status": "not_verified", "reasons": ["MTP inference equivalence is deferred to task 8", "No reviewed numeric oracle has been promoted", "Transformers and vLLM semantic upstream oracles have not been executed on this host"]}

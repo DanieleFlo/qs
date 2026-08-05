@@ -57,42 +57,14 @@
     "verification": "source_and_gguf_verified"
   },
   "oracle_environments": {
-    "llama.cpp": {"kind": "numeric_same_gguf", "status": "verified", "version": "llama-cpp-python 0.3.23 (v0.3.23-cu124)", "commit": "llama.cpp 7d442abf5c6244117fd5a1dc51a5d19f00792491; binding 4a1a8ecd8047149b24a6d997f6f8c992d49aa99a", "build_flags": "prebuilt CUDA 12.4 wheel; special-token detokenization enabled; FORCE_MMQ=1; USE_GRAPHS=1", "backend": "CUDA", "hardware": "NVIDIA GeForce RTX 3090 24GB; driver 610.62", "dtype": "GGUF Q4_K_M", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20, "context": 2048, "n_gpu_layers": -1, "verified_runs": ["llama-q4-cuda-special-001"]}, "reason": null},
+    "llama.cpp": {"kind": "numeric_same_gguf", "status": "not_verified", "version": "llama-cpp-python 0.3.23 (v0.3.23-cu124)", "commit": "llama.cpp 7d442abf5c6244117fd5a1dc51a5d19f00792491; binding 4a1a8ecd8047149b24a6d997f6f8c992d49aa99a", "build_flags": "prebuilt CUDA 12.4 wheel; CUDA ARCHS=700,750,800,860,890,900; FORCE_MMQ=1; USE_GRAPHS=1", "backend": "CUDA", "hardware": "NVIDIA GeForce RTX 3090 24GB; driver 610.62", "dtype": "GGUF Q4_K_M", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20, "context": 16384, "n_gpu_layers": -1, "verified_runs": []}, "reason": "The tokenizer-aware 4K/16K oracle runs have not been reviewed yet"},
     "transformers": {"kind": "semantic_upstream", "status": "not_verified", "version": null, "commit": null, "build_flags": null, "backend": null, "hardware": null, "dtype": "bfloat16", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20}, "reason": "Transformers, PyTorch and upstream weights are not installed on this host"},
     "vllm": {"kind": "semantic_upstream", "status": "not_verified", "version": null, "commit": null, "build_flags": null, "backend": null, "hardware": null, "dtype": "bfloat16", "parameters": {"temperature": 0, "greedy_tokens": 32, "teacher_forced_tokens": 32, "top_k": 20}, "reason": "vLLM and a supported CUDA host are not available"}
   },
   "equivalence_thresholds": {
     "version": "ds4-qwen36-equivalence-thresholds-v1",
     "internal": {"status": "verified", "metrics": {"different_float_count": 0}, "calibration": null, "reason": null},
-    "cross_engine": {
-      "status": "verified",
-      "metrics": {
-        "mae": 1.25,
-        "rmse": 1.55,
-        "max_error": 12.0,
-        "cosine_similarity": 0.999,
-        "kl_left_right": 0.035,
-        "js_divergence": 0.009,
-        "top_k_overlap": 0.60,
-        "top_k_spearman": 0.88,
-        "top_k_rank_agreement": 0.80,
-        "oracle_logprob_abs_error": 0.18
-      },
-      "calibration": {
-        "model_sha256": "65b753ea835627f7b511143c6ceb976525c7f21f5df8c664bc0a9c23d1c49921",
-        "ds4_commit": "qq working tree; GGUF tiled head mapping fix 2026-08-05",
-        "oracle": "llama.cpp",
-        "oracle_version": "0.3.23",
-        "hardware": "NVIDIA GeForce RTX 3090 24GB; driver 610.62",
-        "backend": "CUDA",
-        "dtype": "GGUF Q4_K_M",
-        "context": 2048,
-        "prefill_chunk": 2048,
-        "date": "2026-08-05",
-        "command": "compare_qwen36_equivalence.py --mode ds4-vs-llama --suite short --top-k 20 --left-run llama-q4-cuda-special-001 --right-run ds4-q4-cuda-tiled-special-short-001"
-      },
-      "reason": null
-    }
+    "cross_engine": {"status": "not_verified", "metrics": null, "calibration": null, "reason": "Calibration requires the first correct Qwen3.6 CUDA path from task 6"}
   },
   "short_message_gates": {
     "version": "ds4-qwen36-short-gates-v2",
@@ -105,7 +77,7 @@
     "oracle_logprob_mae_max": 0.05,
     "low_margin_max": 0.1
   },
-  "corpus": "prompts/cases.json",
+  "corpus": "prompts/cases-16k.json",
   "output_format": {"version": "ds4-qwen36-oracle-v1", "index": "JSON", "large_logits": "float32-le", "checksums": "SHA-256"},
   "verification": {"status": "not_verified", "reasons": ["No reviewed numeric oracle has been promoted", "Transformers and vLLM semantic upstream oracles have not been executed on this host"]}
 }

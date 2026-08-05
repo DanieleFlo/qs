@@ -280,11 +280,28 @@ python3 gguf-tools/quality-testing/generate_qwen36_score.py \
   --prefill-chunk 2048
 ```
 
+For the temporary 24 GiB GPU cap, use the versioned
+`data/qwen36-27b/context-profile-16k.json` together with
+`manifest-16k.json`, pass `--context 16384 --context-profile ...` explicitly,
+and use `run_qwen36_context_matrix.py` to expand the 4096/16384 frontiers.
+The context limit is configuration data, not a compiled engine constant.
+On CUDA, weight arenas default to a 256 MiB reserve granularity so a Q4_K_M
+model does not strand multiple GiB of VRAM in partially used arenas; the
+`DS4_CUDA_WEIGHT_ARENA_CHUNK_MB` override remains available for diagnostics.
+
 Use `score_llama` and `--engine llama.cpp` to collect the same token-driven
 layout from the C++ scorer. Existing positional TSV invocations of both
 scorers remain unchanged. Until native Qwen chat rendering exists, a DS4 run
 records `native_rendering_status=tokenizer_only`; this prevents a report from
 passing while still allowing numeric diagnostics.
+
+`score_official --quality` enables the runtime quality mode. For an output-head
+localization test, `--output-head-hidden FILE --output-head-logits FILE` reads
+one exact 5120-element F32 hidden state and writes the corresponding
+248320-element DS4 output-head logits without running the transformer body.
+For the patched local llama scorer, `LLAMA_QWEN_CPU=1` forces zero GPU layers
+and disables KQV/operation offload; verify the startup buffers before labeling
+the result a CPU oracle.
 
 Compare two complete runs with one command:
 
@@ -297,9 +314,62 @@ python3 gguf-tools/quality-testing/compare_qwen36_equivalence.py \
   --report gguf-tools/quality-testing/staging/oracles/ds4-vs-llama.json
 ```
 
+Task 4 uses the same comparator and run layout with the fixed short-message
+profile declared in the manifest:
+
+```sh
+python3 gguf-tools/quality-testing/compare_qwen36_equivalence.py \
+  --manifest gguf-tools/quality-testing/data/qwen36-27b/manifest.json \
+  --mode ds4-vs-llama --suite short --top-k 20 \
+  --left-run gguf-tools/quality-testing/staging/oracles/llama-q4-cuda-001 \
+  --right-run gguf-tools/quality-testing/staging/oracles/ds4-q4-cuda-001 \
+  --report gguf-tools/quality-testing/staging/oracles/ds4-vs-llama-short.json
+```
+
+The short suite selects every corpus category except `long-canary`, requires
+32 greedy and teacher-forced positions, and blocks prompt/token/decoded-byte
+differences and non-finite logits per position.  The calibrated v2 profile
+also requires aggregate top-20 overlap and rank agreement of at least 0.95,
+and aggregate teacher-forced oracle-logprob MAE no greater than 0.05.
+Per-position cross-engine metric envelopes remain versioned separately in
+`equivalence_thresholds.cross_engine`. Top-1/top-2 margins at or below 0.10
+are reported but do not fail the run. Native rendered bytes and greedy decoded
+bytes are stored as compact hex in the response JSON; full logits remain
+checksummed `float32-le` files.
+
 `ds4-vs-ds4` additionally requires every float32 bit pattern to be identical.
+For a long run whose reference contains more cases than the candidate,
+`--case CASE_ID` selects an explicit common case and may be repeated; it cannot
+be combined with `--suite short` and never relaxes provenance or metric gates.
 Exit statuses are `0` for `PASS`, `1` for a failed gate, `2` for invalid input,
 and `3` for `NOT_VERIFIED`. `--diagnostic` permits nonstandard engine roles
 for tooling checks but can never produce `PASS`. Unreviewed runs or missing
 cross-engine calibration likewise remain `NOT_VERIFIED`; neither collection
 nor comparison can promote golden files or update thresholds automatically.
+
+### Qwen layer trace and long-run speed gate
+
+The short-prefix diagnostic can capture the final token at every layer without
+changing model semantics. First dump only `layer_out` (DS4) and `l_out`
+(llama.cpp) with `DS4_QWEN_TRACE_*` and `LLAMA_QWEN_TRACE_*`; use layer `all`
+for the boundary bisection, then repeat without a stage filter on the first bad
+layer. `compare_qwen36_trace.py` associates embedding, attention/GDN,
+recurrent state, FFN and residual stages and writes the first float32
+divergence. Trace directories must already exist. These reports are diagnostic
+and do not calibrate or update cross-engine thresholds.
+
+`DS4_CUDA_QWEN_Q8_ACT_DIAG=1` is an intentionally slow diagnostic path. It
+tests CPU-like Q8_K activation quantization and Q4_K integer grouping.
+`DS4_CUDA_QWEN_Q8_0_CPU_SCALE_DIAG=1` separately rounds Q8_0 activation scales
+to FP16. Neither changes the default path; do not combine them unless the
+experiment explicitly calls for two variables, and do not promote either on
+the basis of lower MAE alone. The 2026-08-05 experiments did not fix the greedy
+top-1. The decision log is `docs/qwen36-drift-hypotheses.md`.
+
+`run_qwen36_context_matrix.py --execute` is blocked unless
+`--performance-report` names a `ds4-qwen36-speed-v1` JSON report for the same
+model SHA-256, backend and hardware. The report records `engine_commit`,
+`build_flags`, exact `command` argv, `context`, `prefill_tokens`,
+`decode_tokens`, both measured token/s values and `peak_memory_mib`. The runner
+refuses missing/non-comparable measurements, prefill below 500 token/s, or
+decode below 20 token/s before starting a long-context model process.

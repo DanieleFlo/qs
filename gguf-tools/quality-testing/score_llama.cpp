@@ -1,9 +1,11 @@
 #include "ggml-backend.h"
+#include "ggml.h"
 #include "llama.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +15,95 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+struct qwen_trace_config {
+    std::string directory;
+    int position = -1;
+    int layer = -1;
+    std::string stage;
+    bool active = false;
+    bool selected_is_last = false;
+};
+
+static bool qwen_trace_stage(const std::string &name, std::string *stage, int *layer) {
+    static const char *const names[] = {
+        "model.input_embed", "attn_norm", "linear_attn_qkv_mixed", "z",
+        "alpha", "beta", "conv_output_silu", "final_output", "new_state",
+        "linear_attn_out", "attn_output", "attn_residual", "attn_post_norm",
+        "ffn_out", "post_ffn", "l_out", "result_norm", "result_output",
+    };
+    for (const char *candidate : names) {
+        const std::string prefix = std::string(candidate) + "-";
+        if (name == candidate) {
+            *stage = candidate;
+            *layer = name.rfind("result_", 0) == 0 ? 63 : 0;
+            return true;
+        }
+        if (name.rfind(prefix, 0) == 0) {
+            char *end = nullptr;
+            long value = std::strtol(name.c_str() + prefix.size(), &end, 10);
+            if (end && *end == '\0' && value >= 0 && value <= INT_MAX) {
+                *stage = candidate;
+                *layer = (int)value;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static int64_t qwen_trace_width(const std::string &stage) {
+    if (stage == "linear_attn_qkv_mixed" || stage == "conv_output_silu") return 10240;
+    if (stage == "z" || stage == "final_output") return 6144;
+    if (stage == "alpha" || stage == "beta") return 48;
+    if (stage == "new_state") return 48ll * 128ll * 128ll;
+    if (stage == "result_output") return 248320;
+    return 5120;
+}
+
+static bool qwen_trace_callback(struct ggml_tensor *tensor, bool ask, void *user_data) {
+    auto *config = static_cast<qwen_trace_config *>(user_data);
+    std::string stage;
+    int layer = -1;
+    if (!config || !config->active || config->directory.empty() || config->position < 0 ||
+        !qwen_trace_stage(tensor->name, &stage, &layer) ||
+        (config->layer >= 0 && layer != config->layer) ||
+        (!config->stage.empty() && stage != config->stage)) {
+        return false;
+    }
+    if (ask) return true;
+    if (tensor->type != GGML_TYPE_F32) {
+        std::fprintf(stderr, "score_llama: trace tensor %s is not float32\n", tensor->name);
+        return true;
+    }
+
+    const int64_t width = qwen_trace_width(stage);
+    size_t offset = 0;
+    size_t bytes = (size_t)width * sizeof(float);
+    if (stage == "new_state") {
+        if (ggml_nelements(tensor) < width) return true;
+    } else {
+        const int token_axis = stage == "beta" ? 2 : 1;
+        int row = config->position;
+        if (tensor->ne[token_axis] == 1 && config->selected_is_last) row = 0;
+        if (tensor->ne[token_axis] <= row) return true;
+        offset = (size_t)row * tensor->nb[token_axis];
+        if (offset > ggml_nbytes(tensor) || bytes > ggml_nbytes(tensor) - offset) return true;
+    }
+
+    std::vector<float> values((size_t)width);
+    ggml_backend_tensor_get(tensor, values.data(), offset, bytes);
+    std::string path = config->directory + "/llama-pos" +
+        std::to_string(config->position) + "-layer" + std::to_string(layer) +
+        "-" + stage + ".f32";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        std::fprintf(stderr, "score_llama: cannot write trace %s\n", path.c_str());
+        return true;
+    }
+    out.write(reinterpret_cast<const char *>(values.data()), (std::streamsize)bytes);
+    return true;
+}
 
 static void die(const char *msg) {
     std::fprintf(stderr, "%s\n", msg);
@@ -80,6 +171,32 @@ static void write_token_array(std::ostream &out, const std::vector<llama_token> 
         out << tokens[i];
     }
     out << ']';
+}
+
+static std::string hex_bytes(const std::string &bytes) {
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (unsigned char byte : bytes) {
+        out.push_back(hex[byte >> 4]);
+        out.push_back(hex[byte & 15]);
+    }
+    return out;
+}
+
+static std::string detokenize(
+        const llama_vocab *vocab,
+        const std::vector<llama_token> &tokens) {
+    std::vector<char> bytes(tokens.size() * 16 + 16);
+    int n = llama_detokenize(vocab, tokens.data(), (int32_t)tokens.size(),
+                             bytes.data(), (int32_t)bytes.size(), false, true);
+    if (n < 0) {
+        bytes.resize((size_t)-n);
+        n = llama_detokenize(vocab, tokens.data(), (int32_t)tokens.size(),
+                             bytes.data(), (int32_t)bytes.size(), false, true);
+    }
+    if (n < 0) die("llama_detokenize failed");
+    return std::string(bytes.data(), (size_t)n);
 }
 
 static std::vector<llama_token> tokenize(
@@ -192,7 +309,8 @@ static int score_token_manifest(
         int n_vocab,
         int n_batch,
         const char *manifest_path,
-        int ctx_size) {
+        int ctx_size,
+        qwen_trace_config *trace) {
     std::ifstream manifest(manifest_path, std::ios::binary);
     if (!manifest) die("failed to open token manifest");
     llama_batch batch = llama_batch_init(n_batch, 0, 1);
@@ -216,7 +334,12 @@ static int score_token_manifest(
         if (!greedy_out || !teacher_out) die("failed to open logits output");
 
         llama_memory_clear(llama_get_memory(ctx), true);
+        if (trace) {
+            trace->selected_is_last = trace->position == (int)prompt.size() - 1;
+            trace->active = trace->position < (int)prompt.size();
+        }
         if (!decode_tokens(ctx, batch, prompt, 0, n_batch, true)) die("prompt decode failed");
+        if (trace) trace->active = false;
         std::vector<llama_token> greedy;
         for (size_t i = 0; i < target.size(); i++) {
             const float *logits = llama_get_logits_ith(ctx, -1);
@@ -252,10 +375,12 @@ static int score_token_manifest(
         write_token_array(response, prompt);
         response << ",\n  \"native_prompt_token_ids\": ";
         write_token_array(response, native_prompt);
+        response << ",\n  \"native_rendered_bytes_hex\": \"" << hex_bytes(rendered) << '"';
         response << ",\n  \"native_rendering_status\": \"tokenizer_only\",\n  \"prompt_token_ids\": ";
         write_token_array(response, prompt);
         response << ",\n  \"greedy_token_ids\": ";
         write_token_array(response, greedy);
+        response << ",\n  \"greedy_bytes_hex\": \"" << hex_bytes(detokenize(vocab, greedy)) << '"';
         response << ",\n  \"teacher_forced_source\": \"canonical token manifest\",\n  \"teacher_forced\": [";
         for (size_t i = 0; i < target.size(); i++) {
             if (i) response << ',';
@@ -296,7 +421,7 @@ int main(int argc, char **argv) {
     llama_backend_init();
 
     llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = -1;
+    model_params.n_gpu_layers = std::getenv("LLAMA_QWEN_CPU") ? 0 : -1;
     model_params.use_mmap = true;
 
     llama_model *model = llama_model_load_from_file(model_path, model_params);
@@ -311,12 +436,35 @@ int main(int argc, char **argv) {
     ctx_params.n_ubatch = 512;
     ctx_params.n_seq_max = 1;
     ctx_params.no_perf = true;
+    if (std::getenv("LLAMA_QWEN_CPU")) {
+        ctx_params.offload_kqv = false;
+        ctx_params.op_offload = false;
+    }
+
+    qwen_trace_config trace;
+    const char *trace_dir = std::getenv("LLAMA_QWEN_TRACE_DIR");
+    const char *trace_position = std::getenv("LLAMA_QWEN_TRACE_POSITION");
+    const char *trace_layer = std::getenv("LLAMA_QWEN_TRACE_LAYER");
+    const char *trace_stage = std::getenv("LLAMA_QWEN_TRACE_STAGE");
+    if (trace_dir && trace_dir[0]) {
+        if (!trace_position || !trace_layer) {
+            die("LLAMA_QWEN_TRACE_DIR requires LLAMA_QWEN_TRACE_POSITION and LLAMA_QWEN_TRACE_LAYER");
+        }
+        trace.directory = trace_dir;
+        trace.position = std::atoi(trace_position);
+        trace.layer = std::strcmp(trace_layer, "all") == 0 ? -1 : std::atoi(trace_layer);
+        trace.stage = trace_stage ? trace_stage : "";
+        if (trace.position < 0 || trace.layer < -1) die("Qwen trace position/layer is invalid");
+        ctx_params.cb_eval = qwen_trace_callback;
+        ctx_params.cb_eval_user_data = &trace;
+    }
 
     llama_context *ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) die("failed to create context");
     const int n_batch = std::min<int>((int)llama_n_batch(ctx), 2048);
     if (token_manifest_mode) {
-        const int rc = score_token_manifest(ctx, vocab, n_vocab, n_batch, manifest_path, ctx_size);
+        const int rc = score_token_manifest(ctx, vocab, n_vocab, n_batch, manifest_path,
+                                            ctx_size, trace_dir && trace_dir[0] ? &trace : nullptr);
         llama_free(ctx);
         llama_model_free(model);
         llama_backend_free();
