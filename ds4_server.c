@@ -639,6 +639,12 @@ typedef struct {
      * client opted in via reasoning.summary. Other APIs leave this false; the
      * field is ignored on those code paths. */
     bool reasoning_summary_emit;
+    bool agentic_present;
+    bool agentic_return;
+    stop_list allowed_tools;
+    stop_list allowed_skills;
+    char *agentic_skill_call_id;
+    char agentic_registry_sha[41];
     /* Responses continuation contract:
      *
      * A live Responses tool loop is not a normal "new prompt with a long
@@ -775,6 +781,35 @@ static const tool_schema_order *tool_schema_orders_find(const tool_schema_orders
     return idx >= 0 ? &orders->v[idx] : NULL;
 }
 
+static bool agentic_validate_registry(const request *r,
+                                      char *err, size_t errlen) {
+    if (!r || !r->agentic_present) return true;
+    if (!r->has_tools &&
+        (r->allowed_tools.len != 0 || r->allowed_skills.len != 0)) {
+        snprintf(err, errlen,
+                 "agentic capabilities cannot be used with tool_choice=none");
+        return false;
+    }
+    for (int group = 0; group < 2; group++) {
+        const stop_list *names = group == 0 ? &r->allowed_tools : &r->allowed_skills;
+        for (int i = 0; i < names->len; i++) {
+            const char *name = names->v[i];
+            if (!tool_schema_orders_find(&r->tool_orders, name)) {
+                snprintf(err, errlen,
+                         "agentic capability is not registered: %s", name);
+                return false;
+            }
+            if (group == 0 && id_list_contains(&r->allowed_skills, name)) {
+                snprintf(err, errlen,
+                         "agentic capability cannot be both tool and skill: %s",
+                         name);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static void request_init(request *r, req_kind kind, int max_tokens) {
     memset(r, 0, sizeof(*r));
     r->kind = kind;
@@ -802,6 +837,9 @@ static void request_free(request *r) {
     stop_list_clear(&r->anthropic_live_call_ids);
     free(r->anthropic_live_call_ids.v);
     free(r->anthropic_live_suffix_text);
+    id_list_free(&r->allowed_tools);
+    id_list_free(&r->allowed_skills);
+    free(r->agentic_skill_call_id);
     tool_schema_orders_free(&r->tool_orders);
     memset(r, 0, sizeof(*r));
 }
@@ -1004,6 +1042,133 @@ static bool parse_stop(const char **p, stop_list *out) {
     }
     if (**p != ']') return false;
     (*p)++;
+    return true;
+}
+
+static bool parse_agentic_name_array(const char **p, stop_list *out,
+                                     char *err, size_t errlen) {
+    json_ws(p);
+    stop_list_clear(out);
+    if (**p != '[') {
+        snprintf(err, errlen, "agentic capability list must be an array");
+        return false;
+    }
+    (*p)++;
+    json_ws(p);
+    while (**p && **p != ']') {
+        char *name = NULL;
+        if (!json_string(p, &name) || !name || !name[0]) {
+            free(name);
+            snprintf(err, errlen, "agentic capability names must be non-empty strings");
+            return false;
+        }
+        if (id_list_contains(out, name)) {
+            snprintf(err, errlen, "duplicate agentic capability: %s", name);
+            free(name);
+            return false;
+        }
+        stop_list_push(out, name);
+        json_ws(p);
+        if (**p == ',') {
+            (*p)++;
+            json_ws(p);
+        } else if (**p != ']') {
+            snprintf(err, errlen, "invalid agentic capability array");
+            return false;
+        }
+    }
+    if (**p != ']') {
+        snprintf(err, errlen, "unterminated agentic capability array");
+        return false;
+    }
+    (*p)++;
+    return true;
+}
+
+static bool parse_agentic_value(const char **p, request *r,
+                                char *err, size_t errlen) {
+    json_ws(p);
+    if (**p != '{') {
+        snprintf(err, errlen, "agentic must be an object");
+        return false;
+    }
+    (*p)++;
+    bool got_tools = false;
+    bool got_skills = false;
+    bool got_operation = false;
+    bool got_call_id = false;
+    r->agentic_present = true;
+    json_ws(p);
+    while (**p && **p != '}') {
+        char *key = NULL;
+        if (!json_string(p, &key)) return false;
+        json_ws(p);
+        if (**p != ':') {
+            free(key);
+            return false;
+        }
+        (*p)++;
+        if (!strcmp(key, "allowed_tools")) {
+            if (got_tools || !parse_agentic_name_array(p, &r->allowed_tools,
+                                                       err, errlen)) {
+                free(key);
+                return false;
+            }
+            got_tools = true;
+        } else if (!strcmp(key, "allowed_skills")) {
+            if (got_skills || !parse_agentic_name_array(p, &r->allowed_skills,
+                                                        err, errlen)) {
+                free(key);
+                return false;
+            }
+            got_skills = true;
+        } else if (!strcmp(key, "operation")) {
+            char *op = NULL;
+            if (got_operation || !json_string(p, &op) || strcmp(op, "return")) {
+                snprintf(err, errlen, "agentic.operation must be return");
+                free(op);
+                free(key);
+                return false;
+            }
+            r->agentic_return = true;
+            got_operation = true;
+            free(op);
+        } else if (!strcmp(key, "skill_call_id")) {
+            char *id = NULL;
+            if (got_call_id || !json_string(p, &id) || !id || !id[0]) {
+                snprintf(err, errlen, "agentic.skill_call_id must be a non-empty string");
+                free(id);
+                free(key);
+                return false;
+            }
+            free(r->agentic_skill_call_id);
+            r->agentic_skill_call_id = id;
+            got_call_id = true;
+        } else {
+            snprintf(err, errlen, "unsupported agentic field: %s", key);
+            free(key);
+            return false;
+        }
+        free(key);
+        json_ws(p);
+        if (**p == ',') {
+            (*p)++;
+            json_ws(p);
+        } else if (**p != '}') {
+            return false;
+        }
+    }
+    if (**p != '}') return false;
+    (*p)++;
+    if (!got_tools || !got_skills) {
+        snprintf(err, errlen, "agentic requires allowed_tools and allowed_skills");
+        return false;
+    }
+    if (r->agentic_return != got_call_id) {
+        snprintf(err, errlen,
+                 "agentic return requires operation and skill_call_id together");
+        return false;
+    }
     return true;
 }
 
@@ -3076,6 +3241,14 @@ static bool parse_chat_request(ds4_engine *e, server *s, const char *body, int d
                 free(key);
                 goto bad;
             }
+        } else if (!strcmp(key, "agentic")) {
+            snprintf(err, errlen,
+                     "agentic is supported only by /v1/responses");
+            free(key);
+            chat_msgs_free(&msgs);
+            free(tool_schemas);
+            request_free(r);
+            return false;
         } else if (!json_skip_value(&p)) {
             free(key);
             goto bad;
@@ -3272,6 +3445,15 @@ static bool parse_anthropic_request(ds4_engine *e, server *s, const char *body, 
                 free(key);
                 goto bad;
             }
+        } else if (!strcmp(key, "agentic")) {
+            snprintf(err, errlen,
+                     "agentic is supported only by /v1/responses");
+            free(key);
+            chat_msgs_free(&msgs);
+            free(system);
+            free(tool_schemas);
+            request_free(r);
+            return false;
         } else if (!json_skip_value(&p)) {
             free(key);
             goto bad;
@@ -4169,6 +4351,17 @@ static bool parse_responses_request(ds4_engine *e, server *s, const char *body, 
                  * thinking. Other effort values choose between HIGH and MAX. */
                 if (reasoning_effort == DS4_THINK_NONE) thinking_enabled = false;
             }
+        } else if (!strcmp(key, "agentic")) {
+            if (r->agentic_present ||
+                !parse_agentic_value(&p, r, err, errlen)) {
+                free(key);
+                chat_msgs_free(&msgs);
+                buf_free(&loaded_tool_schemas);
+                free(instructions);
+                free(tool_schemas);
+                request_free(r);
+                return false;
+            }
         } else if (!strcmp(key, "previous_response_id") ||
                    !strcmp(key, "conversation"))
         {
@@ -4241,10 +4434,25 @@ static bool parse_responses_request(ds4_engine *e, server *s, const char *body, 
         (!tool_choice_none && combined_tool_schemas.len) ?
         combined_tool_schemas.ptr : NULL;
     r->has_tools = active_tool_schemas && active_tool_schemas[0];
+    if (r->agentic_present) {
+        ds4_kvstore_sha1_bytes_hex(combined_tool_schemas.ptr ?
+                                   combined_tool_schemas.ptr : "",
+                                   combined_tool_schemas.len,
+                                   r->agentic_registry_sha);
+    }
     if (!got_thinking && model_alias_disables_thinking(r->model)) thinking_enabled = false;
     if (!got_thinking && model_alias_enables_thinking(r->model)) thinking_enabled = true;
     r->think_mode = ds4_think_mode_for_context(
         think_mode_from_enabled(thinking_enabled, reasoning_effort), ctx_size);
+    if (!agentic_validate_registry(r, err, errlen)) {
+        chat_msgs_free(&msgs);
+        buf_free(&combined_tool_schemas);
+        buf_free(&loaded_tool_schemas);
+        free(instructions);
+        free(tool_schemas);
+        request_free(r);
+        return false;
+    }
     if (!responses_validate_tool_outputs(s, &msgs, r->think_mode,
                                          &r->responses_requires_live_tool_state,
                                          &r->responses_requires_live_reasoning,
@@ -4262,6 +4470,21 @@ static bool parse_responses_request(ds4_engine *e, server *s, const char *body, 
     r->prompt_preserves_reasoning =
         chat_history_uses_tool_context(&msgs, active_tool_schemas);
     responses_prepare_live_continuation(r, &msgs);
+    if (r->agentic_return &&
+        (!r->responses_live_suffix_text ||
+         !id_list_contains(&r->responses_live_call_ids,
+                           r->agentic_skill_call_id))) {
+        snprintf(err, errlen,
+                 "agentic return input must contain function_call_output for %s",
+                 r->agentic_skill_call_id ? r->agentic_skill_call_id : "(missing)");
+        chat_msgs_free(&msgs);
+        buf_free(&combined_tool_schemas);
+        buf_free(&loaded_tool_schemas);
+        free(instructions);
+        free(tool_schemas);
+        request_free(r);
+        return false;
+    }
     r->prompt_text = render_chat_prompt_text_for_syntax(
         r->model_syntax, &msgs, active_tool_schemas,
         &r->tool_orders, r->think_mode);
@@ -5972,6 +6195,94 @@ static bool dsml_decode_state_is_tool(dsml_decode_state state) {
 
 static bool dsml_decode_state_uses_payload_sampling(dsml_decode_state state) {
     return state == DSML_DECODE_STRING_BODY || state == DSML_DECODE_JSON_STRING;
+}
+
+typedef struct {
+    const request *req;
+    const char *raw;
+    size_t raw_len;
+} agentic_token_filter;
+
+static bool agentic_name_is_allowed(const request *r,
+                                    const char *name, size_t len) {
+    if (!r) return false;
+    const stop_list *sets[2] = {&r->allowed_tools, &r->allowed_skills};
+    for (int s = 0; s < 2; s++) {
+        for (int i = 0; i < sets[s]->len; i++) {
+            const char *allowed = sets[s]->v[i];
+            if (strlen(allowed) == len && !memcmp(allowed, name, len)) return true;
+        }
+    }
+    return false;
+}
+
+static bool agentic_name_has_prefix(const request *r,
+                                    const char *prefix, size_t len) {
+    if (!r) return false;
+    const stop_list *sets[2] = {&r->allowed_tools, &r->allowed_skills};
+    for (int s = 0; s < 2; s++) {
+        for (int i = 0; i < sets[s]->len; i++) {
+            const char *allowed = sets[s]->v[i];
+            if (strlen(allowed) >= len && !memcmp(allowed, prefix, len)) return true;
+        }
+    }
+    return false;
+}
+
+static bool agentic_validate_invoke_headers(const request *r,
+                                            const char *raw, size_t raw_len) {
+    for (size_t si = 0; si < sizeof(dsml_syntaxes) / sizeof(dsml_syntaxes[0]); si++) {
+        const char *invoke = dsml_syntaxes[si].invoke_start;
+        size_t invoke_len = strlen(invoke);
+        size_t scan = 0;
+        while (scan < raw_len) {
+            const char *p = find_lit_bounded(raw + scan, raw_len - scan, invoke);
+            if (!p) break;
+            size_t start = (size_t)(p - raw) + invoke_len;
+            const char *tag_end = memchr(raw + start, '>', raw_len - start);
+            size_t limit = tag_end ? (size_t)(tag_end - raw) : raw_len;
+            const char name_lit[] = " name=\"";
+            const char *attr = find_lit_bounded(raw + start, limit - start,
+                                                name_lit);
+            if (!attr) {
+                size_t have = limit - start;
+                if (tag_end || have > strlen(name_lit) ||
+                    memcmp(raw + start, name_lit, have)) return false;
+                scan = start;
+                continue;
+            }
+            const char *name = attr + strlen(name_lit);
+            const char *quote = memchr(name, '"', (raw + limit) - name);
+            if (quote) {
+                if (!agentic_name_is_allowed(r, name, (size_t)(quote - name))) {
+                    return false;
+                }
+            } else {
+                if (tag_end ||
+                    !agentic_name_has_prefix(r, name,
+                                             (size_t)((raw + limit) - name))) {
+                    return false;
+                }
+            }
+            scan = start;
+        }
+    }
+    return true;
+}
+
+static bool agentic_filter_token(void *ud, int token,
+                                 const char *piece, size_t piece_len) {
+    (void)token;
+    const agentic_token_filter *f = ud;
+    if (!f || !f->req || !piece) return false;
+    const size_t tail_cap = 1536;
+    size_t tail = f->raw_len > tail_cap ? tail_cap : f->raw_len;
+    if (tail + piece_len >= 2048) return false;
+    char combined[2048];
+    if (tail) memcpy(combined, f->raw + f->raw_len - tail, tail);
+    if (piece_len) memcpy(combined + tail, piece, piece_len);
+    return agentic_validate_invoke_headers(f->req, combined,
+                                           tail + piece_len);
 }
 
 static void dsml_decode_tracker_init(dsml_decode_tracker *dt) {
@@ -8236,6 +8547,18 @@ typedef struct {
     size_t visible_len;
 } visible_live_state;
 
+typedef struct skill_frame skill_frame;
+struct skill_frame {
+    char *call_id;
+    char *skill_name;
+    char *checkpoint_path;
+    ds4_tokens frontier;
+    uint64_t checkpoint_bytes;
+    double stage_ms;
+    double write_ms;
+    skill_frame *next;
+};
+
 struct server_slot {
     server *srv;
     int id;
@@ -8244,6 +8567,9 @@ struct server_slot {
     live_tool_state anthropic_live;
     visible_live_state thinking_live;
     int continued_last_store_tokens;
+    skill_frame *skills;
+    char agentic_registry_sha[41];
+    bool agentic_registry_bound;
 
     job *assigned;
     bool busy;
@@ -8294,7 +8620,321 @@ struct server {
     FILE *trace;
     pthread_mutex_t trace_mu;
     uint64_t trace_seq;
+    char *skill_dir;
+    uint64_t skill_checkpoint_count;
+    uint64_t skill_return_count;
+    uint64_t skill_checkpoint_live_bytes;
+    uint64_t skill_checkpoint_peak_bytes;
 };
+
+static bool skill_checkpoint_unlink(const char *path) {
+    if (!path || !path[0]) return true;
+    int saved = 0;
+    for (int attempt = 0; attempt < 20; attempt++) {
+        if (unlink(path) == 0 || errno == ENOENT) return true;
+        saved = errno;
+        if (saved != EACCES && saved != EPERM && saved != EBUSY) break;
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 25000000L};
+        nanosleep(&pause, NULL);
+    }
+    server_log(DS4_LOG_WARNING,
+               "ds4-server: failed to delete skill checkpoint path=%s error=%s",
+               path, strerror(saved));
+    return false;
+}
+
+static void skill_frame_free(skill_frame *f, bool unlink_file) {
+    if (!f) return;
+    if (unlink_file && f->checkpoint_path) {
+        (void)skill_checkpoint_unlink(f->checkpoint_path);
+    }
+    free(f->call_id);
+    free(f->skill_name);
+    free(f->checkpoint_path);
+    ds4_tokens_free(&f->frontier);
+    free(f);
+}
+
+static void skill_frames_clear_locked(server *s, server_slot *slot) {
+    if (!slot) return;
+    while (slot->skills) {
+        skill_frame *next = slot->skills->next;
+        if (s) {
+            if (s->skill_checkpoint_live_bytes >=
+                slot->skills->checkpoint_bytes) {
+                s->skill_checkpoint_live_bytes -=
+                    slot->skills->checkpoint_bytes;
+            } else {
+                s->skill_checkpoint_live_bytes = 0;
+            }
+        }
+        skill_frame_free(slot->skills, true);
+        slot->skills = next;
+    }
+}
+
+static skill_frame *skill_frame_find_locked(server_slot *slot, const char *call_id) {
+    if (!slot || !call_id) return NULL;
+    for (skill_frame *f = slot->skills; f; f = f->next) {
+        if (f->call_id && !strcmp(f->call_id, call_id)) return f;
+    }
+    return NULL;
+}
+
+static int skill_frame_slot_locked(server *s, const char *call_id) {
+    if (!s || !call_id || !call_id[0]) return -1;
+    for (int i = 0; i < s->slot_count; i++) {
+        if (skill_frame_find_locked(&s->slots[i], call_id)) return i;
+    }
+    return -1;
+}
+
+static bool skill_checkpoint_filename(const char *name) {
+    if (!name || !name[0]) return false;
+    const size_t n = strlen(name);
+    if (n >= 4 && !strcmp(name + n - 4, ".dsk")) return true;
+    return strstr(name, ".dsk.tmp.") != NULL;
+}
+
+/* The engine instance lock is already held when this runs, so no live DS4
+ * process can own an older private directory.  Delete only regular checkpoint
+ * files from directories bearing our mkdtemp prefix; symlinks and unexpected
+ * contents are deliberately left untouched. */
+static void skill_checkpoint_cleanup_orphans(const char *base) {
+    const char *dir = base && base[0] ? base : "/tmp";
+    const char *prefix = base && base[0] ? "agentic." : "ds4-agentic.";
+    DIR *root = opendir(dir);
+    if (!root) return;
+    uint64_t files = 0;
+    uint64_t bytes = 0;
+    struct dirent *de = NULL;
+    while ((de = readdir(root)) != NULL) {
+        if (strncmp(de->d_name, prefix, strlen(prefix))) continue;
+        char subpath[PATH_MAX];
+        if (snprintf(subpath, sizeof(subpath), "%s/%s", dir, de->d_name) >=
+            (int)sizeof(subpath)) continue;
+        struct stat sub_st;
+        if (lstat(subpath, &sub_st) != 0 || !S_ISDIR(sub_st.st_mode) ||
+            S_ISLNK(sub_st.st_mode)) continue;
+        DIR *sub = opendir(subpath);
+        if (!sub) continue;
+        bool removable = true;
+        struct dirent *file = NULL;
+        while ((file = readdir(sub)) != NULL) {
+            if (!strcmp(file->d_name, ".") || !strcmp(file->d_name, "..")) {
+                continue;
+            }
+            if (!skill_checkpoint_filename(file->d_name)) {
+                removable = false;
+                continue;
+            }
+            char path[PATH_MAX];
+            if (snprintf(path, sizeof(path), "%s/%s", subpath, file->d_name) >=
+                (int)sizeof(path)) {
+                removable = false;
+                continue;
+            }
+            struct stat st;
+            if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode) ||
+                S_ISLNK(st.st_mode) || unlink(path) != 0) {
+                removable = false;
+                continue;
+            }
+            files++;
+            if (st.st_size > 0) bytes += (uint64_t)st.st_size;
+        }
+        closedir(sub);
+        if (removable) (void)rmdir(subpath);
+    }
+    closedir(root);
+    if (files) {
+        server_log(DS4_LOG_KVCACHE,
+                   "ds4-server: removed orphan agentic checkpoints files=%llu bytes=%llu",
+                   (unsigned long long)files, (unsigned long long)bytes);
+    }
+}
+
+static char *skill_checkpoint_dir_create(const char *base) {
+    char *tmpl = NULL;
+    if (base && base[0]) {
+        size_t n = strlen(base) + sizeof("/agentic.XXXXXX");
+        tmpl = xmalloc(n);
+        snprintf(tmpl, n, "%s/agentic.XXXXXX", base);
+    } else {
+        tmpl = xstrdup("/tmp/ds4-agentic.XXXXXX");
+    }
+    if (!mkdtemp(tmpl)) {
+        free(tmpl);
+        return NULL;
+    }
+    return tmpl;
+}
+
+static bool skill_frame_save(server *s, server_slot *slot,
+                             const tool_call *call,
+                             double *write_ms_out,
+                             char *err, size_t errlen) {
+    if (write_ms_out) *write_ms_out = 0.0;
+    if (!s || !slot || !call || !call->id || !call->id[0] ||
+        !call->name || !call->name[0] || !s->skill_dir) {
+        snprintf(err, errlen, "invalid skill checkpoint request");
+        return false;
+    }
+    pthread_mutex_lock(&s->tool_mu);
+    bool duplicate = skill_frame_slot_locked(s, call->id) >= 0;
+    pthread_mutex_unlock(&s->tool_mu);
+    if (duplicate) {
+        snprintf(err, errlen, "duplicate skill call_id: %s", call->id);
+        return false;
+    }
+    char random_id[64];
+    random_tool_id(random_id, sizeof(random_id), API_OPENAI);
+    size_t final_n = strlen(s->skill_dir) + strlen(random_id) + 8;
+    char *final_path = xmalloc(final_n);
+    snprintf(final_path, final_n, "%s/%s.dsk", s->skill_dir, random_id);
+    size_t tmp_n = strlen(final_path) + sizeof(".tmp.XXXXXX");
+    char *tmp_path = xmalloc(tmp_n);
+    snprintf(tmp_path, tmp_n, "%s.tmp.XXXXXX", final_path);
+    int fd = mkstemp(tmp_path);
+    if (fd < 0) {
+        snprintf(err, errlen, "failed to create skill checkpoint: %s",
+                 strerror(errno));
+        free(tmp_path);
+        free(final_path);
+        return false;
+    }
+    FILE *fp = fdopen(fd, "wb");
+    if (!fp) {
+        int saved = errno;
+        close(fd);
+        unlink(tmp_path);
+        snprintf(err, errlen, "failed to open skill checkpoint: %s",
+                 strerror(saved));
+        free(tmp_path);
+        free(final_path);
+        return false;
+    }
+    uint64_t bytes = 0;
+    ds4_skill_state_metrics state_metrics = {0};
+    const double t0 = now_sec();
+    int rc = ds4_session_save_skill_state(slot->session, fp, &bytes,
+                                          &state_metrics,
+                                          err, errlen);
+    if (rc == 0 && fflush(fp) != 0) {
+        snprintf(err, errlen, "failed to flush skill checkpoint: %s",
+                 strerror(errno));
+        rc = 1;
+    }
+    if (rc == 0 && fsync(fileno(fp)) != 0) {
+        snprintf(err, errlen, "failed to sync skill checkpoint: %s",
+                 strerror(errno));
+        rc = 1;
+    }
+    if (fclose(fp) != 0 && rc == 0) {
+        snprintf(err, errlen, "failed to close skill checkpoint: %s",
+                 strerror(errno));
+        rc = 1;
+    }
+    if (rc == 0 && rename(tmp_path, final_path) != 0) {
+        snprintf(err, errlen, "failed to publish skill checkpoint: %s",
+                 strerror(errno));
+        rc = 1;
+    }
+    const double total_ms = (now_sec() - t0) * 1000.0;
+    const double write_ms = total_ms > state_metrics.stage_ms ?
+                            total_ms - state_metrics.stage_ms : total_ms;
+    unlink(tmp_path);
+    free(tmp_path);
+    if (rc != 0) {
+        unlink(final_path);
+        free(final_path);
+        return false;
+    }
+    skill_frame *f = xmalloc(sizeof(*f));
+    memset(f, 0, sizeof(*f));
+    f->call_id = xstrdup(call->id);
+    f->skill_name = xstrdup(call->name);
+    f->checkpoint_path = final_path;
+    f->checkpoint_bytes = bytes;
+    f->stage_ms = state_metrics.stage_ms;
+    f->write_ms = write_ms;
+    ds4_tokens_copy(&f->frontier, ds4_session_tokens(slot->session));
+    pthread_mutex_lock(&s->tool_mu);
+    duplicate = skill_frame_slot_locked(s, call->id) >= 0;
+    if (!duplicate) {
+        f->next = slot->skills;
+        slot->skills = f;
+        s->skill_checkpoint_count++;
+        s->skill_checkpoint_live_bytes += bytes;
+        if (s->skill_checkpoint_live_bytes > s->skill_checkpoint_peak_bytes) {
+            s->skill_checkpoint_peak_bytes = s->skill_checkpoint_live_bytes;
+        }
+    }
+    pthread_mutex_unlock(&s->tool_mu);
+    if (duplicate) {
+        snprintf(err, errlen, "duplicate skill call_id: %s", call->id);
+        skill_frame_free(f, true);
+        return false;
+    }
+    if (write_ms_out) *write_ms_out = write_ms;
+    server_log(DS4_LOG_KVCACHE,
+               "SKILL_CHECKPOINT call_id=%s skill=%s sequence=%d checkpoint_tokens=%d checkpoint_file=%s checkpoint_bytes=%llu checkpoint_stage_ms=%.3f checkpoint_write_ms=%.3f skill_checkpoint_count=%llu skill_checkpoint_live_bytes=%llu skill_checkpoint_peak_bytes=%llu",
+               f->call_id, f->skill_name, f->frontier.len, f->frontier.len,
+               f->checkpoint_path,
+               (unsigned long long)f->checkpoint_bytes, f->stage_ms, f->write_ms,
+               (unsigned long long)s->skill_checkpoint_count,
+               (unsigned long long)s->skill_checkpoint_live_bytes,
+               (unsigned long long)s->skill_checkpoint_peak_bytes);
+    return true;
+}
+
+static bool skill_frame_restore(server_slot *slot, skill_frame *target,
+                                ds4_skill_state_metrics *metrics,
+                                char *err, size_t errlen) {
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
+    if (!slot || !target || !target->checkpoint_path) {
+        snprintf(err, errlen, "invalid skill restore request");
+        return false;
+    }
+    FILE *fp = fopen(target->checkpoint_path, "rb");
+    if (!fp) {
+        snprintf(err, errlen, "failed to open skill checkpoint: %s",
+                 strerror(errno));
+        return false;
+    }
+    int rc = ds4_session_load_skill_state(slot->session, fp,
+                                          &target->frontier,
+                                          metrics,
+                                          err, errlen);
+    if (fclose(fp) != 0 && rc == 0) {
+        snprintf(err, errlen, "failed to close skill checkpoint: %s",
+                 strerror(errno));
+        rc = 1;
+    }
+    return rc == 0;
+}
+
+static bool skill_frames_consume_through_locked(server *s, server_slot *slot,
+                                                skill_frame *target) {
+    if (!s || !slot || !target) return false;
+    bool deleted = true;
+    while (slot->skills) {
+        skill_frame *f = slot->skills;
+        slot->skills = f->next;
+        bool done = f == target;
+        if (s->skill_checkpoint_live_bytes >= f->checkpoint_bytes) {
+            s->skill_checkpoint_live_bytes -= f->checkpoint_bytes;
+        } else {
+            s->skill_checkpoint_live_bytes = 0;
+        }
+        if (!skill_checkpoint_unlink(f->checkpoint_path)) {
+            deleted = false;
+        }
+        skill_frame_free(f, false);
+        if (done) break;
+    }
+    return deleted;
+}
 
 /* Jobs are stack-owned by the client thread.  A resident-slot worker signals
  * completion after it has written the response, so request data and the socket
@@ -8602,7 +9242,7 @@ static void anthropic_live_clear(server *s, server_slot *slot) {
 static bool responses_live_has_call_id(server *s, const char *id) {
     if (!s || !id || !id[0]) return false;
     pthread_mutex_lock(&s->tool_mu);
-    bool found = false;
+    bool found = skill_frame_slot_locked(s, id) >= 0;
     for (int i = 0; i < s->slot_count && !found; i++) {
         found = s->slots[i].responses_live.valid &&
                 id_list_contains(&s->slots[i].responses_live.call_ids, id);
@@ -10966,6 +11606,25 @@ static uint64_t server_next_sequence(server *s) {
 static void generate_job(server *s, server_slot *slot, job *j) {
     char err[160];
     err[0] = '\0';
+    if (!j->req.agentic_present) {
+        pthread_mutex_lock(&s->tool_mu);
+        skill_frames_clear_locked(s, slot);
+        pthread_mutex_unlock(&s->tool_mu);
+    }
+    if (!j->req.agentic_present) {
+        slot->agentic_registry_bound = false;
+        slot->agentic_registry_sha[0] = '\0';
+    } else if (!slot->agentic_registry_bound) {
+        snprintf(slot->agentic_registry_sha,
+                 sizeof(slot->agentic_registry_sha), "%s",
+                 j->req.agentic_registry_sha);
+        slot->agentic_registry_bound = true;
+    } else if (strcmp(slot->agentic_registry_sha,
+                      j->req.agentic_registry_sha)) {
+        http_error(j->fd, s->enable_cors, 409,
+                   "Agentic tool registry changed within a live session");
+        return;
+    }
     const int old_pos = ds4_session_pos(slot->session);
     const int common = ds4_session_common_prefix(slot->session, &j->req.prompt);
     trace_cache_diag cache_diag = {0};
@@ -10980,16 +11639,53 @@ static void generate_job(server *s, server_slot *slot, job *j) {
     const char *responses_live_match = NULL;
     int responses_live_match_ids = 0;
     int anthropic_live_match_ids = 0;
+    skill_frame *return_frame = NULL;
+    int return_discarded_tokens = 0;
+    ds4_skill_state_metrics return_metrics = {0};
     /* Responses gets the first chance to continue from live state.  This is
      * the whole point of the API shape: a request that is bound to prior live
      * output by visible transcript or tool call ids does not need to prove an
      * exact token-prefix match.  Exact token/text/disk matching remains the
      * fallback when the live state is absent or no longer describes the
      * request. */
-    int cached = responses_live_visible_prefix_prompt(s, slot, &j->req, old_pos,
+    int cached = 0;
+    const char *cache_source = "none";
+    if (j->req.agentic_return) {
+        pthread_mutex_lock(&s->tool_mu);
+        return_frame = skill_frame_find_locked(
+            slot, j->req.agentic_skill_call_id);
+        pthread_mutex_unlock(&s->tool_mu);
+        if (!return_frame) {
+            ds4_tokens_free(&effective_prompt);
+            http_error(j->fd, s->enable_cors, 409,
+                       "Agentic skill checkpoint is not available for this call_id");
+            return;
+        }
+        return_discarded_tokens = old_pos > return_frame->frontier.len ?
+                                  old_pos - return_frame->frontier.len : 0;
+        if (!skill_frame_restore(slot, return_frame, &return_metrics,
+                                 err, sizeof(err))) {
+            ds4_tokens_free(&effective_prompt);
+            http_error(j->fd, s->enable_cors, 409,
+                       err[0] ? err : "Agentic skill checkpoint restore failed");
+            return;
+        }
+        build_prompt_from_exact_prefix_and_text_suffix(
+            s->engine, &return_frame->frontier,
+            j->req.responses_live_suffix_text,
+            &effective_prompt);
+        cached = return_frame->frontier.len;
+        cache_source = "agentic-return";
+        prompt_for_sync = &effective_prompt;
+        responses_live_continuation = true;
+        responses_live_match = "skill-call-id";
+        responses_live_match_ids = 1;
+    } else {
+        cached = responses_live_visible_prefix_prompt(s, slot, &j->req, old_pos,
                                                       &effective_prompt);
-    const char *cache_source = cached > 0 ? "responses-visible" : "none";
-    if (cached > 0) {
+        cache_source = cached > 0 ? "responses-visible" : "none";
+    }
+    if (cached > 0 && !j->req.agentic_return) {
         responses_live_match = "visible-prefix";
         if (responses_live_matches_request(s, slot,
                                            &j->req.responses_live_call_ids,
@@ -11241,6 +11937,29 @@ static void generate_job(server *s, server_slot *slot, job *j) {
         return;
     }
     free(disk_cache_path);
+    if (return_frame) {
+        const int result_prefill = prompt_for_sync->len > cached ?
+                                   prompt_for_sync->len - cached : 0;
+        char *returned_call_id = xstrdup(return_frame->call_id);
+        const int restored_tokens = return_frame->frontier.len;
+        pthread_mutex_lock(&s->tool_mu);
+        const bool checkpoint_deleted =
+            skill_frames_consume_through_locked(s, slot, return_frame);
+        s->skill_return_count++;
+        const uint64_t return_count = s->skill_return_count;
+        const uint64_t live_bytes = s->skill_checkpoint_live_bytes;
+        pthread_mutex_unlock(&s->tool_mu);
+        server_log(DS4_LOG_KVCACHE,
+                   "SKILL_RETURN call_id=%s restored_tokens=%d discarded_child_tokens=%d result_prefill_tokens=%d checkpoint_read_ms=%.3f checkpoint_restore_ms=%.3f checkpoint_deleted=%s skill_return_count=%llu skill_checkpoint_live_bytes=%llu",
+                   returned_call_id, restored_tokens, return_discarded_tokens,
+                   result_prefill, return_metrics.read_ms,
+                   return_metrics.restore_ms,
+                   checkpoint_deleted ? "true" : "false",
+                   (unsigned long long)return_count,
+                   (unsigned long long)live_bytes);
+        free(returned_call_id);
+        return_frame = NULL;
+    }
     /* Once a non-live request wins, old protocol live bindings are stale. Keep
      * a binding only when this request explicitly continued from it. */
     if (!responses_live_continuation) responses_live_clear(s, slot);
@@ -11395,8 +12114,26 @@ decode_again:
         if (in_tool_call && !dsml_decode_state_uses_payload_sampling(dsml_state)) {
             temperature = 0.0f;
         }
-        int token = ds4_session_sample(slot->session, temperature, top_k,
-                                       top_p, min_p, &rng);
+        const bool constrained_sample =
+            j->req.agentic_present &&
+            dsml_state == DSML_DECODE_STRUCTURAL;
+        agentic_token_filter token_filter = {
+            .req = &j->req,
+            .raw = text.ptr ? text.ptr : "",
+            .raw_len = text.len,
+        };
+        int token = constrained_sample ?
+            ds4_session_sample_filtered(slot->session, temperature, top_k,
+                                        top_p, min_p, &rng,
+                                        agentic_filter_token, &token_filter) :
+            ds4_session_sample(slot->session, temperature, top_k,
+                               top_p, min_p, &rng);
+        if (token < 0) {
+            finish = "error";
+            snprintf(err, sizeof(err),
+                     "agentic constrained decoder has no valid token");
+            break;
+        }
         if (ds4_token_is_stop_for_think_mode(s->engine,
                                              token,
                                              j->req.think_mode)) {
@@ -11406,7 +12143,7 @@ decode_again:
 
         int toks[17];
         int ntok = 0;
-        if (!s->batched_mode && temperature <= 0.0f &&
+        if (!constrained_sample && !s->batched_mode && temperature <= 0.0f &&
             ds4_engine_mtp_draft_tokens(s->engine) > 1 &&
             getenv("DS4_MTP_SPEC_DISABLE") == NULL)
         {
@@ -11836,8 +12573,46 @@ decode_again:
             if (j->req.api == API_ANTHROPIC && j->req.stream)
                 apply_anthropic_stream_tool_ids(&parsed_calls, &anthropic_live);
             assign_tool_call_ids(s, &parsed_calls, j->req.api);
-            tool_memory_remember(s, &parsed_calls);
-            final_finish = "tool_calls";
+            bool agentic_ok = true;
+            pthread_mutex_lock(&s->tool_mu);
+            skill_frame *skill_head_before = slot->skills;
+            pthread_mutex_unlock(&s->tool_mu);
+            if (j->req.agentic_present) {
+                for (int i = 0; i < parsed_calls.len; i++) {
+                    tool_call *call = &parsed_calls.v[i];
+                    const bool is_tool =
+                        id_list_contains(&j->req.allowed_tools, call->name);
+                    const bool is_skill =
+                        id_list_contains(&j->req.allowed_skills, call->name);
+                    if (is_tool == is_skill) {
+                        snprintf(err, sizeof(err),
+                                 "generated capability is not allowed: %s",
+                                 call->name ? call->name : "(missing)");
+                        agentic_ok = false;
+                        break;
+                    }
+                    if (is_skill &&
+                        !skill_frame_save(s, slot, call, NULL,
+                                          err, sizeof(err))) {
+                        agentic_ok = false;
+                        break;
+                    }
+                }
+            }
+            if (agentic_ok) {
+                tool_memory_remember(s, &parsed_calls);
+                final_finish = "tool_calls";
+            } else {
+                pthread_mutex_lock(&s->tool_mu);
+                while (slot->skills != skill_head_before) {
+                    skill_frame *failed = slot->skills;
+                    slot->skills = failed->next;
+                    skill_frame_free(failed, true);
+                }
+                pthread_mutex_unlock(&s->tool_mu);
+                final_finish = "error";
+                tool_calls_free(&parsed_calls);
+            }
         } else if (j->req.api == API_RESPONSES) {
             responses_live_clear(s, slot);
         }
@@ -12051,6 +12826,9 @@ static bool live_state_contains_all(const live_tool_state *state,
 static int job_required_slot_locked(server *s, const job *j) {
     if (!s || !j) return -1;
     const request *r = &j->req;
+    if (r->agentic_return) {
+        return skill_frame_slot_locked(s, r->agentic_skill_call_id);
+    }
     for (int i = 0; i < s->slot_count; i++) {
         server_slot *slot = &s->slots[i];
         if (r->responses_requires_live_tool_state &&
@@ -12608,7 +13386,13 @@ static void server_close_resources(server *s) {
         live_tool_state_free(&slot->responses_live);
         live_tool_state_free(&slot->anthropic_live);
         visible_live_free(&slot->thinking_live);
+        skill_frames_clear_locked(s, slot);
         if (slot->session) ds4_session_free(slot->session);
+    }
+    if (s->skill_dir) {
+        rmdir(s->skill_dir);
+        free(s->skill_dir);
+        s->skill_dir = NULL;
     }
     free(s->slot_threads);
     free(s->slots);
@@ -12996,6 +13780,20 @@ int main(int argc, char **argv) {
         kv_cache_open(&s.kv, cfg.kv_disk_dir, cfg.kv_disk_space_mb,
                       cfg.kv_cache_reject_different_quant, cfg.kv_cache);
     }
+    const char *skill_checkpoint_base =
+        s.kv.enabled ? s.kv.dir : cfg.kv_disk_dir;
+    skill_checkpoint_cleanup_orphans(skill_checkpoint_base);
+    s.skill_dir = skill_checkpoint_dir_create(skill_checkpoint_base);
+    if (!s.skill_dir) {
+        server_log(DS4_LOG_DEFAULT,
+                   "ds4-server: failed to create agentic checkpoint directory: %s",
+                   strerror(errno));
+        server_close_resources(&s);
+        return 1;
+    }
+    server_log(DS4_LOG_KVCACHE,
+               "ds4-server: agentic skill checkpoints dir=%s",
+               s.skill_dir);
     if (s.disable_exact_dsml_tool_replay) {
         server_log(DS4_LOG_DEFAULT,
                    "ds4-server: exact DSML tool replay disabled; tool history uses canonical JSON rendering");
@@ -17411,7 +18209,97 @@ static void test_thinking_canonical_non_thinking_mode_noop(void) {
     chat_msgs_free(&msgs);
 }
 
+static void test_agentic_parser_and_registry_validation(void) {
+    request r;
+    request_init(&r, REQ_CHAT, 32);
+    const char *json =
+        "{\"allowed_tools\":[\"execute\"],"
+        "\"allowed_skills\":[\"skill-A\"]}";
+    char err[160] = {0};
+    TEST_ASSERT(parse_agentic_value(&json, &r, err, sizeof(err)));
+    TEST_ASSERT(r.agentic_present);
+    TEST_ASSERT(!r.agentic_return);
+    TEST_ASSERT(r.allowed_tools.len == 1);
+    TEST_ASSERT(r.allowed_skills.len == 1);
+
+    tool_schema_order execute = {.name = xstrdup("execute")};
+    tool_schema_order skill = {.name = xstrdup("skill-A")};
+    tool_schema_orders_push(&r.tool_orders, execute);
+    tool_schema_orders_push(&r.tool_orders, skill);
+    r.has_tools = true;
+    TEST_ASSERT(agentic_validate_registry(&r, err, sizeof(err)));
+    request_free(&r);
+
+    request_init(&r, REQ_CHAT, 32);
+    json =
+        "{\"allowed_tools\":[\"same\"],"
+        "\"allowed_skills\":[\"same\"]}";
+    TEST_ASSERT(parse_agentic_value(&json, &r, err, sizeof(err)));
+    tool_schema_order same = {.name = xstrdup("same")};
+    tool_schema_orders_push(&r.tool_orders, same);
+    r.has_tools = true;
+    TEST_ASSERT(!agentic_validate_registry(&r, err, sizeof(err)));
+    request_free(&r);
+
+    request_init(&r, REQ_CHAT, 32);
+    json =
+        "{\"allowed_tools\":[],\"allowed_skills\":[],"
+        "\"operation\":\"return\",\"skill_call_id\":\"call_A\"}";
+    TEST_ASSERT(parse_agentic_value(&json, &r, err, sizeof(err)));
+    TEST_ASSERT(r.agentic_return);
+    TEST_ASSERT(!strcmp(r.agentic_skill_call_id, "call_A"));
+    request_free(&r);
+}
+
+static void test_agentic_name_filter_rejects_forbidden_capability(void) {
+    request r;
+    request_init(&r, REQ_CHAT, 32);
+    r.agentic_present = true;
+    id_list_push_unique(&r.allowed_tools, "execute");
+    id_list_push_unique(&r.allowed_skills, "skill-A");
+
+    const char *prefix = DS4_TOOL_CALLS_START "\n" DS4_INVOKE_START;
+    agentic_token_filter f = {
+        .req = &r,
+        .raw = prefix,
+        .raw_len = strlen(prefix),
+    };
+    TEST_ASSERT(agentic_filter_token(&f, 0,
+                                     " name=\"execute\">", 16));
+    TEST_ASSERT(agentic_filter_token(&f, 0,
+                                     " name=\"skill-", 13));
+    TEST_ASSERT(!agentic_filter_token(&f, 0,
+                                      " name=\"forbidden\">", 19));
+    TEST_ASSERT(!agentic_filter_token(&f, 0,
+                                      " name=\"skill-B\">", 16));
+    request_free(&r);
+}
+
+static void test_agentic_orphan_checkpoint_cleanup(void) {
+    char base[] = "/tmp/ds4-agentic-unit.XXXXXX";
+    TEST_ASSERT(mkdtemp(base) != NULL);
+    size_t stale_n = strlen(base) + sizeof("/agentic.stale");
+    char *stale = xmalloc(stale_n);
+    snprintf(stale, stale_n, "%s/agentic.stale", base);
+    TEST_ASSERT(mkdir(stale, 0700) == 0);
+    size_t checkpoint_n = strlen(stale) + sizeof("/call_test.dsk");
+    char *checkpoint = xmalloc(checkpoint_n);
+    snprintf(checkpoint, checkpoint_n, "%s/call_test.dsk", stale);
+    FILE *fp = fopen(checkpoint, "wb");
+    TEST_ASSERT(fp != NULL);
+    TEST_ASSERT(fwrite("stale", 5, 1, fp) == 1);
+    TEST_ASSERT(fclose(fp) == 0);
+    skill_checkpoint_cleanup_orphans(base);
+    TEST_ASSERT(access(stale, F_OK) != 0 && errno == ENOENT);
+    TEST_ASSERT(rmdir(base) == 0);
+    free(checkpoint);
+    free(stale);
+}
+
 static void ds4_server_unit_tests_run(void) {
+    test_agentic_parser_and_registry_validation();
+    test_agentic_name_filter_rejects_forbidden_capability();
+    test_agentic_orphan_checkpoint_cleanup();
     test_batched_prefill_round_robin();
     test_batched_live_continuation_slot_binding();
     test_request_defaults_use_min_p_filtering();

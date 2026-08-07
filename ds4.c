@@ -37335,6 +37335,30 @@ static bool vocab_token_is_literal_special(ds4_str s) {
     return false;
 }
 
+static size_t vocab_token_text_copy(const ds4_vocab *vocab, int token,
+                                    char *out, size_t cap) {
+    if (!vocab || !out || cap == 0 || token < 0 || token >= vocab->n_vocab) {
+        if (out && cap) out[0] = '\0';
+        return 0;
+    }
+    ds4_str s = vocab->token[token];
+    if ((uint64_t)cap <= s.len) return SIZE_MAX;
+    if (vocab_token_is_literal_special(s)) {
+        memcpy(out, s.ptr, (size_t)s.len);
+        out[s.len] = '\0';
+        return (size_t)s.len;
+    }
+    size_t n = 0;
+    uint64_t pos = 0;
+    while (pos < s.len) {
+        uint32_t cp = utf8_decode_one(s.ptr, s.len, &pos);
+        int b = gpt2_codepoint_to_byte(cp);
+        if (b >= 0) out[n++] = (char)b;
+    }
+    out[n] = '\0';
+    return n;
+}
+
 char *ds4_token_text(ds4_engine *e, int token, size_t *len) {
     ds4_vocab *vocab = &e->vocab;
     if (token < 0 || token >= vocab->n_vocab) {
@@ -48403,6 +48427,9 @@ typedef struct {
     ds4_gpu_tensor *mtp_target_h;
     ds4_gpu_tensor *mtp_target_rows;
     ds4_gpu_tensor *mtp_draft_h[2];
+    ds4_gpu_tensor *mtp_verify_logits;
+    ds4_gpu_tensor *mtp_conv_snapshot[DS4_MAX_LAYER];
+    ds4_gpu_tensor *mtp_recurrent_snapshot[DS4_MAX_LAYER];
     ds4_gpu_tensor *mtp_key_cache;
     ds4_gpu_tensor *mtp_value_cache;
     uint32_t mtp_cache_len;
@@ -48427,12 +48454,15 @@ static void qwen_graph_free(ds4_qwen_gpu_graph *g) {
     DS4_QWEN_FREE(g->mtp_pending_h); DS4_QWEN_FREE(g->mtp_target_h);
     DS4_QWEN_FREE(g->mtp_target_rows);
     DS4_QWEN_FREE(g->mtp_draft_h[0]); DS4_QWEN_FREE(g->mtp_draft_h[1]);
+    DS4_QWEN_FREE(g->mtp_verify_logits);
     DS4_QWEN_FREE(g->mtp_key_cache); DS4_QWEN_FREE(g->mtp_value_cache);
     for (uint32_t il = 0; il < DS4_MAX_LAYER; il++) {
         DS4_QWEN_FREE(g->key_cache[il]);
         DS4_QWEN_FREE(g->value_cache[il]);
         DS4_QWEN_FREE(g->conv_state[il]);
         DS4_QWEN_FREE(g->recurrent_state[il]);
+        DS4_QWEN_FREE(g->mtp_conv_snapshot[il]);
+        DS4_QWEN_FREE(g->mtp_recurrent_snapshot[il]);
     }
 #undef DS4_QWEN_FREE
     memset(g, 0, sizeof(*g));
@@ -48486,6 +48516,18 @@ static bool qwen_graph_enable_mtp(ds4_qwen_gpu_graph *g) {
                        (uint64_t)g->prefill_cap * embd_bytes);
     DS4_QWEN_MTP_ALLOC(g->mtp_draft_h[0], embd_bytes);
     DS4_QWEN_MTP_ALLOC(g->mtp_draft_h[1], embd_bytes);
+    DS4_QWEN_MTP_ALLOC(g->mtp_verify_logits,
+                       16ull * DS4_N_VOCAB * sizeof(float));
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        if (!qwen35_layer_is_recurrent(il)) continue;
+        DS4_QWEN_MTP_ALLOC(g->mtp_conv_snapshot[il],
+            (uint64_t)(DS4_N_GDN_INNER +
+                2u * DS4_N_GDN_GROUP * DS4_N_GDN_STATE) *
+            DS4_N_GDN_CONV * sizeof(float));
+        DS4_QWEN_MTP_ALLOC(g->mtp_recurrent_snapshot[il],
+            (uint64_t)DS4_N_GDN_VALUE_HEAD * DS4_N_GDN_STATE *
+            DS4_N_GDN_STATE * sizeof(float));
+    }
     DS4_QWEN_MTP_ALLOC(g->mtp_key_cache,
         (uint64_t)g->ctx_cap * DS4_N_HEAD_KV * DS4_N_HEAD_DIM * sizeof(float));
     DS4_QWEN_MTP_ALLOC(g->mtp_value_cache,
@@ -48498,6 +48540,34 @@ fail:
 #undef DS4_QWEN_MTP_ALLOC
     fprintf(stderr, "ds4: Qwen3.6 MTP graph allocation failed\n");
     return false;
+}
+
+/* Full-attention KV rows are position-addressed and rejected future rows can
+ * simply be overwritten. Gated DeltaNet state is recurrent, so a batched MTP
+ * verifier snapshots only those compact states. This is about 157 MiB for the
+ * 27B model, far less than copying the complete target cache. */
+static bool qwen_graph_mtp_recurrent_checkpoint(ds4_qwen_gpu_graph *g,
+                                                 bool restore) {
+    if (!g || !g->mtp_ready) return false;
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        if (!qwen35_layer_is_recurrent(il)) continue;
+        ds4_gpu_tensor *conv_dst = restore ? g->conv_state[il]
+                                           : g->mtp_conv_snapshot[il];
+        ds4_gpu_tensor *rec_dst = restore ? g->recurrent_state[il]
+                                          : g->mtp_recurrent_snapshot[il];
+        const ds4_gpu_tensor *conv_src = restore ? g->mtp_conv_snapshot[il]
+                                                 : g->conv_state[il];
+        const ds4_gpu_tensor *rec_src = restore ? g->mtp_recurrent_snapshot[il]
+                                                : g->recurrent_state[il];
+        if (!conv_dst || !rec_dst || !conv_src || !rec_src ||
+            !ds4_gpu_tensor_copy(conv_dst, 0, conv_src, 0,
+                                 ds4_gpu_tensor_bytes(conv_src)) ||
+            !ds4_gpu_tensor_copy(rec_dst, 0, rec_src, 0,
+                                 ds4_gpu_tensor_bytes(rec_src))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool qwen_graph_alloc(ds4_qwen_gpu_graph *g, uint32_t ctx_cap,
@@ -48623,6 +48693,7 @@ struct ds4_session {
     uint64_t qwen_mtp_rejected;
     uint64_t qwen_mtp_fallbacks;
     uint64_t qwen_mtp_committed;
+    uint32_t qwen_mtp_full_streak;
     double qwen_mtp_propose_ms;
     double qwen_mtp_verify_ms;
     double qwen_mtp_total_ms;
@@ -48636,6 +48707,7 @@ struct ds4_session {
     ds4_session_cancel_fn cancel;
     void *cancel_ud;
     uint32_t prefill_cap;
+    uint64_t skill_state_session_id;
     int ctx_size;
     bool checkpoint_valid;
     bool mtp_draft_valid;
@@ -49571,7 +49643,8 @@ static bool qwen_graph_forward_rows(
         const int          *tokens,
         uint32_t            position_start,
         uint32_t            n_tokens,
-        float              *logits_out) {
+        float              *logits_out,
+        int                *row_tops) {
     if (!g || !model || !weights || !tokens || !logits_out || n_tokens == 0 ||
         n_tokens > g->prefill_cap || position_start >= g->ctx_cap ||
         n_tokens > g->ctx_cap - position_start) return false;
@@ -49679,24 +49752,43 @@ static bool qwen_graph_forward_rows(
         }
     }
     ds4_gpu_tensor *last = NULL;
-    if (ok) {
+    if (ok && row_tops) {
+        ok = g->mtp_target_rows && g->mtp_verify_logits &&
+             ds4_gpu_tensor_bytes(g->mtp_verify_logits) >=
+                 (uint64_t)n_tokens * DS4_N_VOCAB * sizeof(float);
+        if (ok) ok = ds4_gpu_rms_norm_weight_rows_tensor(
+            g->mtp_target_rows, g->cur, model->map, model->size,
+            weights->output_norm->abs_offset, DS4_N_EMBD, n_tokens,
+            DS4_RMS_EPS) != 0;
+        if (ok) ok = metal_graph_matmul_plain_tensor(
+            g->mtp_verify_logits, model, weights->output,
+            DS4_N_EMBD, DS4_N_VOCAB, g->mtp_target_rows, n_tokens);
+        if (ok) ok = ds4_gpu_indexer_topk_tensor(
+            g->tokens, g->mtp_verify_logits, DS4_N_VOCAB, n_tokens, 1) != 0;
+        if (ok) ok = ds4_gpu_tensor_copy(
+            g->logits, 0, g->mtp_verify_logits,
+            (uint64_t)(n_tokens - 1u) * DS4_N_VOCAB * sizeof(float),
+            (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
+    } else if (ok) {
         last = ds4_gpu_tensor_view(
             g->cur, (uint64_t)(n_tokens - 1u) * DS4_N_EMBD * sizeof(float),
             (uint64_t)DS4_N_EMBD * sizeof(float));
         ok = last != NULL;
+        if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
+            g->output_norm, last, model->map, model->size,
+            weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
+        if (ok) ok = metal_graph_matmul_plain_tensor(
+            g->logits, model, weights->output, DS4_N_EMBD, DS4_N_VOCAB,
+            g->output_norm, 1);
     }
-    if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
-        g->output_norm, last, model->map, model->size,
-        weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok) ok = metal_graph_matmul_plain_tensor(
-        g->logits, model, weights->output, DS4_N_EMBD, DS4_N_VOCAB,
-        g->output_norm, 1);
     ds4_gpu_tensor_free(last);
     if (ok) ok = ds4_gpu_end_commands() != 0;
     else (void)ds4_gpu_synchronize();
     if (ok) ok = ds4_gpu_tensor_read(
         g->logits, 0, logits_out,
         (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
+    if (ok && row_tops) ok = ds4_gpu_tensor_read(
+        g->tokens, 0, row_tops, (uint64_t)n_tokens * sizeof(int32_t)) != 0;
     if (profile) {
         fprintf(stderr,
                 "ds4: Qwen prefill profile rows=%u recurrent_attn=%.3f ms "
@@ -49739,10 +49831,11 @@ static bool qwen_graph_mtp_step(
         const ds4_gpu_tensor     *hidden_in,
         ds4_gpu_tensor           *hidden_out,
         float                    *logits_out,
+        int                      *top_out,
         bool                      cache_only) {
     if (!g || !g->mtp_ready || !model || !weights || !hidden_in ||
         token >= DS4_N_VOCAB || position >= g->ctx_cap ||
-        (!cache_only && (!hidden_out || !logits_out))) return false;
+        (!cache_only && (!hidden_out || (!logits_out && !top_out)))) return false;
 
     const ds4_layer_weights *l = &weights->block;
     bool ok = ds4_gpu_begin_commands() != 0;
@@ -49810,6 +49903,8 @@ static bool qwen_graph_mtp_step(
     if (ok && !cache_only) ok = metal_graph_matmul_plain_tensor(
         g->logits, model, weights->output,
         DS4_N_EMBD, DS4_N_VOCAB, g->output_norm, 1);
+    if (ok && !cache_only && top_out) ok = ds4_gpu_argmax_tensor(
+        g->tokens, g->logits, DS4_N_VOCAB) != 0;
     if (ok) ok = ds4_gpu_end_commands() != 0;
     else (void)ds4_gpu_synchronize();
     if (!ok) return false;
@@ -49818,8 +49913,11 @@ static bool qwen_graph_mtp_step(
     if (cache_only) return true;
     if (!ds4_gpu_tensor_copy(hidden_out, 0, g->output_norm, 0,
                              (uint64_t)DS4_N_EMBD * sizeof(float))) return false;
-    return ds4_gpu_tensor_read(g->logits, 0, logits_out,
-               (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
+    if (top_out && !ds4_gpu_tensor_read(
+            g->tokens, 0, top_out, sizeof(int32_t))) return false;
+    return !logits_out || ds4_gpu_tensor_read(
+        g->logits, 0, logits_out,
+        (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
 }
 
 /* Catch up one committed target token. The target row is copied before the
@@ -49837,7 +49935,7 @@ static bool qwen_graph_mtp_catchup(
         return false;
     }
     if (!qwen_graph_mtp_step(g, model, weights, token, position,
-                             g->mtp_pending_h, NULL, NULL, true)) return false;
+                             g->mtp_pending_h, NULL, NULL, NULL, true)) return false;
     return ds4_gpu_tensor_copy(g->mtp_pending_h, 0,
                                g->mtp_target_h, 0, bytes) != 0;
 }
@@ -49850,7 +49948,7 @@ static bool qwen_graph_mtp_commit_saved_target(
         uint32_t                     position) {
     const uint64_t bytes = (uint64_t)DS4_N_EMBD * sizeof(float);
     if (!qwen_graph_mtp_step(g, model, weights, token, position,
-                             g->mtp_pending_h, NULL, NULL, true)) return false;
+                             g->mtp_pending_h, NULL, NULL, NULL, true)) return false;
     return ds4_gpu_tensor_copy(g->mtp_pending_h, 0,
                                g->mtp_target_h, 0, bytes) != 0;
 }
@@ -49891,7 +49989,7 @@ static bool qwen_graph_mtp_catchup_rows(
         if (!prev) return false;
         ok = qwen_graph_mtp_step(g, mtp_model, mtp_weights,
                                   (uint32_t)tokens[i], position_start + i,
-                                  prev, NULL, NULL, true);
+                                  prev, NULL, NULL, NULL, true);
         ds4_gpu_tensor_free(prev);
         if (!ok) return false;
     }
@@ -52021,6 +52119,336 @@ void ds4_session_snapshot_free(ds4_session_snapshot *snap) {
     if (!snap) return;
     free(snap->ptr);
     memset(snap, 0, sizeof(*snap));
+}
+
+#define DS4_SKILL_STATE_MAGIC UINT32_C(0x4c4b5344) /* "DSKL" */
+#define DS4_SKILL_STATE_VERSION UINT32_C(3)
+#define DS4_SKILL_STATE_HEADER_U32 20u
+#define DS4_SKILL_STATE_FLAG_MTP UINT32_C(1)
+#define DS4_SKILL_STATE_FLAG_MTP_DRAFT UINT32_C(2)
+
+static bool ds4_session_cancelled(ds4_session *s);
+
+static uint64_t skill_state_hash_bytes(uint64_t h, const void *ptr, size_t len) {
+    const uint8_t *p = ptr;
+    if (h == 0) h = UINT64_C(1469598103934665603);
+    for (size_t i = 0; i < len; i++) {
+        h ^= p[i];
+        h *= UINT64_C(1099511628211);
+    }
+    return h;
+}
+
+static uint64_t skill_state_token_hash(const ds4_tokens *tokens) {
+    uint64_t h = 0;
+    if (!tokens) return h;
+    for (int i = 0; i < tokens->len; i++) {
+        uint32_t v = (uint32_t)tokens->v[i];
+        h = skill_state_hash_bytes(h, &v, sizeof(v));
+    }
+    return h;
+}
+
+uint64_t ds4_session_skill_state_bytes(ds4_session *s) {
+#ifdef DS4_NO_GPU
+    (void)s;
+    return 0;
+#else
+    if (!s || !ds4_session_is_qwen(s) || !s->qwen_graph_ready ||
+        !s->checkpoint_valid) return 0;
+    uint64_t bytes = (uint64_t)DS4_SKILL_STATE_HEADER_U32 * sizeof(uint32_t);
+    ds4_qwen_gpu_graph *g = &s->qwen_graph;
+    bytes += (uint64_t)DS4_N_VOCAB * sizeof(float);
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        if (!qwen35_layer_is_recurrent(il)) continue;
+        bytes += ds4_gpu_tensor_bytes(g->conv_state[il]);
+        bytes += ds4_gpu_tensor_bytes(g->recurrent_state[il]);
+    }
+    if (g->mtp_ready) {
+        bytes += ds4_gpu_tensor_bytes(g->mtp_pending_h);
+        bytes += (uint64_t)DS4_N_VOCAB * sizeof(float);
+    }
+    return bytes;
+#endif
+}
+
+int ds4_session_save_skill_state(ds4_session *s, FILE *fp,
+                                 uint64_t *written_bytes,
+                                 ds4_skill_state_metrics *metrics,
+                                 char *err, size_t errlen) {
+    if (written_bytes) *written_bytes = 0;
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
+#ifdef DS4_NO_GPU
+    (void)s; (void)fp; (void)metrics;
+    payload_set_err(err, errlen, "skill checkpoints require the Qwen GPU backend");
+    return 1;
+#else
+    if (!s || !fp || !ds4_session_is_qwen(s) || !s->qwen_graph_ready ||
+        !s->checkpoint_valid) {
+        payload_set_err(err, errlen, "invalid Qwen skill checkpoint save");
+        return 1;
+    }
+    ds4_qwen_gpu_graph *g = &s->qwen_graph;
+    uint64_t total = ds4_session_skill_state_bytes(s);
+    const uint64_t header_bytes =
+        (uint64_t)DS4_SKILL_STATE_HEADER_U32 * sizeof(uint32_t);
+    if (total < header_bytes || total - header_bytes > SIZE_MAX) {
+        payload_set_err(err, errlen, "Qwen skill checkpoint is too large");
+        return 1;
+    }
+    size_t payload_bytes = (size_t)(total - header_bytes);
+    uint8_t *payload = xmalloc(payload_bytes ? payload_bytes : 1);
+    size_t off = 0;
+    const double stage_t0 = now_sec();
+    if (ds4_session_cancelled(s)) {
+        free(payload);
+        payload_set_err(err, errlen, "Qwen skill checkpoint save cancelled");
+        return DS4_SESSION_SYNC_INTERRUPTED;
+    }
+    const uint64_t logits_bytes = (uint64_t)DS4_N_VOCAB * sizeof(float);
+    if (!s->logits || logits_bytes > payload_bytes) {
+        free(payload);
+        payload_set_err(err, errlen, "missing Qwen frontier logits");
+        return 1;
+    }
+    memcpy(payload, s->logits, (size_t)logits_bytes);
+    off += (size_t)logits_bytes;
+    uint32_t recurrent = 0;
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        if (!qwen35_layer_is_recurrent(il)) continue;
+        ds4_gpu_tensor *parts[2] = {g->conv_state[il], g->recurrent_state[il]};
+        for (int j = 0; j < 2; j++) {
+            uint64_t n = ds4_gpu_tensor_bytes(parts[j]);
+            if (!parts[j] || off > payload_bytes ||
+                n > payload_bytes - off ||
+                !ds4_gpu_tensor_read(parts[j], 0, payload + off, n)) {
+                free(payload);
+                payload_set_err(err, errlen, "failed to read Qwen recurrent skill state");
+                return 1;
+            }
+            off += (size_t)n;
+        }
+        recurrent++;
+        if (ds4_session_cancelled(s)) {
+            free(payload);
+            payload_set_err(err, errlen, "Qwen skill checkpoint save cancelled");
+            return DS4_SESSION_SYNC_INTERRUPTED;
+        }
+    }
+    uint32_t flags = 0;
+    if (g->mtp_ready) {
+        uint64_t n = ds4_gpu_tensor_bytes(g->mtp_pending_h);
+        if (!g->mtp_pending_h || off > payload_bytes ||
+            n > payload_bytes - off ||
+            !ds4_gpu_tensor_read(g->mtp_pending_h, 0, payload + off, n)) {
+            free(payload);
+            payload_set_err(err, errlen, "failed to read Qwen MTP skill frontier");
+            return 1;
+        }
+        off += (size_t)n;
+        if (!s->mtp_logits || off > payload_bytes ||
+            logits_bytes > payload_bytes - off) {
+            free(payload);
+            payload_set_err(err, errlen, "missing Qwen MTP frontier logits");
+            return 1;
+        }
+        memcpy(payload + off, s->mtp_logits, (size_t)logits_bytes);
+        off += (size_t)logits_bytes;
+        flags |= DS4_SKILL_STATE_FLAG_MTP;
+        if (s->mtp_draft_valid) flags |= DS4_SKILL_STATE_FLAG_MTP_DRAFT;
+    }
+    if (off != payload_bytes) {
+        free(payload);
+        payload_set_err(err, errlen, "Qwen skill checkpoint size mismatch");
+        return 1;
+    }
+    uint64_t checksum = skill_state_hash_bytes(0, payload, payload_bytes);
+    uint64_t token_hash = skill_state_token_hash(&s->checkpoint);
+    const double stage_ms = (now_sec() - stage_t0) * 1000.0;
+    uint32_t h[DS4_SKILL_STATE_HEADER_U32] = {
+        DS4_SKILL_STATE_MAGIC,
+        DS4_SKILL_STATE_VERSION,
+        (uint32_t)ds4_engine_model_id(s->engine),
+        DS4_N_LAYER,
+        (uint32_t)s->checkpoint.len,
+        recurrent,
+        flags,
+        (uint32_t)payload_bytes,
+        (uint32_t)((uint64_t)payload_bytes >> 32),
+        (uint32_t)checksum,
+        (uint32_t)(checksum >> 32),
+        (uint32_t)token_hash,
+        (uint32_t)(token_hash >> 32),
+        (uint32_t)s->ctx_size,
+        (uint32_t)s->skill_state_session_id,
+        (uint32_t)(s->skill_state_session_id >> 32),
+        (uint32_t)s->engine->model.size,
+        (uint32_t)(s->engine->model.size >> 32),
+        (uint32_t)s->mtp_draft_token,
+        g->mtp_cache_len,
+    };
+    const double write_t0 = now_sec();
+    int rc = 0;
+    for (uint32_t i = 0; i < DS4_SKILL_STATE_HEADER_U32 && rc == 0; i++) {
+        rc = payload_write_u32(fp, h[i], err, errlen);
+    }
+    if (rc == 0) rc = payload_write_bytes(fp, payload, payload_bytes, err, errlen);
+    free(payload);
+    if (rc == 0) {
+        if (written_bytes) *written_bytes = total;
+        if (metrics) {
+            metrics->checkpoint_bytes = total;
+            metrics->stage_ms = stage_ms;
+            metrics->write_ms = (now_sec() - write_t0) * 1000.0;
+        }
+    }
+    return rc;
+#endif
+}
+
+int ds4_session_load_skill_state(ds4_session *s, FILE *fp,
+                                 const ds4_tokens *frontier,
+                                 ds4_skill_state_metrics *metrics,
+                                 char *err, size_t errlen) {
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
+#ifdef DS4_NO_GPU
+    (void)s; (void)fp; (void)frontier; (void)metrics;
+    payload_set_err(err, errlen, "skill checkpoints require the Qwen GPU backend");
+    return 1;
+#else
+    if (!s || !fp || !frontier || frontier->len <= 0 ||
+        !ds4_session_is_qwen(s) || !s->qwen_graph_ready) {
+        payload_set_err(err, errlen, "invalid Qwen skill checkpoint restore");
+        return 1;
+    }
+    const double read_t0 = now_sec();
+    uint32_t h[DS4_SKILL_STATE_HEADER_U32];
+    for (uint32_t i = 0; i < DS4_SKILL_STATE_HEADER_U32; i++) {
+        if (payload_read_u32(fp, &h[i], NULL, err, errlen) != 0) return 1;
+    }
+    uint64_t payload_bytes = (uint64_t)h[7] | ((uint64_t)h[8] << 32);
+    uint64_t checksum = (uint64_t)h[9] | ((uint64_t)h[10] << 32);
+    uint64_t token_hash = (uint64_t)h[11] | ((uint64_t)h[12] << 32);
+    uint64_t session_id = (uint64_t)h[14] | ((uint64_t)h[15] << 32);
+    uint64_t model_bytes = (uint64_t)h[16] | ((uint64_t)h[17] << 32);
+    uint32_t want_recurrent = 0;
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        if (qwen35_layer_is_recurrent(il)) want_recurrent++;
+    }
+    if (h[0] != DS4_SKILL_STATE_MAGIC || h[1] != DS4_SKILL_STATE_VERSION ||
+        h[2] != (uint32_t)ds4_engine_model_id(s->engine) ||
+        h[3] != DS4_N_LAYER || h[4] != (uint32_t)frontier->len ||
+        h[5] != want_recurrent || h[13] != (uint32_t)s->ctx_size ||
+        session_id != s->skill_state_session_id ||
+        model_bytes != s->engine->model.size ||
+        token_hash != skill_state_token_hash(frontier) ||
+        payload_bytes > SIZE_MAX) {
+        payload_set_err(err, errlen, "incompatible Qwen skill checkpoint");
+        return 1;
+    }
+    const bool saved_mtp = (h[6] & DS4_SKILL_STATE_FLAG_MTP) != 0;
+    if ((h[6] & ~(DS4_SKILL_STATE_FLAG_MTP |
+                  DS4_SKILL_STATE_FLAG_MTP_DRAFT)) != 0 ||
+        ((h[6] & DS4_SKILL_STATE_FLAG_MTP_DRAFT) && !saved_mtp) ||
+        (saved_mtp && h[19] > (uint32_t)frontier->len) ||
+        (!saved_mtp && h[19] != 0)) {
+        payload_set_err(err, errlen, "unsupported Qwen skill checkpoint flags");
+        return 1;
+    }
+    ds4_qwen_gpu_graph *g = &s->qwen_graph;
+    uint64_t expected_payload = (uint64_t)DS4_N_VOCAB * sizeof(float);
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        if (!qwen35_layer_is_recurrent(il)) continue;
+        expected_payload += ds4_gpu_tensor_bytes(g->conv_state[il]);
+        expected_payload += ds4_gpu_tensor_bytes(g->recurrent_state[il]);
+    }
+    if (saved_mtp) {
+        if (!g->mtp_ready || !g->mtp_pending_h || !s->mtp_logits) {
+            payload_set_err(err, errlen, "Qwen MTP checkpoint requires MTP state");
+            return 1;
+        }
+        expected_payload += ds4_gpu_tensor_bytes(g->mtp_pending_h);
+        expected_payload += (uint64_t)DS4_N_VOCAB * sizeof(float);
+    }
+    if (payload_bytes != expected_payload) {
+        payload_set_err(err, errlen, "incompatible Qwen skill checkpoint payload size");
+        return 1;
+    }
+    uint8_t *payload = xmalloc(payload_bytes ? (size_t)payload_bytes : 1);
+    if (payload_read_bytes(fp, payload, payload_bytes, NULL, err, errlen) != 0) {
+        free(payload);
+        return 1;
+    }
+    if (fgetc(fp) != EOF ||
+        skill_state_hash_bytes(0, payload, (size_t)payload_bytes) != checksum) {
+        free(payload);
+        payload_set_err(err, errlen, "corrupt or trailing Qwen skill checkpoint data");
+        return 1;
+    }
+    if (metrics) {
+        metrics->checkpoint_bytes =
+            (uint64_t)DS4_SKILL_STATE_HEADER_U32 * sizeof(uint32_t) +
+            payload_bytes;
+        metrics->read_ms = (now_sec() - read_t0) * 1000.0;
+    }
+    if (ds4_session_cancelled(s)) {
+        free(payload);
+        payload_set_err(err, errlen, "Qwen skill checkpoint restore cancelled");
+        return DS4_SESSION_SYNC_INTERRUPTED;
+    }
+    const double restore_t0 = now_sec();
+    const uint64_t logits_bytes = (uint64_t)DS4_N_VOCAB * sizeof(float);
+    size_t off = (size_t)logits_bytes;
+    size_t mtp_logits_off = 0;
+    bool ok = true;
+    for (uint32_t il = 0; il < DS4_N_LAYER && ok; il++) {
+        if (!qwen35_layer_is_recurrent(il)) continue;
+        ds4_gpu_tensor *parts[2] = {g->conv_state[il], g->recurrent_state[il]};
+        for (int j = 0; j < 2 && ok; j++) {
+            uint64_t n = ds4_gpu_tensor_bytes(parts[j]);
+            ok = parts[j] && off <= payload_bytes &&
+                 n <= payload_bytes - off &&
+                 ds4_gpu_tensor_write(parts[j], 0, payload + off, n) != 0;
+            off += ok ? (size_t)n : 0;
+        }
+    }
+    if (ok && saved_mtp) {
+        uint64_t n = ds4_gpu_tensor_bytes(g->mtp_pending_h);
+        ok = g->mtp_pending_h && off <= payload_bytes &&
+             n <= payload_bytes - off &&
+             ds4_gpu_tensor_write(g->mtp_pending_h, 0, payload + off, n) != 0;
+        if (ok) off += (size_t)n;
+        if (ok) {
+            ok = off <= payload_bytes && logits_bytes <= payload_bytes - off;
+            if (ok) {
+                mtp_logits_off = off;
+                off += (size_t)logits_bytes;
+            }
+        }
+    }
+    if (ok) ok = off == payload_bytes && ds4_gpu_synchronize() != 0;
+    if (!ok) {
+        free(payload);
+        ds4_session_invalidate(s);
+        payload_set_err(err, errlen, "failed to restore Qwen skill checkpoint tensors");
+        return 1;
+    }
+    ds4_tokens_copy(&s->checkpoint, frontier);
+    memcpy(s->logits, payload, (size_t)logits_bytes);
+    if (saved_mtp) {
+        memcpy(s->mtp_logits, payload + mtp_logits_off, (size_t)logits_bytes);
+    }
+    free(payload);
+    s->checkpoint_valid = true;
+    s->mtp_draft_token = (int)h[18];
+    s->mtp_draft_valid =
+        (h[6] & DS4_SKILL_STATE_FLAG_MTP_DRAFT) != 0;
+    ds4_session_dspark_capture_invalidate(s);
+    g->mtp_ready = saved_mtp;
+    g->mtp_cache_len = saved_mtp ? h[19] : 0;
+    if (metrics) metrics->restore_ms = (now_sec() - restore_t0) * 1000.0;
+    return 0;
+#endif
 }
 
 void ds4_engine_dump_tokens(ds4_engine *e, const ds4_tokens *tokens) {
@@ -57432,6 +57860,7 @@ static int ds4_engine_open_internal(ds4_engine **out,
             }
             qwen_mtp_validate_target_tokenizer(&e->model, &e->mtp_model);
             qwen_mtp_weights_bind(&e->qwen_mtp_weights, &e->mtp_model);
+            if (e->mtp_draft_tokens <= 1) e->mtp_draft_tokens = 2;
             e->mtp_ready = true;
             fprintf(stderr,
                     "ds4: Qwen35 NextN MTP support model loaded: %s "
@@ -58338,6 +58767,24 @@ static int ds4_session_tp_register(ds4_session *s) {
     return 1;
 }
 
+static uint64_t ds4_skill_session_id_new(const ds4_session *s) {
+    static uint64_t serial;
+    uint64_t random_id = 0;
+    FILE *random_fp = fopen("/dev/urandom", "rb");
+    if (random_fp) {
+        if (fread(&random_id, sizeof(random_id), 1, random_fp) != 1) {
+            random_id = 0;
+        }
+        fclose(random_fp);
+    }
+    uint64_t n = __sync_add_and_fetch(&serial, UINT64_C(1));
+    uint64_t t = (uint64_t)(now_sec() * 1000000000.0);
+    uint64_t p = (uint64_t)(uintptr_t)s;
+    uint64_t id = random_id ^ t ^ (p << 17) ^ (p >> 11) ^
+                  (n * UINT64_C(0x9e3779b97f4a7c15));
+    return id ? id : n;
+}
+
 int ds4_session_create(ds4_session **out, ds4_engine *e, int ctx_size) {
     if (!out || !e || ctx_size <= 0) return 1;
     if (e->backend == DS4_BACKEND_CPU) {
@@ -58376,6 +58823,7 @@ int ds4_session_create(ds4_session **out, ds4_engine *e, int ctx_size) {
     ds4_session *s = xcalloc(1, sizeof(*s));
     s->engine = e;
     s->ctx_size = ctx_size;
+    s->skill_state_session_id = ds4_skill_session_id_new(s);
     if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_QWEN35) {
         /* RTX 3090 profiling mirrors the eval-batch split used by the local
          * llama.cpp/LM Studio runtime: 2048 rows amortize the Q4_K expansion
@@ -59889,7 +60337,7 @@ static int ds4_session_sync_internal(ds4_session *s, const ds4_tokens *prompt, c
                 chunk_ok = qwen_graph_forward_rows(
                     &s->qwen_graph, &e->model, &e->weights,
                     prompt->v + chunk_start, (uint32_t)chunk_start,
-                    (uint32_t)span, s->logits);
+                    (uint32_t)span, s->logits, NULL);
                 if (chunk_ok && s->qwen_graph.mtp_ready &&
                     e->support_kind == DS4_SUPPORT_QWEN35_MTP &&
                     !qwen_graph_mtp_catchup_rows(
@@ -60755,6 +61203,35 @@ int ds4_sample_logits(const float *logits, int n_vocab, float temperature,
 int ds4_session_sample(ds4_session *s, float temperature, int top_k, float top_p, float min_p, uint64_t *rng) {
     return sample_top_p_min_p(s->logits, DS4_N_VOCAB, temperature, top_k,
                               top_p, min_p, rng, s->sample_probs);
+}
+
+int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
+                                float top_p, float min_p, uint64_t *rng,
+                                ds4_token_filter_fn filter, void *filter_ud) {
+    if (!s || !s->engine || !filter) {
+        return ds4_session_sample(s, temperature, top_k, top_p, min_p, rng);
+    }
+    ds4_vocab *vocab = &s->engine->vocab;
+    size_t max_piece = 0;
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        if (vocab->token[i].len > max_piece) max_piece = (size_t)vocab->token[i].len;
+    }
+    char *piece = xmalloc(max_piece + 1);
+    float *masked = xmalloc((size_t)vocab->n_vocab * sizeof(masked[0]));
+    int allowed = 0;
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        size_t n = vocab_token_text_copy(vocab, i, piece, max_piece + 1);
+        bool keep = n != SIZE_MAX && filter(filter_ud, i, piece, n);
+        masked[i] = keep ? s->logits[i] : DS4_NEG_INF;
+        if (keep && isfinite(masked[i])) allowed++;
+    }
+    int token = allowed ?
+        sample_top_p_min_p(masked, (uint32_t)vocab->n_vocab,
+                           temperature, top_k, top_p, min_p,
+                           rng, s->sample_probs) : -1;
+    free(masked);
+    free(piece);
+    return token;
 }
 
 int ds4_session_top_logprobs(ds4_session *s, ds4_token_score *out, int k) {
@@ -65956,6 +66433,11 @@ static int ds4_session_qwen_mtp_spec_cycle(
 
     int draft_cap = e->mtp_draft_tokens;
     if (draft_cap > 16) draft_cap = 16;
+    /* Treat --mtp-draft as a ceiling. Depth two is the measured sweet spot
+     * for short, mixed-confidence text on GA102; only widen after sustained
+     * full acceptance, then fall back immediately on a miss. */
+    if (draft_cap > 2 && s->qwen_mtp_full_streak < 8u) draft_cap = 2;
+    if (draft_cap > 4) draft_cap = 4;
     if (draft_cap > max_tokens - n_accept) draft_cap = max_tokens - n_accept;
     if (draft_cap > accepted_cap - n_accept) draft_cap = accepted_cap - n_accept;
     const int room = s->ctx_size - s->checkpoint.len;
@@ -65974,13 +66456,14 @@ static int ds4_session_qwen_mtp_spec_cycle(
 
     int drafts[16];
     int draft_n = 0;
+    int draft_top = -1;
     const double propose_t0 = now_sec();
     bool proposal_ok = qwen_graph_mtp_step(
         g, &e->mtp_model, &e->qwen_mtp_weights,
         (uint32_t)first_token, (uint32_t)start,
-        g->mtp_pending_h, g->mtp_draft_h[0], s->mtp_logits, false);
+        g->mtp_pending_h, g->mtp_draft_h[0], NULL, &draft_top, false);
     if (proposal_ok) {
-        drafts[draft_n++] = sample_argmax(s->mtp_logits, DS4_N_VOCAB);
+        drafts[draft_n++] = draft_top;
     }
     while (proposal_ok && draft_n < draft_cap &&
            drafts[draft_n - 1] != eos_token) {
@@ -65990,9 +66473,9 @@ static int ds4_session_qwen_mtp_spec_cycle(
             g, &e->mtp_model, &e->qwen_mtp_weights,
             (uint32_t)drafts[draft_n - 1],
             (uint32_t)(start + draft_n),
-            prev, next, s->mtp_logits, false);
+            prev, next, NULL, &draft_top, false);
         if (proposal_ok) {
-            drafts[draft_n++] = sample_argmax(s->mtp_logits, DS4_N_VOCAB);
+            drafts[draft_n++] = draft_top;
         }
     }
     s->qwen_mtp_propose_ms += (now_sec() - propose_t0) * 1000.0;
@@ -66026,39 +66509,105 @@ static int ds4_session_qwen_mtp_spec_cycle(
     s->qwen_mtp_proposed += (uint64_t)draft_n;
     int accepted_drafts = 0;
     const double verify_t0 = now_sec();
-    for (int i = 0; i < draft_n && n_accept < accepted_cap; i++) {
-        const int target_top = sample_argmax(s->logits, DS4_N_VOCAB);
-        s->qwen_mtp_verified++;
-        if (target_top != drafts[i]) break;
+    bool support_caught_up = false;
+    const uint32_t draft_start = (uint32_t)s->checkpoint.len;
+    int row_tops[16];
 
-        const uint32_t pos = (uint32_t)s->checkpoint.len;
-        if (pos >= g->ctx_cap ||
-            !qwen_graph_forward_token(g, &e->model, &e->weights,
-                                      (uint32_t)drafts[i], pos, s->logits)) {
-            snprintf(err, errlen, "CUDA Qwen verifier failed at position %u", pos);
+    /* The current target logits verify draft[0] without a forward pass. Only
+     * enter the target batch when that token can be committed. */
+    s->qwen_mtp_verified++;
+    if (sample_argmax(s->logits, DS4_N_VOCAB) == drafts[0]) {
+        bool target_done = false;
+        const bool snap_ok = qwen_graph_mtp_recurrent_checkpoint(g, false);
+        if (snap_ok && qwen_graph_forward_rows(
+                g, &e->model, &e->weights, drafts, draft_start,
+                (uint32_t)draft_n, s->logits, row_tops)) {
+            accepted_drafts = 1;
+            for (int i = 1; i < draft_n; i++) {
+                s->qwen_mtp_verified++;
+                if (row_tops[i - 1] != drafts[i]) break;
+                accepted_drafts++;
+            }
+
+            if (accepted_drafts == draft_n) {
+                target_done = true;
+            } else if (qwen_graph_mtp_recurrent_checkpoint(g, true) &&
+                       qwen_graph_forward_rows(
+                           g, &e->model, &e->weights, drafts, draft_start,
+                           (uint32_t)accepted_drafts, s->logits, NULL)) {
+                /* Full-attention rows after the prefix are harmless garbage;
+                 * recurrent state was restored before replaying the prefix. */
+                target_done = true;
+            }
+        } else if (snap_ok &&
+                   !qwen_graph_mtp_recurrent_checkpoint(g, true)) {
+            snprintf(err, errlen, "CUDA Qwen verifier rollback failed");
             ds4_session_invalidate(s);
             return -1;
         }
-        if (g->mtp_ready &&
-            !qwen_graph_mtp_catchup(g, &e->mtp_model,
-                                    &e->qwen_mtp_weights,
-                                    (uint32_t)drafts[i], pos)) {
+
+        if (!target_done) {
+            if (snap_ok && !qwen_graph_mtp_recurrent_checkpoint(g, true)) {
+                snprintf(err, errlen, "CUDA Qwen verifier rollback failed");
+                ds4_session_invalidate(s);
+                return -1;
+            }
+            /* Allocation/backend failures retain the exact one-token path.
+             * This is a safety fallback, not the production fast path. */
+            accepted_drafts = 0;
+            for (int i = 0; i < draft_n; i++) {
+                const int target_top = sample_argmax(s->logits, DS4_N_VOCAB);
+                if (i != 0) s->qwen_mtp_verified++;
+                if (target_top != drafts[i]) break;
+                const uint32_t pos = draft_start + (uint32_t)i;
+                if (!qwen_graph_forward_token(
+                        g, &e->model, &e->weights,
+                        (uint32_t)drafts[i], pos, s->logits)) {
+                    snprintf(err, errlen,
+                             "CUDA Qwen verifier failed at position %u", pos);
+                    ds4_session_invalidate(s);
+                    return -1;
+                }
+                if (g->mtp_ready && !qwen_graph_mtp_catchup(
+                        g, &e->mtp_model, &e->qwen_mtp_weights,
+                        (uint32_t)drafts[i], pos)) {
+                    g->mtp_ready = false;
+                    s->qwen_mtp_fallbacks++;
+                }
+                accepted_drafts++;
+                if (drafts[i] == eos_token) break;
+            }
+            support_caught_up = true;
+        }
+
+        if (!support_caught_up && accepted_drafts > 0 && g->mtp_ready &&
+            !qwen_graph_mtp_catchup_rows(
+                g, &e->model, &e->weights,
+                &e->mtp_model, &e->qwen_mtp_weights,
+                drafts, draft_start, (uint32_t)accepted_drafts)) {
             fprintf(stderr,
-                    "ds4: Qwen MTP accepted-prefix catch-up failed at %u; "
-                    "future cycles will use target-only decode\n", pos);
+                    "ds4: Qwen MTP accepted-prefix row catch-up failed at %u; "
+                    "future cycles will use target-only decode\n", draft_start);
             g->mtp_ready = false;
             s->qwen_mtp_fallbacks++;
         }
+    }
+
+    for (int i = 0; i < accepted_drafts && n_accept < accepted_cap; i++) {
         token_vec_push(&s->checkpoint, drafts[i]);
         accepted[n_accept++] = drafts[i];
-        accepted_drafts++;
         if (drafts[i] == eos_token) break;
     }
     s->qwen_mtp_verify_ms += (now_sec() - verify_t0) * 1000.0;
     s->qwen_mtp_accepted += (uint64_t)accepted_drafts;
-    if (accepted_drafts == draft_n) s->qwen_mtp_full++;
-    else if (accepted_drafts == 0) s->qwen_mtp_rejected++;
-    else s->qwen_mtp_partial++;
+    if (accepted_drafts == draft_n) {
+        s->qwen_mtp_full++;
+        if (s->qwen_mtp_full_streak != UINT32_MAX) s->qwen_mtp_full_streak++;
+    } else {
+        s->qwen_mtp_full_streak = 0;
+        if (accepted_drafts == 0) s->qwen_mtp_rejected++;
+        else s->qwen_mtp_partial++;
+    }
     if (g->mtp_ready) g->mtp_cache_len = (uint32_t)s->checkpoint.len;
     s->checkpoint_valid = true;
     s->qwen_mtp_committed += (uint64_t)n_accept;

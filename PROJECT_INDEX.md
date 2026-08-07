@@ -168,8 +168,15 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   rollback e confronto CPU obbligatoriamente finale.
 - `docs/qwen36-mtp-design.md` — progetto di supporto Qwen3.6 MTP: audit dei
   repository LM Studio/Unsloth/llama.cpp e del GGUF NextN, semantica del kernel,
-  allineamento token-hidden, stato KV, ciclo speculativo, fallback e gate di test
-  per il target CUDA Q4_K_S.
+  allineamento token-hidden, modello prestazionale, verifier target microbatch,
+  rollback Gated DeltaNet, scheduling adattivo, fallback e gate di test per il
+  target CUDA Q4_K_S/Q4_K_M.
+- `docs/agent-api.md` — contratto dell'estensione Responses `agentic`: registry
+  statico, capability tool/skill disgiunte, checkpoint SSD gerarchici e
+  semantica di `return` senza full prefill del parent.
+- `docs/agentic-checkpoint-validation-2026-08-07.md` — gate CUDA Q4_K_S dei
+  task 10–11: equivalenza bit-exact, casi lunghi 10k, rollback MTP, metriche
+  SSD/GPU e copertura della suite HTTP agentica.
 - `docs/hardware/` — inventario della macchina RTX 3090 e note di riferimento
   su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
@@ -182,7 +189,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `ds4_cli.c` — eseguibile `ds4`: parsing opzioni, modalità one-shot e REPL,
   prompt, generazione, sampling, perplexity e dump diagnostici.
 - `ds4_server.c` — eseguibile `ds4-server`: API HTTP compatibili, code, worker,
-  session batching, streaming, tool-call mapping e policy della KV su disco.
+  session batching, streaming, tool-call mapping e policy della KV su disco;
+  per Responses gestisce inoltre il namespace `agentic`, il masking DSML dei
+  nomi e le frame gerarchiche delle skill.
 - `ds4_agent.c` — eseguibile `ds4-agent`: TUI, transcript, sessioni persistenti,
   ciclo tool, file/shell/web tools e orchestrazione della generazione.
 - `ds4_bench.c` — benchmark di prefill/decode a diverse frontiere di contesto,
@@ -195,14 +204,16 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 ### API, modello e orchestrazione centrale
 
 - `ds4.h` — API pubblica stretta: opzioni engine, token, sessioni, sync/eval,
-  logits, sampling, batching, snapshot e callback.
+  logits, sampling filtrato, batching, snapshot, checkpoint ricorrenti Qwen
+  per skill e callback.
 - `ds4.c` — nucleo verticale del motore: parser GGUF mmap-backed, metadata,
   shape dei modelli, tensor binding, tokenizer, CPU reference, costruzione e
   scheduling del grafo, sessioni, prefill/decode, KV, logits, MTP e payload
   degli snapshot. Include il percorso specializzato Qwen `qwen35` text-only:
   validazione del 27B Q4_K_M e Q4_K_S, tokenizer/template Qwen e sessione ibrida
-  full-attention/Gated DeltaNet CUDA e prefill layer-major a chunk; checkpoint
-  e fork Qwen restano esclusi.
+  full-attention/Gated DeltaNet CUDA e prefill layer-major a chunk. Espone il
+  salvataggio/ripristino session-scoped su SSD dello stato ricorrente Qwen per
+  le frontiere delle skill; snapshot generali e fork Qwen restano esclusi.
 - `ds4_gpu.h` — interfaccia tensoriale condivisa fra il grafo C e i backend
   accelerati; descrive tensori opachi, operazioni, attention e batching,
   incluse le due primitive interne Qwen per full-attention gated e Gated
@@ -238,8 +249,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   custom, quantizzazione, attention, MoE, KV, batching e supporto multi-GPU;
   contiene inoltre embedding/matvec Q4_K/Q5_K/Q6_K, RoPE parziale, attention gated
   e aggiornamento ricorrente Qwen task 6, più i kernel multi-riga causali e i
-  GEMM di prefill Qwen. Il percorso MTP Qwen aggiunge embedding/matvec Q4_0 e
-  range device distinti per target e sidecar. I Qwen single-GPU che entrano in VRAM sono copiati per
+  GEMM di prefill Qwen. Il percorso MTP Qwen aggiunge embedding/matvec Q4_0,
+  range device distinti per target e sidecar, kernel warp-8 Q4_0 del drafter e
+  Q4_K/Q5_K/Q6_K microbatch del verifier. I Qwen single-GPU che entrano in VRAM sono copiati per
   default sul device; `DS4_CUDA_NO_MODEL_COPY=1` conserva il percorso host-map
   diagnostico.
 - `ds4_iq2_tables_cuda.inc` — tabelle costanti per dequantizzazione/calcolo IQ2
@@ -377,6 +389,15 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/glm_long_context_smoke.sh` — integrazione GLM su prompt lunghi.
 - `tests/test_server_batching.py` — concorrenza e batching osservati tramite
   API server.
+- `tests/test_agentic_api.py` — suite HTTP sottile e concatenabile per API
+  Responses agentiche: compatibilità standard, capability dinamiche, masking
+  avversariale, distinzione tool/skill, nesting/ricorsione, restore e rifiuto
+  atomico dei checkpoint mancanti, corrotti o troncati.
+- `tests/test_agentic_checkpoint.c` — gate model-backed CUDA Q4_K_S per
+  checkpoint/return: casi lunghi 10k, confronto full-vocabulary bit-exact,
+  isolamento sessioni, cancellazione, nesting, context boundary e rollback MTP.
+- `tests/run_agentic_checkpoint.sh` — runner riproducibile del gate precedente
+  nelle varianti target-only e target con sidecar MTP, con report JSON e log.
 - `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py`,
   `tests/test_qwen36_numerics.py` — schema, staging, checksum, metriche/gate e
   classificazione sintetica dell'inviluppo numerico Qwen3.6.

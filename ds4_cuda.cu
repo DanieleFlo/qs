@@ -27312,6 +27312,32 @@ __global__ static void qwen35_q4_0_matvec_kernel(
     if (threadIdx.x == 0u) out[tok * out_dim + row] = partial[0];
 }
 
+/* The NextN sidecar is Q4_0 and always drafts one row at a time. Packing eight
+ * output rows into eight warps removes the launch/scheduling overhead of one
+ * 256-thread block per row. Draft numerics may change with reduction order;
+ * target verification remains the authority for every committed token. */
+__global__ static void qwen35_q4_0_matvec_warp8_kernel(
+        float *out,
+        const cuda_block_q4_0 *w,
+        const float *x,
+        uint32_t row_blocks,
+        uint32_t out_dim) {
+    const uint32_t lane = threadIdx.x & 31u;
+    const uint32_t row = blockIdx.x * 8u + (threadIdx.x >> 5u);
+    if (row >= out_dim) return;
+    const cuda_block_q4_0 *wr = w + (uint64_t)row * row_blocks;
+    float sum = 0.0f;
+    for (uint32_t b = 0; b < row_blocks; b++) {
+        const cuda_block_q4_0 *block = wr + b;
+        const uint8_t packed = block->qs[lane & 15u];
+        const int q = lane < 16u ? (packed & 0x0fu) : (packed >> 4u);
+        sum += dev_f16_to_f32(block->d) * (float)(q - 8) *
+               x[(uint64_t)b * 32u + lane];
+    }
+    sum = warp_sum_f32(sum);
+    if (lane == 0u) out[row] = sum;
+}
+
 static int qwen35_q4_0_matmul(
         ds4_gpu_tensor *out, const void *model_map, uint64_t model_size,
         uint64_t weight_offset, uint64_t in_dim, uint64_t out_dim,
@@ -27324,6 +27350,15 @@ static int qwen35_q4_0_matmul(
     const void *w = cuda_resolve_weight_ptr(model_map, weight_offset, weight_bytes,
                                              cuda_current_tier(), "qwen35_mtp_q4_0");
     if (!w) return 0;
+    if (n_tok == 1u && getenv("DS4_CUDA_QWEN_MTP_NO_Q4_0_WARP8") == NULL) {
+        qwen35_q4_0_matvec_warp8_kernel
+            <<<((uint32_t)out_dim + 7u) / 8u, 256>>>(
+                (float *)out->ptr, (const cuda_block_q4_0 *)w,
+                (const float *)x->ptr, (uint32_t)(in_dim / 32u),
+                (uint32_t)out_dim);
+        return cuda_ok(cudaGetLastError(),
+                       "qwen35 MTP Q4_0 warp8 matvec launch");
+    }
     dim3 grid((uint32_t)out_dim, (uint32_t)n_tok, 1u);
     qwen35_q4_0_matvec_kernel<<<grid, 256>>>(
         (float *)out->ptr, (const cuda_block_q4_0 *)w,
@@ -27863,6 +27898,55 @@ __global__ static void qwen35_q5_k_f32_matvec_warp8_kernel(
     if (lane == 0u) out[row] = sum;
 }
 
+/* Speculative verification uses two to four rows. The generic prefill kernel
+ * launches one block per (row, token), rereading the quantized matrix for
+ * every draft. Keep the decode kernel's exact per-token accumulation order,
+ * but load each quant value once and apply it to the whole token tile. */
+template <typename Block, int QType, uint32_t token_tile>
+__global__ static void qwen35_quant_k_f32_microbatch_warp8_kernel(
+        float *out,
+        const Block *w,
+        const float *x,
+        uint32_t n_blocks,
+        uint32_t out_dim,
+        uint32_t n_tokens) {
+    const uint32_t lane = threadIdx.x & 31u;
+    const uint32_t row = blockIdx.x * 8u + (threadIdx.x >> 5u);
+    const uint32_t token0 = blockIdx.y * token_tile;
+    if (row >= out_dim || token0 >= n_tokens) return;
+    const Block *wr = w + (uint64_t)row * n_blocks;
+    float partial[token_tile][8] = {0.0f};
+    for (uint32_t b = 0; b < n_blocks; b++) {
+#pragma unroll
+        for (uint32_t j = 0; j < 8u; j++) {
+            const uint32_t i = lane + j * 32u;
+            const float value = QType == 14 ?
+                dev_q6_K_value((const cuda_block_q6_K *)(wr + b), i) :
+                QType == 13 ?
+                dev_q5_K_value((const cuda_block_q5_K *)(wr + b), i) :
+                dev_q4_K_value((const cuda_block_q4_K *)(wr + b), i);
+#pragma unroll
+            for (uint32_t t = 0; t < token_tile; t++) {
+                if (token0 + t < n_tokens) {
+                    partial[t][j] += value *
+                        x[((uint64_t)token0 + t) * n_blocks * CUDA_QK_K +
+                          b * CUDA_QK_K + i];
+                }
+            }
+        }
+    }
+#pragma unroll
+    for (uint32_t t = 0; t < token_tile; t++) {
+        if (token0 + t >= n_tokens) break;
+        float sum = ((partial[t][0] + partial[t][4]) +
+                     (partial[t][2] + partial[t][6])) +
+                    ((partial[t][1] + partial[t][5]) +
+                     (partial[t][3] + partial[t][7]));
+        sum = warp_sum_f32(sum);
+        if (lane == 0u) out[((uint64_t)token0 + t) * out_dim + row] = sum;
+    }
+}
+
 template <typename Block, int QType>
 __global__ static void qwen35_dequant_k_f32_kernel(
         float *out,
@@ -28238,6 +28322,51 @@ static int qwen35_quant_k_matmul(
                 (float *)out->ptr, (const cuda_block_q6_K *)w,
                 (const float *)x->ptr, blocks, (uint32_t)out_dim);
         return cuda_ok(cudaGetLastError(), "qwen35 Q6_K F32 decode matvec");
+    }
+
+    if (n_tok >= 2u && n_tok <= 4u &&
+        getenv("DS4_CUDA_QWEN_NO_MICROBATCH_WARP8") == NULL) {
+        const uint32_t blocks = (uint32_t)(in_dim / CUDA_QK_K);
+        const dim3 grid(((uint32_t)out_dim + 7u) / 8u, 1u, 1u);
+        if (weight_type == 12u && n_tok == 2u) {
+            qwen35_quant_k_f32_microbatch_warp8_kernel<
+                cuda_block_q4_K, 12, 2><<<grid, 256>>>(
+                    (float *)out->ptr, (const cuda_block_q4_K *)w,
+                    (const float *)x->ptr, blocks, (uint32_t)out_dim,
+                    (uint32_t)n_tok);
+        } else if (weight_type == 13u && n_tok == 2u) {
+            qwen35_quant_k_f32_microbatch_warp8_kernel<
+                cuda_block_q5_K, 13, 2><<<grid, 256>>>(
+                    (float *)out->ptr, (const cuda_block_q5_K *)w,
+                    (const float *)x->ptr, blocks, (uint32_t)out_dim,
+                    (uint32_t)n_tok);
+        } else if (weight_type == 14u && n_tok == 2u) {
+            qwen35_quant_k_f32_microbatch_warp8_kernel<
+                cuda_block_q6_K, 14, 2><<<grid, 256>>>(
+                    (float *)out->ptr, (const cuda_block_q6_K *)w,
+                    (const float *)x->ptr, blocks, (uint32_t)out_dim,
+                    (uint32_t)n_tok);
+        } else if (weight_type == 12u) {
+            qwen35_quant_k_f32_microbatch_warp8_kernel<
+                cuda_block_q4_K, 12, 4><<<grid, 256>>>(
+                    (float *)out->ptr, (const cuda_block_q4_K *)w,
+                    (const float *)x->ptr, blocks, (uint32_t)out_dim,
+                    (uint32_t)n_tok);
+        } else if (weight_type == 13u) {
+            qwen35_quant_k_f32_microbatch_warp8_kernel<
+                cuda_block_q5_K, 13, 4><<<grid, 256>>>(
+                    (float *)out->ptr, (const cuda_block_q5_K *)w,
+                    (const float *)x->ptr, blocks, (uint32_t)out_dim,
+                    (uint32_t)n_tok);
+        } else {
+            qwen35_quant_k_f32_microbatch_warp8_kernel<
+                cuda_block_q6_K, 14, 4><<<grid, 256>>>(
+                    (float *)out->ptr, (const cuda_block_q6_K *)w,
+                    (const float *)x->ptr, blocks, (uint32_t)out_dim,
+                    (uint32_t)n_tok);
+        }
+        return cuda_ok(cudaGetLastError(),
+                       "qwen35 quant K microbatch warp8 matvec");
     }
 
     if (weight_type == 12u && n_tok >= 8u &&

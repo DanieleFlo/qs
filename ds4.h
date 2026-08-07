@@ -366,6 +366,13 @@ int ds4_session_argmax_excluding(ds4_session *s, int excluded_id);
 int ds4_sample_logits(const float *logits, int n_vocab, float temperature,
                       int top_k, float top_p, float min_p, uint64_t *rng);
 int ds4_session_sample(ds4_session *s, float temperature, int top_k, float top_p, float min_p, uint64_t *rng);
+typedef bool (*ds4_token_filter_fn)(void *ud, int token,
+                                    const char *piece, size_t piece_len);
+/* Sample after assigning zero probability to tokens rejected by filter.  The
+ * callback sees decoded token bytes, not tokenizer-internal GPT-2 codepoints. */
+int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
+                                float top_p, float min_p, uint64_t *rng,
+                                ds4_token_filter_fn filter, void *filter_ud);
 #ifdef DS4_TEST_HOOKS
 int ds4_test_sample_logits(const float *logits, uint32_t n_vocab,
                            float temperature, int top_k,
@@ -462,6 +469,27 @@ int ds4_session_load_payload(ds4_session *s, FILE *fp, uint64_t payload_bytes, c
 int ds4_session_save_snapshot(ds4_session *s, ds4_session_snapshot *snap, char *err, size_t errlen);
 int ds4_session_load_snapshot(ds4_session *s, const ds4_session_snapshot *snap, char *err, size_t errlen);
 void ds4_session_snapshot_free(ds4_session_snapshot *snap);
+
+/* Qwen hierarchical-skill frontier.  Full-attention rows remain position
+ * addressed in the live session; this payload stores the destructively updated
+ * Gated DeltaNet state and the small MTP frontier needed to resume at tokens.
+ * The caller owns FILE lifecycle and atomic publication of the containing file. */
+uint64_t ds4_session_skill_state_bytes(ds4_session *s);
+typedef struct {
+    uint64_t checkpoint_bytes;
+    double stage_ms;
+    double write_ms;
+    double read_ms;
+    double restore_ms;
+} ds4_skill_state_metrics;
+int ds4_session_save_skill_state(ds4_session *s, FILE *fp,
+                                 uint64_t *written_bytes,
+                                 ds4_skill_state_metrics *metrics,
+                                 char *err, size_t errlen);
+int ds4_session_load_skill_state(ds4_session *s, FILE *fp,
+                                 const ds4_tokens *frontier,
+                                 ds4_skill_state_metrics *metrics,
+                                 char *err, size_t errlen);
 
 uint64_t ds4_session_layer_payload_bytes(ds4_session *s,
                                          uint32_t layer_start,
