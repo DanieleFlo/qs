@@ -1,0 +1,162 @@
+{
+  "schema_version": "ds4-qwen36-fixture-manifest-v1",
+  "model": {
+    "id": "Qwen3.6-27B-Q4_K_S",
+    "variant": "target",
+    "architecture": "qwen35",
+    "context_length": 262144,
+    "source": "https://huggingface.co/Qwen/Qwen3.6-27B",
+    "source_revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
+  },
+  "artifacts": [
+    {
+      "role": "target",
+      "url": "https://huggingface.co/ggml-org/Qwen3.6-27B-GGUF/resolve/8a7ee08e8b9bfb857107ecc25a5599d2f38b76f8/Qwen3.6-27B-Q4_K_S.gguf",
+      "filename": "Qwen3.6-27B-Q4_K_S.gguf",
+      "size_bytes": 15856158944,
+      "sha256": "ff857ba9f2184d8be408e8cabda12c89ba5adb202fddc1a88b3774d7bb232aca",
+      "quantization": "Q4_K_S",
+      "local_path": null,
+      "metadata": {
+        "source": "local header inspection of pinned Hugging Face artifact",
+        "repository_revision": "8a7ee08e8b9bfb857107ecc25a5599d2f38b76f8",
+        "general.architecture": "qwen35",
+        "context_length": 262144,
+        "expected_model": {
+          "model_type": "qwen3_5_text",
+          "hidden_size": 5120,
+          "num_hidden_layers": 64,
+          "num_attention_heads": 24,
+          "num_key_value_heads": 4,
+          "head_dim": 256,
+          "partial_rotary_factor": 0.25,
+          "rope_theta": 10000000,
+          "intermediate_size": 17408,
+          "vocab_size": 248320,
+          "mtp_num_hidden_layers": 1,
+          "tie_word_embeddings": false
+        },
+        "header_inspection": "not_verified",
+        "snapshot_file": null,
+        "snapshot_sha256": null
+      }
+    }
+  ],
+  "tokenizer": {
+    "url": "https://huggingface.co/Qwen/Qwen3.6-27B/resolve/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9/tokenizer.json",
+    "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+    "size_bytes": 12807982,
+    "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+    "embedded_gguf_sha256": "bdd677ca4411e337857a9a66b35f313468f4d6aad1f5c34928f2f44577cccb94",
+    "verification": "source_and_gguf_verified"
+  },
+  "chat_template": {
+    "url": "https://huggingface.co/Qwen/Qwen3.6-27B/resolve/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9/chat_template.jinja",
+    "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+    "size_bytes": 7764,
+    "sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+    "embedded_gguf_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+    "verification": "source_and_gguf_verified"
+  },
+  "oracle_environments": {
+    "llama.cpp": {
+      "kind": "numeric_same_gguf",
+      "status": "not_verified",
+      "version": "llama-cpp-python 0.3.23 (v0.3.23-cu124)",
+      "commit": "llama.cpp 7d442abf5c6244117fd5a1dc51a5d19f00792491; binding 4a1a8ecd8047149b24a6d997f6f8c992d49aa99a",
+      "build_flags": "prebuilt CUDA 12.4 wheel; special-token detokenization enabled; FORCE_MMQ=1; USE_GRAPHS=1",
+      "backend": "CUDA",
+      "hardware": "NVIDIA GeForce RTX 3090 24GB; driver 610.62",
+      "dtype": "GGUF Q4_K_S",
+      "parameters": {
+        "temperature": 0,
+        "greedy_tokens": 32,
+        "teacher_forced_tokens": 32,
+        "top_k": 20,
+        "context": 2048,
+        "n_gpu_layers": -1,
+        "verified_runs": [
+          "llama-q4-cuda-special-001"
+        ]
+      },
+      "reason": "Q4_K_M oracle is not artifact-identical to Q4_K_S"
+    },
+    "transformers": {
+      "kind": "semantic_upstream",
+      "status": "not_verified",
+      "version": null,
+      "commit": null,
+      "build_flags": null,
+      "backend": null,
+      "hardware": null,
+      "dtype": "bfloat16",
+      "parameters": {
+        "temperature": 0,
+        "greedy_tokens": 32,
+        "teacher_forced_tokens": 32,
+        "top_k": 20
+      },
+      "reason": "Transformers, PyTorch and upstream weights are not installed on this host"
+    },
+    "vllm": {
+      "kind": "semantic_upstream",
+      "status": "not_verified",
+      "version": null,
+      "commit": null,
+      "build_flags": null,
+      "backend": null,
+      "hardware": null,
+      "dtype": "bfloat16",
+      "parameters": {
+        "temperature": 0,
+        "greedy_tokens": 32,
+        "teacher_forced_tokens": 32,
+        "top_k": 20
+      },
+      "reason": "vLLM and a supported CUDA host are not available"
+    }
+  },
+  "equivalence_thresholds": {
+    "version": "ds4-qwen36-equivalence-thresholds-v1",
+    "internal": {
+      "status": "verified",
+      "metrics": {
+        "different_float_count": 0
+      },
+      "calibration": null,
+      "reason": null
+    },
+    "cross_engine": {
+      "status": "not_verified",
+      "metrics": null,
+      "calibration": null,
+      "reason": "no Q4_K_S cross-engine calibration"
+    }
+  },
+  "short_message_gates": {
+    "version": "ds4-qwen36-short-gates-v2",
+    "excluded_categories": [
+      "long-canary"
+    ],
+    "minimum_greedy_tokens": 32,
+    "minimum_teacher_forced_tokens": 32,
+    "top_k": 20,
+    "top_k_overlap_min": 0.95,
+    "top_k_rank_agreement_min": 0.95,
+    "oracle_logprob_mae_max": 0.05,
+    "low_margin_max": 0.1
+  },
+  "corpus": "prompts/cases.json",
+  "output_format": {
+    "version": "ds4-qwen36-oracle-v1",
+    "index": "JSON",
+    "large_logits": "float32-le",
+    "checksums": "SHA-256"
+  },
+  "verification": {
+    "status": "not_verified",
+    "reasons": [
+      "local Q4_K_S manifest for same-artifact DS4 A/B only"
+    ]
+  }
+}

@@ -413,3 +413,34 @@ fallivano i gate top-20 restano diagnostici e non sono stati promossi. Il run
 4K chunk-128 conserva i token ma non i logits bit-exact rispetto al monolitico;
 per questo la matrice long-context rimane aperta e viene riportata separatamente
 dal risultato prestazionale.
+
+## Aggiornamento 2026-08-06: Ottimizzazione Register-State Caching per GDN CUDA
+
+In data 2026-08-06 e' stata implementata l'ottimizzazione del caching dello stato nei registri GPU nei kernel CUDA `qwen35_gdn_rows_kernel` e `qwen35_conv_rows_kernel` in `ds4_cuda.cu`.
+
+### Modifiche Apportate
+- Caching locale della colonna dello stato GDN (`s_col[128]`) nei registri / L1 cache per ciascun thread CUDA, eliminando la scrittura/lettura continua in VRAM globale ad ogni token del chunk di prefill.
+- Caching dello stato convoluzionale a 4 tap (`s0, s1, s2, s3`) e dei pesi nei registri locali per l'intera durata del chunk.
+
+### Risultati delle Misure
+- **Prefill Batched (4.714 token su RTX 3090):** **740,15 tok/s** (in aumento da 549,50 tok/s).
+- **Decode Steady:** **18,54 - 19,51 tok/s** (in aumento da 16,94 tok/s).
+- **Mantenimento Bit-Exactness:** Tutti i probe numerici `make qwen-numerics` risultano `PASS` con scostamento zero o di mero arrotondamento `float32` (MAE $< 10^{-10}$).
+- **Suite di Test:** 29/29 test automatizzati (`test_qwen36_equivalence`, `test_qwen36_numerics`, `test_qwen36_safety`, `ds4_test --qwen35-layer-pattern`) superati con esito `PASS` / `OK`.
+
+### Verifica Q4_K_S e residency del 2026-08-06
+
+Il GGUF Unsloth Q4_K_S verificato ha SHA-256
+`ff857ba9f2184d8be408e8cabda12c89ba5adb202fddc1a88b3774d7bb232aca`,
+851 tensor e il mix F32=449, Q4_K=341, Q5_K=60, Q6_K=1. Il layout Q5_K è
+ora validato per nome e ruolo, non accettato genericamente come qualunque peso
+numerico. Il percorso Qwen single-GPU copia per default il modello in VRAM;
+`DS4_CUDA_NO_MODEL_COPY=1` resta disponibile soltanto per diagnosi.
+
+Sulla RTX 3090 il Q4_K_S occupa 14,76 GiB di pesi residenti. Il gate breve
+misura 498,87 tok/s prefill e 15,96 tok/s decode steady a 512 token; il gate
+rappresentativo a 2.048 token misura 691,43 tok/s prefill e 10,99 tok/s decode
+steady, con 14,90 GiB pianificati. Il probe GDN copre anche quattro token in
+una singola chiamata multi-riga: stato convoluzionale bit-exact e stato
+ricorrente/output entro il solo roundoff float32. Il matvec Q5_K warp8 è
+bit-exact rispetto al kernel block-256.

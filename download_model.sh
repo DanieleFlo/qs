@@ -4,6 +4,7 @@ set -e
 GLM_UNSLOTH_REPO="unsloth/GLM-5.2-GGUF"
 GLM_ANTIREZ_REPO="antirez/GLM-5.2-GGUF"
 QWEN36_REPO="ggml-org/Qwen3.6-27B-GGUF"
+QWEN36_UNSLOTH_REPO="unsloth/Qwen3.6-27B-GGUF"
 QWEN36_REVISION="8a7ee08e8b9bfb857107ecc25a5599d2f38b76f8"
 REPO="antirez/deepseek-v4-gguf"
 Q2_IMATRIX_FILE="DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix.gguf"
@@ -21,7 +22,9 @@ GLM_ANTIREZ_IQ2XXS_FILE="GLM-5.2-UD-IQ2_XXS_RoutedIQ2XXS_blk78Q2K.gguf"
 GLM_ANTIREZ_Q2_FILE="GLM-5.2-UD-Q2_K_RoutedQ2K.gguf"
 GLM_ANTIREZ_Q4_FILE="GLM-5.2-UD-Q4_K_RoutedQ4K.gguf"
 QWEN36_Q4_FILE="Qwen3.6-27B-Q4_K_M.gguf"
+QWEN36_Q4_S_FILE="Qwen3.6-27B-Q4_K_S.gguf"
 QWEN36_Q4_SHA256="65b753ea835627f7b511143c6ceb976525c7f21f5df8c664bc0a9c23d1c49921"
+QWEN36_Q4_S_SHA256="ff857ba9f2184d8be408e8cabda12c89ba5adb202fddc1a88b3774d7bb232aca"
 QWEN36_MTP_FILE="mtp-Qwen3.6-27B-Q4_0.gguf"
 QWEN36_MTP_SHA256="3d593f9e2788d59bb30d6024706b1efd5219fea466b6397c46159e3540937173"
 
@@ -115,6 +118,10 @@ Targets:
   qwen36-q4
        Qwen3.6 27B Q4_K_M target GGUF, about 19 GB on disk.
 
+  qwen36-q4-s
+       Qwen3.6 27B Q4_K_S target GGUF from unsloth/Qwen3.6-27B-GGUF,
+       about 15.9 GB on disk. Recommended for a 24 GB RTX 3090.
+
   qwen36-mtp
        Optional Qwen3.6 27B MTP Q4_0 GGUF, about 1.7 GB on disk.
 
@@ -204,6 +211,12 @@ case "$MODEL" in
         REPO=$QWEN36_REPO
         HF_REVISION=$QWEN36_REVISION
         MODEL_FILE=$QWEN36_Q4_FILE
+        FORCE_HF_DOWNLOAD=1
+        ;;
+    qwen36-q4-s)
+        REPO=$QWEN36_UNSLOTH_REPO
+        HF_REVISION=
+        MODEL_FILE=$QWEN36_Q4_S_FILE
         FORCE_HF_DOWNLOAD=1
         ;;
     qwen36-mtp)
@@ -350,6 +363,7 @@ verify_sha256() {
     expected=
     case "$(basename "$file")" in
         "$QWEN36_Q4_FILE") expected=$QWEN36_Q4_SHA256 ;;
+        "$QWEN36_Q4_S_FILE") expected=$QWEN36_Q4_S_SHA256 ;;
         "$QWEN36_MTP_FILE") expected=$QWEN36_MTP_SHA256 ;;
         *) return 0 ;;
     esac

@@ -35,6 +35,14 @@ typedef struct {
 } probe_block_q4_k;
 
 typedef struct {
+    uint16_t d;
+    uint16_t dmin;
+    uint8_t scales[12];
+    uint8_t qh[32];
+    uint8_t qs[128];
+} probe_block_q5_k;
+
+typedef struct {
     uint8_t ql[128];
     uint8_t qh[64];
     int8_t scales[16];
@@ -51,6 +59,28 @@ static float f16_to_f32(uint16_t h) {
     float value;
     memcpy(&value, &bits, sizeof(value));
     return value;
+}
+
+static float f32_round_to_f16(float value) {
+    const _Float16 half = (_Float16)value;
+    return (float)half;
+}
+
+static void quantize_dequantize_q8_1(const float *input, float *output,
+                                     uint32_t count) {
+    for (uint32_t base = 0; base < count; base += 32u) {
+        float maximum = 0.0f;
+        for (uint32_t i = 0; i < 32u; i++)
+            maximum = fmaxf(maximum, fabsf(input[base + i]));
+        const float d = maximum > 0.0f ? maximum / 127.0f : 0.0f;
+        const float stored_d = f32_round_to_f16(d);
+        for (uint32_t i = 0; i < 32u; i++) {
+            int q = d > 0.0f ? (int)nearbyintf(input[base + i] / d) : 0;
+            if (q < -127) q = -127;
+            if (q > 127) q = 127;
+            output[base + i] = stored_d * (float)q;
+        }
+    }
 }
 
 static void q4_k_scale_min(uint32_t group, const uint8_t *packed,
@@ -73,6 +103,45 @@ static float q4_k_value(const probe_block_q4_k *block, uint32_t i) {
     return f16_to_f32(block->d) * (float)scale *
            (float)((block->qs[byte] >> shift) & 15u) -
            f16_to_f32(block->dmin) * (float)minimum;
+}
+
+static float q5_k_value(const probe_block_q5_k *block, uint32_t i) {
+    const uint32_t group = i / 32u;
+    const uint32_t byte = (group >> 1) * 32u + (i & 31u);
+    const uint32_t shift = (group & 1u) * 4u;
+    uint8_t scale, minimum;
+    q4_k_scale_min(group, block->scales, &scale, &minimum);
+    const uint32_t high = (block->qh[i & 31u] >> group) & 1u;
+    const uint32_t q = ((block->qs[byte] >> shift) & 15u) | (high << 4u);
+    return f16_to_f32(block->d) * (float)scale * (float)q -
+           f16_to_f32(block->dmin) * (float)minimum;
+}
+
+static float q6_k_value(const probe_block_q6_k *block, uint32_t i) {
+    const uint32_t half = i >> 7u;
+    const uint32_t within = i & 127u;
+    const uint32_t lane = within & 31u;
+    const uint8_t high = block->qh[half * 32u + lane];
+    uint8_t q;
+    uint32_t scale;
+    if (within < 32u) {
+        q = (block->ql[half * 64u + lane] & 15u) | ((high & 3u) << 4u);
+        scale = half * 8u + (lane >> 4u);
+    } else if (within < 64u) {
+        q = (block->ql[half * 64u + lane + 32u] & 15u) |
+            (((high >> 2u) & 3u) << 4u);
+        scale = half * 8u + 2u + (lane >> 4u);
+    } else if (within < 96u) {
+        q = (block->ql[half * 64u + lane] >> 4u) |
+            (((high >> 4u) & 3u) << 4u);
+        scale = half * 8u + 4u + (lane >> 4u);
+    } else {
+        q = (block->ql[half * 64u + lane + 32u] >> 4u) |
+            (((high >> 6u) & 3u) << 4u);
+        scale = half * 8u + 6u + (lane >> 4u);
+    }
+    return f16_to_f32(block->d) * (float)block->scales[scale] *
+           (float)((int)q - 32);
 }
 
 static float pattern(uint32_t index, uint32_t salt, float scale) {
@@ -241,13 +310,15 @@ static int run_gdn_probe(void) {
     memcpy(conv_ref, conv_state, conv_n * sizeof(float));
     memcpy(state_ref, state, state_n * sizeof(float));
 
-    ds4_gpu_tensor *t_qkv = ds4_gpu_tensor_alloc(qkv_n * sizeof(float));
-    ds4_gpu_tensor *t_z = ds4_gpu_tensor_alloc(heads_n * sizeof(float));
-    ds4_gpu_tensor *t_alpha = ds4_gpu_tensor_alloc(GDN_VALUE_HEADS * sizeof(float));
-    ds4_gpu_tensor *t_beta = ds4_gpu_tensor_alloc(GDN_VALUE_HEADS * sizeof(float));
+    ds4_gpu_tensor *t_qkv = ds4_gpu_tensor_alloc(GDN_STEPS * qkv_n * sizeof(float));
+    ds4_gpu_tensor *t_z = ds4_gpu_tensor_alloc(GDN_STEPS * heads_n * sizeof(float));
+    ds4_gpu_tensor *t_alpha = ds4_gpu_tensor_alloc(
+        GDN_STEPS * GDN_VALUE_HEADS * sizeof(float));
+    ds4_gpu_tensor *t_beta = ds4_gpu_tensor_alloc(
+        GDN_STEPS * GDN_VALUE_HEADS * sizeof(float));
     ds4_gpu_tensor *t_conv = ds4_gpu_tensor_alloc(conv_n * sizeof(float));
     ds4_gpu_tensor *t_state = ds4_gpu_tensor_alloc(state_n * sizeof(float));
-    ds4_gpu_tensor *t_heads = ds4_gpu_tensor_alloc(heads_n * sizeof(float));
+    ds4_gpu_tensor *t_heads = ds4_gpu_tensor_alloc(GDN_STEPS * heads_n * sizeof(float));
     int failed = !t_qkv || !t_z || !t_alpha || !t_beta || !t_conv || !t_state || !t_heads;
     if (failed) {
         fprintf(stderr, "qwen numerics probe: GPU tensor allocation failed\n");
@@ -288,6 +359,88 @@ static int run_gdn_probe(void) {
         }
     }
 
+    /* Exercise the optimized rows kernel in the way prefill uses it: all
+     * tokens in one launch while convolution and recurrent state stay local
+     * across the token loop.  Repeating the one-row API above cannot catch a
+     * missing or misordered state update inside that loop. */
+    float *qkv_rows = malloc(GDN_STEPS * qkv_n * sizeof(float));
+    float *qkv_rows_ref = malloc(GDN_STEPS * qkv_n * sizeof(float));
+    float *z_rows = malloc(GDN_STEPS * heads_n * sizeof(float));
+    float *alpha_rows = malloc(GDN_STEPS * GDN_VALUE_HEADS * sizeof(float));
+    float *beta_rows = malloc(GDN_STEPS * GDN_VALUE_HEADS * sizeof(float));
+    float *heads_rows = malloc(GDN_STEPS * heads_n * sizeof(float));
+    float *heads_rows_ref = malloc(GDN_STEPS * heads_n * sizeof(float));
+    if (!qkv_rows || !qkv_rows_ref || !z_rows || !alpha_rows || !beta_rows ||
+        !heads_rows || !heads_rows_ref) {
+        failed = 1;
+    }
+    if (!failed) {
+        for (size_t i = 0; i < conv_n; i++)
+            conv_state[i] = pattern((uint32_t)i, 71, 0.00002f);
+        for (size_t i = 0; i < state_n; i++)
+            state[i] = pattern((uint32_t)i, 97, 0.0000005f);
+        memcpy(conv_ref, conv_state, conv_n * sizeof(float));
+        memcpy(state_ref, state, state_n * sizeof(float));
+        for (uint32_t step = 0; step < GDN_STEPS; step++) {
+            float *qr = qkv_rows + (size_t)step * qkv_n;
+            float *qref = qkv_rows_ref + (size_t)step * qkv_n;
+            float *zr = z_rows + (size_t)step * heads_n;
+            float *ar = alpha_rows + (size_t)step * GDN_VALUE_HEADS;
+            float *br = beta_rows + (size_t)step * GDN_VALUE_HEADS;
+            for (size_t i = 0; i < qkv_n; i++)
+                qr[i] = pattern((uint32_t)i, 101 + step, 0.00008f);
+            for (size_t i = 0; i < heads_n; i++)
+                zr[i] = pattern((uint32_t)i, 151 + step, 0.0004f);
+            for (uint32_t i = 0; i < GDN_VALUE_HEADS; i++) {
+                ar[i] = pattern(i, 181 + step, 0.003f);
+                br[i] = pattern(i, 211 + step, 0.003f);
+            }
+            memcpy(qref, qr, qkv_n * sizeof(float));
+            cpu_gdn_step(heads_rows_ref + (size_t)step * heads_n,
+                         qref, zr, ar, br, conv_ref, state_ref,
+                         a, conv, dt, norm);
+        }
+        failed |= !ds4_gpu_tensor_write(t_qkv, 0, qkv_rows,
+                                         GDN_STEPS * qkv_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_write(t_z, 0, z_rows,
+                                         GDN_STEPS * heads_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_write(t_alpha, 0, alpha_rows,
+                                         GDN_STEPS * GDN_VALUE_HEADS * sizeof(float));
+        failed |= !ds4_gpu_tensor_write(t_beta, 0, beta_rows,
+                                         GDN_STEPS * GDN_VALUE_HEADS * sizeof(float));
+        failed |= !ds4_gpu_tensor_write(t_conv, 0, conv_state,
+                                         conv_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_write(t_state, 0, state,
+                                         state_n * sizeof(float));
+        failed |= !ds4_gpu_qwen35_gated_delta_net_rows_tensor(
+            t_heads, t_qkv, t_z, t_alpha, t_beta, t_conv, t_state,
+            map, map_n * sizeof(float), a_off, conv_off, dt_off, norm_off,
+            GDN_STEPS);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(t_qkv, 0, qkv_rows,
+                                        GDN_STEPS * qkv_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_read(t_conv, 0, conv_state,
+                                        conv_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_read(t_state, 0, state,
+                                        state_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_read(t_heads, 0, heads_rows,
+                                        GDN_STEPS * heads_n * sizeof(float));
+        if (!failed) {
+            failed |= emit_metric("rows_conv_silu", GDN_STEPS,
+                                  qkv_rows, qkv_rows_ref,
+                                  GDN_STEPS * qkv_n, 2e-6, 2e-5);
+            failed |= emit_metric("rows_conv_state", GDN_STEPS,
+                                  conv_state, conv_ref, conv_n, 0.0, 0.0);
+            failed |= emit_metric("rows_recurrent_state", GDN_STEPS,
+                                  state, state_ref, state_n, 2e-6, 3e-5);
+            failed |= emit_metric("rows_heads", GDN_STEPS,
+                                  heads_rows, heads_rows_ref,
+                                  GDN_STEPS * heads_n, 5e-6, 5e-5);
+        }
+    }
+    free(heads_rows_ref); free(heads_rows); free(beta_rows); free(alpha_rows);
+    free(z_rows); free(qkv_rows_ref); free(qkv_rows);
+
 cleanup:
     if (t_heads) ds4_gpu_tensor_free(t_heads);
     if (t_state) ds4_gpu_tensor_free(t_state);
@@ -305,8 +458,9 @@ cleanup:
 static int run_q4_k_probe(void) {
     enum { INPUTS = 256, ROWS = 8 };
     probe_block_q4_k weights[ROWS];
-    float input[INPUTS], input_q8[INPUTS];
+    float input[INPUTS], input_q8[INPUTS], input_q8_1[INPUTS];
     float direct[ROWS] = {0}, gpu[ROWS] = {0}, q8_policy[ROWS] = {0};
+    float q8_1_policy[ROWS] = {0}, q8_1_gpu[ROWS] = {0};
     memset(weights, 0, sizeof(weights));
     for (uint32_t row = 0; row < ROWS; row++) {
         weights[row].d = 0x2400u;    /* 0.015625 */
@@ -324,11 +478,13 @@ static int run_q4_k_probe(void) {
     const float q8_scale = max_abs / 127.0f;
     for (uint32_t i = 0; i < INPUTS; i++)
         input_q8[i] = nearbyintf(input[i] / q8_scale) * q8_scale;
+    quantize_dequantize_q8_1(input, input_q8_1, INPUTS);
     for (uint32_t row = 0; row < ROWS; row++) {
         for (uint32_t i = 0; i < INPUTS; i++) {
             const float w = q4_k_value(&weights[row], i);
             direct[row] += w * input[i];
             q8_policy[row] += w * input_q8[i];
+            q8_1_policy[row] += w * input_q8_1[i];
         }
     }
 
@@ -342,10 +498,18 @@ static int run_q4_k_probe(void) {
                                                 12u, INPUTS, ROWS, x, 1u);
         failed |= !ds4_gpu_synchronize();
         failed |= !ds4_gpu_tensor_read(out, 0, gpu, sizeof(gpu));
+        setenv("DS4_CUDA_QWEN_DECODE_Q8_1", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
+                                                12u, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(out, 0, q8_1_gpu, sizeof(q8_1_gpu));
+        unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
     }
     if (!failed) {
         const probe_metrics implementation = measure(gpu, direct, ROWS);
         const probe_metrics policy = measure(direct, q8_policy, ROWS);
+        const probe_metrics q8_1_implementation =
+            measure(q8_1_gpu, q8_1_policy, ROWS);
         const char *kind = classify(implementation, 2e-5, 2e-5);
         printf("{\"probe\":\"q4_k_matvec\",\"comparison\":\"gpu_vs_dequant_f32_oracle\"," 
                "\"values\":%u,\"mae\":%.9g,\"rmse\":%.9g,\"max_abs\":%.9g,"
@@ -356,17 +520,28 @@ static int run_q4_k_probe(void) {
                "\"values\":%u,\"mae\":%.9g,\"rmse\":%.9g,\"max_abs\":%.9g,"
                "\"cosine\":%.12g,\"classification\":\"arithmetic_policy_delta\"}\n",
                ROWS, policy.mae, policy.rmse, policy.max_abs, policy.cosine);
+        const char *q8_1_kind = classify(q8_1_implementation, 2e-5, 2e-5);
+        printf("{\"probe\":\"q4_k_matvec\",\"comparison\":\"q8_1_mmvq_vs_q8_1_policy\"," 
+               "\"values\":%u,\"mae\":%.9g,\"rmse\":%.9g,\"max_abs\":%.9g,"
+               "\"cosine\":%.12g,\"classification\":\"%s\"}\n",
+               ROWS, q8_1_implementation.mae, q8_1_implementation.rmse,
+               q8_1_implementation.max_abs, q8_1_implementation.cosine,
+               q8_1_kind);
         failed |= strcmp(kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(q8_1_kind, "outside_roundoff_envelope") == 0;
     }
     if (out) ds4_gpu_tensor_free(out);
     if (x) ds4_gpu_tensor_free(x);
+    unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
     return failed;
 }
 
 static int run_q6_k_warp8_probe(void) {
     enum { INPUTS = 256, ROWS = 16 };
     probe_block_q6_k weights[ROWS];
-    float input[INPUTS], reference[ROWS] = {0}, warp8[ROWS] = {0};
+    float input[INPUTS], input_q8_1[INPUTS];
+    float reference[ROWS] = {0}, warp8[ROWS] = {0};
+    float q8_1_policy[ROWS] = {0}, q8_1_gpu[ROWS] = {0};
     memset(weights, 0, sizeof(weights));
     for (uint32_t row = 0; row < ROWS; row++) {
         weights[row].d = 0x2400u;
@@ -379,6 +554,10 @@ static int run_q6_k_warp8_probe(void) {
     }
     for (uint32_t i = 0; i < INPUTS; i++)
         input[i] = pattern(i, 911, 0.0007f);
+    quantize_dequantize_q8_1(input, input_q8_1, INPUTS);
+    for (uint32_t row = 0; row < ROWS; row++)
+        for (uint32_t i = 0; i < INPUTS; i++)
+            q8_1_policy[row] += q6_k_value(&weights[row], i) * input_q8_1[i];
 
     ds4_gpu_tensor *x = ds4_gpu_tensor_alloc(sizeof(input));
     ds4_gpu_tensor *out = ds4_gpu_tensor_alloc(sizeof(reference));
@@ -396,6 +575,12 @@ static int run_q6_k_warp8_probe(void) {
                                                 14u, INPUTS, ROWS, x, 1u);
         failed |= !ds4_gpu_synchronize();
         failed |= !ds4_gpu_tensor_read(out, 0, warp8, sizeof(warp8));
+        setenv("DS4_CUDA_QWEN_DECODE_Q6_Q8_1", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
+                                                14u, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(out, 0, q8_1_gpu, sizeof(q8_1_gpu));
+        unsetenv("DS4_CUDA_QWEN_DECODE_Q6_Q8_1");
     }
     if (!failed) {
         const probe_metrics metric = measure(warp8, reference, ROWS);
@@ -406,10 +591,127 @@ static int run_q6_k_warp8_probe(void) {
                ROWS, metric.mae, metric.rmse, metric.max_abs,
                metric.cosine, kind);
         failed |= metric.max_abs != 0.0;
+        const probe_metrics q8_1_metric =
+            measure(q8_1_gpu, q8_1_policy, ROWS);
+        const char *q8_1_kind = classify(q8_1_metric, 2e-5, 2e-5);
+        printf("{\"probe\":\"q6_k_matvec\",\"comparison\":\"q8_1_mmvq_vs_q8_1_policy\"," 
+               "\"values\":%u,\"mae\":%.9g,\"rmse\":%.9g,\"max_abs\":%.9g,"
+               "\"cosine\":%.12g,\"classification\":\"%s\"}\n",
+               ROWS, q8_1_metric.mae, q8_1_metric.rmse,
+               q8_1_metric.max_abs, q8_1_metric.cosine, q8_1_kind);
+        failed |= strcmp(q8_1_kind, "outside_roundoff_envelope") == 0;
     }
     if (out) ds4_gpu_tensor_free(out);
     if (x) ds4_gpu_tensor_free(x);
     unsetenv("DS4_CUDA_QWEN_NO_DECODE_F32_WARP8");
+    unsetenv("DS4_CUDA_QWEN_DECODE_Q6_Q8_1");
+    return failed;
+}
+
+static int run_q5_k_warp8_probe(void) {
+    enum { INPUTS = 256, ROWS = 16 };
+    probe_block_q5_k weights[ROWS];
+    float input[INPUTS], input_q8[INPUTS], input_q8_1[INPUTS];
+    float direct[ROWS] = {0}, block256[ROWS] = {0}, warp8[ROWS] = {0};
+    float q8_policy[ROWS] = {0}, q8_gpu[ROWS] = {0};
+    float q8_1_policy[ROWS] = {0}, q8_1_gpu[ROWS] = {0};
+    memset(weights, 0, sizeof(weights));
+    for (uint32_t row = 0; row < ROWS; row++) {
+        weights[row].d = 0x2400u;
+        weights[row].dmin = 0x2000u;
+        for (uint32_t i = 0; i < 12; i++)
+            weights[row].scales[i] = (uint8_t)(17u * i + 29u * row + 3u);
+        for (uint32_t i = 0; i < 32; i++)
+            weights[row].qh[i] = (uint8_t)(23u * i + 19u * row + 11u);
+        for (uint32_t i = 0; i < 128; i++)
+            weights[row].qs[i] = (uint8_t)(37u * i + 11u * row + 19u);
+    }
+    float signed_max = 0.0f;
+    for (uint32_t i = 0; i < INPUTS; i++) {
+        input[i] = pattern(i, 1009, 0.0007f);
+        if (fabsf(input[i]) > fabsf(signed_max)) signed_max = input[i];
+    }
+    const float inverse_scale = signed_max != 0.0f ? -127.0f / signed_max : 0.0f;
+    const float q8_scale = inverse_scale != 0.0f ? 1.0f / inverse_scale : 0.0f;
+    for (uint32_t i = 0; i < INPUTS; i++) {
+        int q = inverse_scale != 0.0f ? (int)nearbyintf(inverse_scale * input[i]) : 0;
+        if (q > 127) q = 127;
+        input_q8[i] = (float)q * q8_scale;
+    }
+    quantize_dequantize_q8_1(input, input_q8_1, INPUTS);
+    for (uint32_t row = 0; row < ROWS; row++) {
+        for (uint32_t i = 0; i < INPUTS; i++) {
+            direct[row] += q5_k_value(&weights[row], i) * input[i];
+            q8_policy[row] += q5_k_value(&weights[row], i) * input_q8[i];
+            q8_1_policy[row] += q5_k_value(&weights[row], i) * input_q8_1[i];
+        }
+    }
+
+    ds4_gpu_tensor *x = ds4_gpu_tensor_alloc(sizeof(input));
+    ds4_gpu_tensor *out = ds4_gpu_tensor_alloc(sizeof(block256));
+    int failed = !x || !out;
+    if (!failed) {
+        failed |= !ds4_gpu_set_model_map(weights, sizeof(weights));
+        failed |= !ds4_gpu_tensor_write(x, 0, input, sizeof(input));
+        setenv("DS4_CUDA_QWEN_NO_DECODE_F32_WARP8", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
+                                                13u, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(out, 0, block256, sizeof(block256));
+        unsetenv("DS4_CUDA_QWEN_NO_DECODE_F32_WARP8");
+        failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
+                                                13u, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(out, 0, warp8, sizeof(warp8));
+        setenv("DS4_CUDA_QWEN_DECODE_Q4_Q8", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
+                                                13u, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(out, 0, q8_gpu, sizeof(q8_gpu));
+        unsetenv("DS4_CUDA_QWEN_DECODE_Q4_Q8");
+        setenv("DS4_CUDA_QWEN_DECODE_Q8_1", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
+                                                13u, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(out, 0, q8_1_gpu, sizeof(q8_1_gpu));
+        unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
+    }
+    if (!failed) {
+        const probe_metrics implementation = measure(block256, direct, ROWS);
+        const probe_metrics optimized = measure(warp8, block256, ROWS);
+        const probe_metrics q8_implementation = measure(q8_gpu, q8_policy, ROWS);
+        const probe_metrics q8_1_implementation =
+            measure(q8_1_gpu, q8_1_policy, ROWS);
+        const char *implementation_kind = classify(implementation, 2e-5, 2e-5);
+        const char *optimized_kind = optimized.max_abs == 0.0 ? "exact" : "mismatch";
+        printf("{\"probe\":\"q5_k_matvec\",\"comparison\":\"block256_vs_dequant_f32_oracle\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,\"classification\":\"%s\"}\n",
+               ROWS, implementation.max_abs, implementation.cosine, implementation_kind);
+        printf("{\"probe\":\"q5_k_matvec\",\"comparison\":\"warp8_vs_block256\"," 
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,\"classification\":\"%s\"}\n",
+               ROWS, optimized.max_abs, optimized.cosine, optimized_kind);
+        const char *q8_kind = classify(q8_implementation, 2e-5, 2e-5);
+        printf("{\"probe\":\"q5_k_matvec\",\"comparison\":\"q8_gpu_vs_q8_policy\"," 
+               "\"values\":%u,\"mae\":%.9g,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ROWS, q8_implementation.mae, q8_implementation.max_abs,
+               q8_implementation.cosine, q8_kind);
+        const char *q8_1_kind = classify(q8_1_implementation, 2e-5, 2e-5);
+        printf("{\"probe\":\"q5_k_matvec\",\"comparison\":\"q8_1_mmvq_vs_q8_1_policy\"," 
+               "\"values\":%u,\"mae\":%.9g,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ROWS, q8_1_implementation.mae, q8_1_implementation.max_abs,
+               q8_1_implementation.cosine, q8_1_kind);
+        failed |= strcmp(implementation_kind, "outside_roundoff_envelope") == 0;
+        failed |= optimized.max_abs != 0.0;
+        failed |= strcmp(q8_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(q8_1_kind, "outside_roundoff_envelope") == 0;
+    }
+    if (out) ds4_gpu_tensor_free(out);
+    if (x) ds4_gpu_tensor_free(x);
+    unsetenv("DS4_CUDA_QWEN_NO_DECODE_F32_WARP8");
+    unsetenv("DS4_CUDA_QWEN_DECODE_Q4_Q8");
+    unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
     return failed;
 }
 
@@ -417,6 +719,7 @@ int main(void) {
     if (!ds4_gpu_init()) return 2;
     int failed = run_gdn_probe();
     failed |= run_q4_k_probe();
+    failed |= run_q5_k_warp8_probe();
     failed |= run_q6_k_warp8_probe();
     ds4_gpu_cleanup();
     printf("{\"probe\":\"summary\",\"status\":\"%s\"}\n",

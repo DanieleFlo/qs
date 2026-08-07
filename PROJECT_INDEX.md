@@ -158,6 +158,18 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/qwen36-performance-experiments-2026-08-05.md` — registro riproducibile
   dei test prestazionali Qwen CUDA, inclusi candidati scartati, confronto locale
   con LM Studio, gate 500/15 e verifiche numeriche associate.
+- `docs/qwen36-lmstudio-decoding-analysis-2026-08-06.md` — guida didattica al
+  decoding LM Studio/llama.cpp su RTX 3090: MMVQ Q8_1, caratteristiche GPU,
+  implementazioni DS4 riuscite o scartate, risultati dei gate e piano per
+  replicare il percorso veloce senza quantizzare la KV cache.
+- `docs/qwen36-cuda-optimization-progression.md` — checklist ordinata delle
+  ottimizzazioni CUDA Qwen3.6 Q4_K_S ancora da sviluppare: ricerca upstream e
+  letteratura, gate numerici/prestazionali, budget RTX 3090 da 24 GB, policy di
+  rollback e confronto CPU obbligatoriamente finale.
+- `docs/qwen36-mtp-design.md` — progetto di supporto Qwen3.6 MTP: audit dei
+  repository LM Studio/Unsloth/llama.cpp e del GGUF NextN, semantica del kernel,
+  allineamento token-hidden, stato KV, ciclo speculativo, fallback e gate di test
+  per il target CUDA Q4_K_S.
 - `docs/hardware/` — inventario della macchina RTX 3090 e note di riferimento
   su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
@@ -188,7 +200,7 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   shape dei modelli, tensor binding, tokenizer, CPU reference, costruzione e
   scheduling del grafo, sessioni, prefill/decode, KV, logits, MTP e payload
   degli snapshot. Include il percorso specializzato Qwen `qwen35` text-only:
-  validazione stretta del 27B Q4_K_M, tokenizer/template Qwen e sessione ibrida
+  validazione del 27B Q4_K_M e Q4_K_S, tokenizer/template Qwen e sessione ibrida
   full-attention/Gated DeltaNet CUDA e prefill layer-major a chunk; checkpoint
   e fork Qwen restano esclusi.
 - `ds4_gpu.h` — interfaccia tensoriale condivisa fra il grafo C e i backend
@@ -224,9 +236,12 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 
 - `ds4_cuda.cu` — runtime CUDA principale: allocazione/copie, cuBLAS, kernel
   custom, quantizzazione, attention, MoE, KV, batching e supporto multi-GPU;
-  contiene inoltre embedding/matvec Q4_K/Q6_K, RoPE parziale, attention gated
+  contiene inoltre embedding/matvec Q4_K/Q5_K/Q6_K, RoPE parziale, attention gated
   e aggiornamento ricorrente Qwen task 6, più i kernel multi-riga causali e i
-  GEMM di prefill Qwen.
+  GEMM di prefill Qwen. Il percorso MTP Qwen aggiunge embedding/matvec Q4_0 e
+  range device distinti per target e sidecar. I Qwen single-GPU che entrano in VRAM sono copiati per
+  default sul device; `DS4_CUDA_NO_MODEL_COPY=1` conserva il percorso host-map
+  diagnostico.
 - `ds4_iq2_tables_cuda.inc` — tabelle costanti per dequantizzazione/calcolo IQ2
   nel backend CUDA.
 
@@ -344,7 +359,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 
 ### Test rilevanti per comprendere la correttezza
 
-- `tests/ds4_test.c` — runner principale di unit test e test model-backed.
+- `tests/ds4_test.c` — runner principale di unit test e test model-backed;
+  include equivalenza Qwen MTP/target-only e fixture deterministiche per
+  accettazione completa, rifiuto e rollback parziale.
 - `tests/test-vectors/` — prompt corti/lunghi, vettori ufficiali e golden locali
   per token e distribuzione.
 - `tests/test_engine_correctness.c` — confronto della continuazione greedy fra

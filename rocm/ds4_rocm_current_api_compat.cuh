@@ -129,6 +129,10 @@ extern "C" void ds4_gpu_set_glm_model(bool enabled) {
     (void)enabled;
 }
 
+extern "C" void ds4_gpu_set_qwen_model(bool enabled) {
+    (void)enabled;
+}
+
 extern "C" void ds4_gpu_set_glm_streaming_prefill_full_layer(bool enabled) {
     (void)enabled;
 }

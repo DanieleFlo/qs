@@ -108,6 +108,7 @@ static ds4_engine *test_open_engine(bool quality) {
             test_env_gib("DS4_TEST_SSD_STREAMING_CACHE_GB"),
         .ssd_streaming_preload_experts =
             test_env_u32("DS4_TEST_SSD_STREAMING_PRELOAD_EXPERTS"),
+        .prefill_chunk = test_env_u32("DS4_TEST_MTP_PREFILL_CHUNK"),
         .mtp_path = (mtp && mtp[0] && !quality) ? mtp : NULL,
         .mtp_draft_tokens = (mtp && mtp[0] && !quality) ? 4 : 0,
     };
@@ -6461,7 +6462,9 @@ static bool test_mtp_capture_speculative(ds4_engine *engine, const ds4_tokens *p
     *out_len = 0;
     *max_chunk = 0;
     ds4_session *session = NULL;
-    TEST_ASSERT(ds4_session_create(&session, engine, 32768) == 0);
+    uint32_t ctx = test_env_u32("DS4_TEST_MTP_CTX");
+    if (ctx == 0) ctx = 32768;
+    TEST_ASSERT(ds4_session_create(&session, engine, (int)ctx) == 0);
     if (!session) return false;
 
     char err[160];
@@ -6503,7 +6506,9 @@ static bool test_mtp_worst_argmax_gap(ds4_engine *engine, const ds4_tokens *prom
     *worst_gap = 0.0f;
     *worst_at = -1;
     ds4_session *session = NULL;
-    TEST_ASSERT(ds4_session_create(&session, engine, 32768) == 0);
+    uint32_t ctx = test_env_u32("DS4_TEST_MTP_CTX");
+    if (ctx == 0) ctx = 32768;
+    TEST_ASSERT(ds4_session_create(&session, engine, (int)ctx) == 0);
     if (!session) return false;
 
     char err[160];
@@ -6608,7 +6613,29 @@ static void test_mtp_verify_depth(void) {
     TEST_ASSERT(prompt.len > 0);
 
     int *spec = malloc((size_t)TEST_MTP_MAXGEN * sizeof(*spec));
+    float *mtp_prompt_logits = NULL;
+    const int mtp_vocab = ds4_engine_vocab_size(engine);
     TEST_ASSERT(spec != NULL);
+    if (test_env_bool("DS4_TEST_QWEN_MTP_PATHS")) {
+        TEST_ASSERT(mtp_vocab > 0);
+        mtp_prompt_logits = malloc((size_t)mtp_vocab * sizeof(float));
+        TEST_ASSERT(mtp_prompt_logits != NULL);
+        ds4_session *prompt_session = NULL;
+        uint32_t ctx = test_env_u32("DS4_TEST_MTP_CTX");
+        if (ctx == 0) ctx = 32768;
+        TEST_ASSERT(ds4_session_create(&prompt_session, engine, (int)ctx) == 0);
+        char prompt_err[160];
+        const bool prompt_ok = prompt_session &&
+            ds4_session_sync(prompt_session, &prompt,
+                             prompt_err, sizeof(prompt_err)) == 0;
+        TEST_ASSERT(prompt_ok);
+        if (prompt_ok && mtp_prompt_logits) {
+            TEST_ASSERT(ds4_session_copy_logits(
+                            prompt_session, mtp_prompt_logits, mtp_vocab) ==
+                        mtp_vocab);
+        }
+        ds4_session_free(prompt_session);
+    }
     if (spec && prompt.len > 0) {
         int nspec = 0, max_chunk = 0;
         const bool ok_spec = test_mtp_capture_speculative(engine, &prompt, TEST_MTP_MAXGEN,
@@ -6625,8 +6652,77 @@ static void test_mtp_verify_depth(void) {
         fprintf(stderr, "ds4-test: mtp-verify-depth nspec=%d max_chunk=%d worst_argmax_gap=%.3f at=%d\n",
                 nspec, max_chunk, worst_gap, worst_at);
         TEST_ASSERT(worst_gap <= 2.0f);  /* correct: ~0; bug: ~21 on the reference model */
+
+        if (test_env_bool("DS4_TEST_QWEN_MTP_PATHS")) {
+            struct {
+                const char *env;
+                int expected_chunk;
+                const char *label;
+            } cases[] = {
+                {"DS4_TEST_QWEN_MTP_FORCE_REJECT", 1, "reject"},
+                {"DS4_TEST_QWEN_MTP_FORCE_PARTIAL", 2, "partial"},
+            };
+            for (size_t ci = 0; ci < sizeof(cases) / sizeof(cases[0]); ci++) {
+                setenv(cases[ci].env, "1", 1);
+                int path_n = 0, path_chunk = 0;
+                const bool path_ok = test_mtp_capture_speculative(
+                    engine, &prompt, 32, spec, &path_n, &path_chunk);
+                unsetenv(cases[ci].env);
+                TEST_ASSERT(path_ok);
+                TEST_ASSERT(path_n == 32);
+                TEST_ASSERT(path_chunk == cases[ci].expected_chunk);
+                float path_gap = 0.0f;
+                int path_at = -1;
+                const bool replay_ok = test_mtp_worst_argmax_gap(
+                    engine, &prompt, spec, path_n, &path_gap, &path_at);
+                TEST_ASSERT(replay_ok);
+                TEST_ASSERT(path_gap <= 2.0f);
+                fprintf(stderr,
+                        "ds4-test: qwen-mtp-%s tokens=%d max_chunk=%d "
+                        "worst_argmax_gap=%.3f at=%d\n",
+                        cases[ci].label, path_n, path_chunk,
+                        path_gap, path_at);
+            }
+        }
     }
 
+    if (mtp_prompt_logits) {
+        char *saved_mtp = test_save_env("DS4_TEST_MTP");
+        test_close_engine(false);
+        unsetenv("DS4_TEST_MTP");
+        ds4_engine *plain_engine = test_get_engine(false);
+        ds4_session *plain_session = NULL;
+        uint32_t ctx = test_env_u32("DS4_TEST_MTP_CTX");
+        if (ctx == 0) ctx = 32768;
+        TEST_ASSERT(plain_engine != NULL);
+        TEST_ASSERT(plain_engine &&
+                    ds4_session_create(&plain_session, plain_engine, (int)ctx) == 0);
+        char plain_err[160];
+        const bool plain_ok = plain_session &&
+            ds4_session_sync(plain_session, &prompt,
+                             plain_err, sizeof(plain_err)) == 0;
+        TEST_ASSERT(plain_ok);
+        if (plain_ok) {
+            float *plain_logits = malloc((size_t)mtp_vocab * sizeof(float));
+            TEST_ASSERT(plain_logits != NULL);
+            if (plain_logits) {
+                TEST_ASSERT(ds4_session_copy_logits(
+                                plain_session, plain_logits, mtp_vocab) ==
+                            mtp_vocab);
+                TEST_ASSERT(memcmp(mtp_prompt_logits, plain_logits,
+                                   (size_t)mtp_vocab * sizeof(float)) == 0);
+            }
+            fprintf(stderr,
+                    "ds4-test: qwen-mtp-disabled prompt logits bit-exact "
+                    "(%u floats), top1=%d\n",
+                    (uint32_t)mtp_vocab, ds4_session_argmax(plain_session));
+            free(plain_logits);
+        }
+        ds4_session_free(plain_session);
+        test_restore_env("DS4_TEST_MTP", saved_mtp);
+    }
+
+    free(mtp_prompt_logits);
     free(spec);
     ds4_tokens_free(&prompt);
 }
@@ -6764,7 +6860,10 @@ static void test_print_help(const char *prog) {
     puts("  DS4_TEST_VECTOR_FILE=FILE  Simple official-vector fixture.");
     puts("  DS4_TEST_LOCAL_GOLDEN_FILE=FILE  Local top-k golden-vector fixture.");
     puts("  DS4_TEST_MPP_EQ_CASE=NAME  Run only Tensor equivalence cases whose id contains NAME.");
-    puts("  DS4_TEST_MTP=FILE         Legacy MTP support GGUF for --mtp-verify-depth.");
+    puts("  DS4_TEST_MTP=FILE         MTP support GGUF for --mtp-verify-depth.");
+    puts("  DS4_TEST_MTP_CTX=N        Context for MTP verification sessions (default: 32768).");
+    puts("  DS4_TEST_MTP_PREFILL_CHUNK=N  Qwen prefill rows for memory-constrained MTP tests.");
+    puts("  DS4_TEST_QWEN_MTP_PATHS=1  Force Qwen full-reject/partial rollback coverage.");
     puts("  DS4_TEST_DSPARK=FILE      DSpark support GGUF for --dspark-verify-depth.");
 }
 
