@@ -1050,7 +1050,9 @@ Anthropic endpoint streams thinking and text live, then emits structured
 The Responses endpoint streams the Responses event lifecycle expected by Codex,
 including `response.output_text.delta`, function-call argument events, and
 terminal `response.completed` / `response.incomplete` / `response.failed`
-events.
+events. With reasoning enabled, an omitted `reasoning.summary` defaults to live
+summary deltas for streaming requests; explicit `summary: null` or
+`summary: "none"` keeps them suppressed.
 
 For browser JavaScript clients served from another origin, start the server with
 `--cors` to emit `Access-Control-Allow-*` headers. This only changes HTTP

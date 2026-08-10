@@ -1671,10 +1671,11 @@ typedef struct {
     bool has_tools;
     bool tool_choice_required;
     bool prompt_preserves_reasoning;
-    /* For /v1/responses: emit reasoning_summary_* events / fields only when the
-     * client opted in via reasoning.summary. Other APIs leave this false; the
-     * field is ignored on those code paths. */
+    /* For /v1/responses: an explicit reasoning.summary controls summary
+     * visibility.  When it is omitted, live streaming defaults it on so a
+     * thinking-only turn does not collapse to a lone terminal event. */
     bool reasoning_summary_emit;
+    bool reasoning_summary_specified;
     bool agentic_present;
     bool agentic_return;
     stop_list allowed_tools;
@@ -5458,6 +5459,7 @@ fail:
  * summary is surfaced unless the client opts in. */
 static bool parse_responses_reasoning(const char **p, ds4_think_mode *effort,
                                       bool *summary_opted_in,
+                                      bool *summary_specified,
                                       bool *effort_seen) {
     json_ws(p);
     if (json_lit(p, "null")) return true;
@@ -5488,6 +5490,7 @@ static bool parse_responses_reasoning(const char **p, ds4_think_mode *effort,
                 if (effort_seen) *effort_seen = true;
             }
         } else if (!strcmp(key, "summary")) {
+            if (summary_specified) *summary_specified = true;
             json_ws(p);
             if (json_lit(p, "null")) {
                 /* explicit null disables summary */
@@ -5667,6 +5670,7 @@ static bool parse_responses_request(ds4_engine *e, server *s, const char *body, 
             bool effort_seen = false;
             if (!parse_responses_reasoning(&p, &reasoning_effort,
                                            &r->reasoning_summary_emit,
+                                           &r->reasoning_summary_specified,
                                            &effort_seen)) {
                 free(key);
                 goto bad;
@@ -5802,6 +5806,10 @@ static bool parse_responses_request(ds4_engine *e, server *s, const char *body, 
     if (!got_thinking && model_alias_enables_thinking(r->model)) thinking_enabled = true;
     r->think_mode = ds4_think_mode_for_context(
         think_mode_from_enabled(thinking_enabled, reasoning_effort), ctx_size);
+    if (r->stream && ds4_think_mode_enabled(r->think_mode) &&
+        !r->reasoning_summary_specified) {
+        r->reasoning_summary_emit = true;
+    }
     if (!agentic_validate_registry(r, err, errlen)) {
         chat_msgs_free(&msgs);
         buf_free(&combined_tool_schemas);
@@ -7053,7 +7061,11 @@ static bool sse_headers(int fd, bool enable_cors) {
     buf_puts(&h,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/event-stream\r\n"
-        "Cache-Control: no-cache\r\n");
+        "Cache-Control: no-cache, no-transform\r\n"
+        /* nginx and compatible reverse proxies otherwise commonly buffer the
+         * small per-token writes until the response closes, which makes a
+         * healthy SSE producer look as if it emitted only the final event. */
+        "X-Accel-Buffering: no\r\n");
     if (enable_cors) append_cors_headers(&h);
     buf_puts(&h, "Connection: close\r\n\r\n");
     bool ok = send_all(fd, h.ptr, h.len);
@@ -17386,9 +17398,60 @@ static void test_cors_sse_headers(void) {
     char *out = read_socket_text(sv[1]);
     TEST_ASSERT(strstr(out, "HTTP/1.1 200 OK") != NULL);
     TEST_ASSERT(strstr(out, "Content-Type: text/event-stream") != NULL);
+    TEST_ASSERT(strstr(out, "Cache-Control: no-cache, no-transform") != NULL);
+    TEST_ASSERT(strstr(out, "X-Accel-Buffering: no") != NULL);
     TEST_ASSERT(strstr(out, "Access-Control-Allow-Origin: *") != NULL);
 
     free(out);
+    close(sv[0]);
+    close(sv[1]);
+}
+
+static void test_responses_stream_sends_live_reasoning_and_decoding(void) {
+    int sv[2];
+    TEST_ASSERT(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    if (sv[0] < 0 || sv[1] < 0) return;
+
+    request r;
+    request_init(&r, REQ_CHAT, 128);
+    r.api = API_RESPONSES;
+    r.stream = true;
+    r.think_mode = DS4_THINK_HIGH;
+    r.reasoning_summary_emit = true;
+
+    responses_stream st;
+    responses_stream_init(&r, &st);
+    st.active = true;
+    TEST_ASSERT(responses_sse_created(sv[0], &r, &st, 1));
+
+    const char *thinking = "reasoning token one token two";
+    TEST_ASSERT(responses_sse_stream_update(sv[0], &r, &st,
+                                             thinking, strlen(thinking), false));
+
+    char phase[8192] = {0};
+    ssize_t n = recv(sv[1], phase, sizeof(phase) - 1, MSG_DONTWAIT);
+    TEST_ASSERT(n > 0);
+    if (n > 0) {
+        phase[n] = '\0';
+        TEST_ASSERT(strstr(phase, "response.reasoning_summary_text.delta") != NULL);
+        TEST_ASSERT(strstr(phase, "response.completed") == NULL);
+    }
+
+    const char *decoded = "reasoning token one token two</think>decoded token";
+    TEST_ASSERT(responses_sse_stream_update(sv[0], &r, &st,
+                                             decoded, strlen(decoded), false));
+    memset(phase, 0, sizeof(phase));
+    n = recv(sv[1], phase, sizeof(phase) - 1, MSG_DONTWAIT);
+    TEST_ASSERT(n > 0);
+    if (n > 0) {
+        phase[n] = '\0';
+        TEST_ASSERT(strstr(phase, "response.output_text.delta") != NULL);
+        TEST_ASSERT(strstr(phase, "decoded token") != NULL);
+        TEST_ASSERT(strstr(phase, "response.completed") == NULL);
+    }
+
+    responses_stream_free(&st);
+    request_free(&r);
     close(sv[0]);
     close(sv[1]);
 }
@@ -18242,6 +18305,32 @@ static void test_api_thinking_controls_parse(void) {
     mode = DS4_THINK_HIGH;
     TEST_ASSERT(parse_reasoning_effort_value(&openai_effort, &mode));
     TEST_ASSERT(mode == DS4_THINK_HIGH);
+
+    bool summary = false;
+    bool summary_specified = false;
+    bool effort_seen = false;
+    const char *responses_reasoning = "{\"effort\":\"high\"}";
+    TEST_ASSERT(parse_responses_reasoning(&responses_reasoning, &mode,
+                                          &summary, &summary_specified,
+                                          &effort_seen));
+    TEST_ASSERT(effort_seen);
+    TEST_ASSERT(!summary);
+    TEST_ASSERT(!summary_specified);
+
+    responses_reasoning = "{\"summary\":null}";
+    TEST_ASSERT(parse_responses_reasoning(&responses_reasoning, &mode,
+                                          &summary, &summary_specified,
+                                          &effort_seen));
+    TEST_ASSERT(summary_specified);
+    TEST_ASSERT(!summary);
+
+    summary_specified = false;
+    responses_reasoning = "{\"summary\":\"auto\"}";
+    TEST_ASSERT(parse_responses_reasoning(&responses_reasoning, &mode,
+                                          &summary, &summary_specified,
+                                          &effort_seen));
+    TEST_ASSERT(summary_specified);
+    TEST_ASSERT(summary);
 }
 
 static void test_render_think_max_prompt_prefix(void) {
@@ -22717,6 +22806,7 @@ static void ds4_server_unit_tests_run(void) {
     test_cors_headers_are_opt_in();
     test_cors_preflight_response_is_no_content();
     test_cors_sse_headers();
+    test_responses_stream_sends_live_reasoning_and_decoding();
     test_anthropic_live_stream_sends_incremental_blocks();
     test_anthropic_usage_reports_cache_details();
     test_anthropic_tool_stream_sends_live_tool_use();
