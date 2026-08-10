@@ -49514,14 +49514,45 @@ static bool qwen_graph_forward_token(
         float              *logits_out) {
     if (!g || !model || !weights || !logits_out || position >= g->ctx_cap ||
         token >= DS4_N_VOCAB) return false;
+    const char *profile_pos_env =
+        getenv("DS4_CUDA_QWEN_DECODE_PROFILE_POS");
+    char *profile_pos_end = NULL;
+    errno = 0;
+    const unsigned long profile_pos =
+        profile_pos_env && profile_pos_env[0] ?
+        strtoul(profile_pos_env, &profile_pos_end, 10) : 0ul;
+    const bool profile = profile_pos_env && profile_pos_env[0] &&
+        errno == 0 && profile_pos_end && *profile_pos_end == '\0' &&
+        profile_pos <= UINT32_MAX && (uint32_t)profile_pos == position;
+
+    const double prof_token_t0 = profile ? now_sec() : 0.0;
+    double prof_embed_ms = 0.0;
+    double prof_recurrent_attn_ms = 0.0;
+    double prof_full_attn_ms = 0.0;
+    double prof_ffn_ms = 0.0;
+    double prof_output_ms = 0.0;
+    double prof_read_ms = 0.0;
+    double prof_full_qkv_ms = 0.0;
+    double prof_full_core_ms = 0.0;
+    double prof_full_out_ms = 0.0;
+
     bool ok = ds4_gpu_begin_commands() != 0;
     if (ok) ok = ds4_gpu_embed_token_quant_tensor(
         g->cur, model->map, model->size, weights->token_embd->abs_offset,
         weights->token_embd->type, DS4_N_VOCAB, token, DS4_N_EMBD) != 0;
     if (ok) qwen_trace_tensor("embed", 0, position, g->cur, DS4_N_EMBD);
+    if (profile && ok) {
+        ok = ds4_gpu_end_commands() != 0;
+        if (ok) {
+            prof_embed_ms = (now_sec() - prof_token_t0) * 1000.0;
+            ok = ds4_gpu_begin_commands() != 0;
+        }
+    }
     for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
         ds4_gpu_qwen35_set_decode_layer(il);
         const ds4_layer_weights *l = &weights->layer[il];
+        const bool recurrent = qwen35_layer_is_recurrent(il);
+        const double prof_attn_t0 = profile ? now_sec() : 0.0;
         ok = ds4_gpu_rms_norm_weight_tensor(
             g->attn_norm, g->cur, model->map, model->size,
             l->attn_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
@@ -49564,28 +49595,105 @@ static bool qwen_graph_forward_token(
                 g->attn_out, model, l->qwen_ssm_out, 6144u, DS4_N_EMBD,
                 g->heads, 1);
         } else if (ok) {
-            ok = metal_graph_matmul_plain_tensor(g->q_gate, model, l->qwen_attn_q,
-                                                  DS4_N_EMBD, 12288u,
-                                                  g->attn_norm, 1);
-            if (ok) ok = metal_graph_matmul_plain_tensor(g->k, model, l->qwen_attn_k,
-                                                          DS4_N_EMBD, 1024u,
-                                                          g->attn_norm, 1);
-            if (ok) ok = metal_graph_matmul_plain_tensor(g->v, model, l->qwen_attn_v,
-                                                          DS4_N_EMBD, 1024u,
-                                                          g->attn_norm, 1);
-            if (ok) ok = ds4_gpu_qwen35_full_attention_tensor(
-                    g->heads, g->q_gate, g->k, g->v,
-                    g->key_cache[il], g->value_cache[il], model->map, model->size,
-                    l->qwen_attn_q_norm->abs_offset,
-                    l->qwen_attn_k_norm->abs_offset, position, g->ctx_cap) != 0;
+            const double t_qkv = profile ? now_sec() : 0.0;
+
+            ok = metal_graph_matmul_plain_tensor(
+                g->q_gate, model, l->qwen_attn_q,
+                DS4_N_EMBD, 12288u,
+                g->attn_norm, 1);
+
             if (ok) ok = metal_graph_matmul_plain_tensor(
-                g->attn_out, model, l->attn_output, 6144u, DS4_N_EMBD,
-                g->heads, 1);
+                g->k, model, l->qwen_attn_k,
+                DS4_N_EMBD, 1024u,
+                g->attn_norm, 1);
+
+            if (ok) ok = metal_graph_matmul_plain_tensor(
+                g->v, model, l->qwen_attn_v,
+                DS4_N_EMBD, 1024u,
+                g->attn_norm, 1);
+
+            if (profile && ok) {
+                ok = ds4_gpu_end_commands() != 0;
+
+                if (ok) {
+                    prof_full_qkv_ms +=
+                        (now_sec() - t_qkv) * 1000.0;
+
+                    ok = ds4_gpu_begin_commands() != 0;
+                }
+            }
+
+            const double t_core = profile ? now_sec() : 0.0;
+
+            if (ok) ok = ds4_gpu_qwen35_full_attention_tensor(
+                g->heads,
+                g->q_gate,
+                g->k,
+                g->v,
+                g->key_cache[il],
+                g->value_cache[il],
+                model->map,
+                model->size,
+                l->qwen_attn_q_norm->abs_offset,
+                l->qwen_attn_k_norm->abs_offset,
+                position,
+                g->ctx_cap) != 0;
+
+            if (profile && ok) {
+                ok = ds4_gpu_end_commands() != 0;
+
+                if (ok) {
+                    prof_full_core_ms +=
+                        (now_sec() - t_core) * 1000.0;
+
+                    ok = ds4_gpu_begin_commands() != 0;
+                }
+            }
+
+            const double t_out = profile ? now_sec() : 0.0;
+
+            if (ok) ok = metal_graph_matmul_plain_tensor(
+                g->attn_out,
+                model,
+                l->attn_output,
+                6144u,
+                DS4_N_EMBD,
+                g->heads,
+                1);
+
+            if (profile && ok) {
+                ok = ds4_gpu_end_commands() != 0;
+
+                if (ok) {
+                    prof_full_out_ms +=
+                        (now_sec() - t_out) * 1000.0;
+
+                    ok = ds4_gpu_begin_commands() != 0;
+                }
+            }
         }
         if (ok) qwen_trace_tensor("attn_out", il, position, g->attn_out, DS4_N_EMBD);
         if (ok) ok = ds4_gpu_add_tensor(g->after_attn, g->cur, g->attn_out,
                                          DS4_N_EMBD) != 0;
         if (ok) qwen_trace_tensor("after_attn", il, position, g->after_attn, DS4_N_EMBD);
+        if (profile && ok) {
+            ok = ds4_gpu_end_commands() != 0;
+
+            if (ok) {
+                const double ms =
+                    (now_sec() - prof_attn_t0) * 1000.0;
+
+                if (recurrent)
+                    prof_recurrent_attn_ms += ms;
+                else
+                    prof_full_attn_ms += ms;
+
+                ok = ds4_gpu_begin_commands() != 0;
+            }
+        }
+
+        const double prof_ffn_t0 =
+            profile ? now_sec() : 0.0;
         if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
             g->ffn_norm, g->after_attn, model->map, model->size,
             l->ffn_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
@@ -49608,12 +49716,24 @@ static bool qwen_graph_forward_token(
         if (ok) ok = ds4_gpu_add_tensor(g->next, g->after_attn, g->ffn_out,
                                          DS4_N_EMBD) != 0;
         if (ok) qwen_trace_tensor("layer_out", il, position, g->next, DS4_N_EMBD);
+        if (profile && ok) {
+            ok = ds4_gpu_end_commands() != 0;
+
+            if (ok) {
+                prof_ffn_ms +=
+                    (now_sec() - prof_ffn_t0) * 1000.0;
+
+                ok = ds4_gpu_begin_commands() != 0;
+            }
+        }
         if (ok) {
             ds4_gpu_tensor *tmp = g->cur;
             g->cur = g->next;
             g->next = tmp;
         }
     }
+    const double prof_output_t0 =
+        profile ? now_sec() : 0.0;
     if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
         g->output_norm, g->cur, model->map, model->size,
         weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
@@ -49626,8 +49746,41 @@ static bool qwen_graph_forward_token(
                               g->logits, DS4_N_VOCAB);
     if (ok) ok = ds4_gpu_end_commands() != 0;
     else (void)ds4_gpu_synchronize();
+    if (profile && ok) {
+        prof_output_ms =
+            (now_sec() - prof_output_t0) * 1000.0;
+    }
+
+    const double prof_read_t0 =
+        profile ? now_sec() : 0.0;
     if (ok) ok = ds4_gpu_tensor_read(g->logits, 0, logits_out,
                                       (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
+    if (profile) {
+        prof_read_ms =
+            (now_sec() - prof_read_t0) * 1000.0;
+
+        fprintf(stderr,
+                "QWEN_DECODE_PROFILE pos=%u "
+                "embed=%.3fms "
+                "recurrent_attn=%.3fms "
+                "full_attn=%.3fms "
+                "[qkv=%.3f core=%.3f out=%.3f] "
+                "ffn=%.3fms "
+                "output=%.3fms "
+                "read=%.3fms "
+                "total=%.3fms\n",
+                position,
+                prof_embed_ms,
+                prof_recurrent_attn_ms,
+                prof_full_attn_ms,
+                prof_full_qkv_ms,
+                prof_full_core_ms,
+                prof_full_out_ms,
+                prof_ffn_ms,
+                prof_output_ms,
+                prof_read_ms,
+                (now_sec() - prof_token_t0) * 1000.0);
+    }
     return ok;
 }
 
@@ -61232,6 +61385,119 @@ int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
     free(masked);
     free(piece);
     return token;
+}
+
+static bool forced_piece_is_complete_utf8(const char *s, size_t len) {
+    size_t i = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)s[i++];
+        int need = 0;
+        if (c < 0x80) continue;
+        if (c >= 0xc2 && c <= 0xdf) need = 1;
+        else if (c >= 0xe0 && c <= 0xef) need = 2;
+        else if (c >= 0xf0 && c <= 0xf4) need = 3;
+        else return false;
+        if (i + (size_t)need > len) return false;
+        unsigned char first_cont = (unsigned char)s[i];
+        if ((c == 0xe0 && first_cont < 0xa0) ||
+            (c == 0xed && first_cont > 0x9f) ||
+            (c == 0xf0 && first_cont < 0x90) ||
+            (c == 0xf4 && first_cont > 0x8f)) return false;
+        for (int j = 0; j < need; j++) {
+            if (((unsigned char)s[i++] & 0xc0) != 0x80) return false;
+        }
+    }
+    return true;
+}
+
+int ds4_engine_forced_prefix_token(ds4_engine *e,
+                                   ds4_token_filter_fn filter, void *filter_ud,
+                                   bool ignore_leading_ws,
+                                   bool allow_common_prefix_on_conflict) {
+    if (!e || !filter) return -1;
+    ds4_vocab *vocab = &e->vocab;
+    size_t max_piece = 0;
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        if (vocab->token[i].len > max_piece) max_piece = (size_t)vocab->token[i].len;
+    }
+    char *piece = xmalloc(max_piece + 1);
+    char *longest = xmalloc(max_piece + 1);
+    char *common_prefix = xmalloc(max_piece + 1);
+    size_t longest_len = 0;
+    size_t common_len = 0;
+    int best_complete_token = -1;
+    size_t best_complete_len = 0;
+    bool initialized = false;
+    bool conflict = false;
+    int *accepted = NULL;
+    int accepted_len = 0;
+    int accepted_cap = 0;
+
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        size_t n = vocab_token_text_copy(vocab, i, piece, max_piece + 1);
+        if (!n || n == SIZE_MAX ||
+            (ignore_leading_ws && isspace((unsigned char)piece[0])) ||
+            !filter(filter_ud, i, piece, n)) continue;
+        if (accepted_len == accepted_cap) {
+            accepted_cap = accepted_cap ? accepted_cap * 2 : 64;
+            accepted = xrealloc(accepted,
+                                (size_t)accepted_cap * sizeof(accepted[0]));
+        }
+        accepted[accepted_len++] = i;
+        bool complete_utf8 = forced_piece_is_complete_utf8(piece, n);
+        if (complete_utf8 && n > best_complete_len) {
+            best_complete_token = i;
+            best_complete_len = n;
+        }
+        if (!initialized) {
+            memcpy(longest, piece, n);
+            memcpy(common_prefix, piece, n);
+            longest_len = n;
+            common_len = n;
+            initialized = true;
+            continue;
+        }
+        size_t prefix_limit = common_len < n ? common_len : n;
+        size_t prefix_n = 0;
+        while (prefix_n < prefix_limit && common_prefix[prefix_n] == piece[prefix_n])
+            prefix_n++;
+        common_len = prefix_n;
+        size_t common = longest_len < n ? longest_len : n;
+        if (memcmp(longest, piece, common)) {
+            conflict = true;
+        } else if (n > longest_len) {
+            memcpy(longest, piece, n);
+            longest_len = n;
+        }
+        /* A zero common prefix is itself proof of a real branch.  Record the
+         * conflict before stopping the vocabulary scan; otherwise the first
+         * accepted vocabulary family (often repeated punctuation such as
+         * "!", "!!", ...) is incorrectly treated as deterministic. */
+        if (!common_len) break;
+    }
+
+    /* Tokenizations such as `<`, `</`, and `</parameter>` are one deterministic
+     * continuation represented at different BPE granularities: take the
+     * longest.  Two non-prefix-compatible pieces represent a real model choice. */
+    int forced = !conflict ? best_complete_token : -1;
+    if (conflict && common_len && allow_common_prefix_on_conflict) {
+        size_t best_len = 0;
+        for (int ai = 0; ai < accepted_len; ai++) {
+            size_t n = vocab_token_text_copy(
+                vocab, accepted[ai], piece, max_piece + 1);
+            if (n && n != SIZE_MAX && forced_piece_is_complete_utf8(piece, n) &&
+                n <= common_len && n > best_len &&
+                !memcmp(piece, common_prefix, n)) {
+                forced = accepted[ai];
+                best_len = n;
+            }
+        }
+    }
+    free(accepted);
+    free(common_prefix);
+    free(longest);
+    free(piece);
+    return forced;
 }
 
 int ds4_session_top_logprobs(ds4_session *s, ds4_token_score *out, int k) {

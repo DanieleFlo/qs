@@ -444,3 +444,21 @@ steady, con 14,90 GiB pianificati. Il probe GDN copre anche quattro token in
 una singola chiamata multi-riga: stato convoluzionale bit-exact e stato
 ricorrente/output entro il solo roundoff float32. Il matvec Q5_K warp8 è
 bit-exact rispetto al kernel block-256.
+
+### Decode long-context: warp attention e tentativo grouped GQA del 2026-08-10
+
+Sul Q4_K_S, con 10.666 token di prompt e 200 token greedy a context 32.768,
+il kernel attention con riduzione warp passa da 3,46 a 4,31 token/s medi nel
+decode (+24,6%). Il tempo HTTP comprensivo del prefill passa da 80,30 a 69,27
+secondi. Il probe sintetico a posizione 255 confronta 6.144 valori: legacy e
+warp restano nell'inviluppo di solo roundoff rispetto al riferimento CPU
+(`max_abs` 3,35e-8 e 3,73e-8), e la continuazione reale di 200 token resta
+identica. Il percorso rimane opt-in con `DS4_CUDA_QWEN_WARP_ATTN=1`.
+
+È stato inoltre implementato e misurato un kernel grouped GQA che elaborava
+insieme le sei query head associate alla stessa KV head, preservando bit-exact
+l'output del kernel warp. Ha raggiunto soltanto 3,69 token/s: +6,6% rispetto al
+legacy, ma -14,4% rispetto al warp. Ridurre da 24 a 4 CTA e mantenere sei
+accumulatori per thread ha sacrificato parallelismo e aumentato la pressione
+sui registri più di quanto il riuso K/V abbia ridotto il traffico. Il candidato
+è stato rimosso senza ulteriore tuning.

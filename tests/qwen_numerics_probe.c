@@ -455,6 +455,175 @@ cleanup:
     return failed;
 }
 
+static void cpu_qwen_attention(float *out, const float *q_gate,
+                               const float *key_cache,
+                               const float *value_cache, uint32_t position) {
+    for (uint32_t qh = 0; qh < 24u; qh++) {
+        const uint32_t kvh = qh / 6u;
+        const float *q = q_gate + (uint64_t)qh * 512u;
+        float acc[256] = {0};
+        float online_m = -INFINITY;
+        float online_l = 0.0f;
+        for (uint32_t t = 0; t <= position; t++) {
+            const uint64_t base = ((uint64_t)t * 4u + kvh) * 256u;
+            float dot = 0.0f;
+            for (uint32_t d = 0; d < 256u; d++)
+                dot += q[d] * key_cache[base + d];
+            const float score = dot * (1.0f / 16.0f);
+            const float next_m = fmaxf(online_m, score);
+            const float alpha = expf(online_m - next_m);
+            const float beta = expf(score - next_m);
+            online_l = online_l * alpha + beta;
+            online_m = next_m;
+            for (uint32_t d = 0; d < 256u; d++)
+                acc[d] = acc[d] * alpha + value_cache[base + d] * beta;
+        }
+        for (uint32_t d = 0; d < 256u; d++) {
+            const float gate = 1.0f / (1.0f + expf(-q[256u + d]));
+            out[(uint64_t)qh * 256u + d] = (acc[d] / online_l) * gate;
+        }
+    }
+}
+
+static int run_attention_variant(ds4_gpu_tensor *t_out,
+                                 ds4_gpu_tensor *t_q,
+                                 ds4_gpu_tensor *t_k,
+                                 ds4_gpu_tensor *t_v,
+                                 ds4_gpu_tensor *t_key_cache,
+                                 ds4_gpu_tensor *t_value_cache,
+                                 const float *map, size_t map_n,
+                                 const float *q, const float *k,
+                                 const float *v, const float *key_cache,
+                                 const float *value_cache,
+                                 uint32_t position, uint32_t context,
+                                 float *out) {
+    int failed = 0;
+    failed |= !ds4_gpu_tensor_write(t_q, 0, q, 24u * 512u * sizeof(float));
+    failed |= !ds4_gpu_tensor_write(t_k, 0, k, 4u * 256u * sizeof(float));
+    failed |= !ds4_gpu_tensor_write(t_v, 0, v, 4u * 256u * sizeof(float));
+    failed |= !ds4_gpu_tensor_write(t_key_cache, 0, key_cache,
+                                    (size_t)context * 4u * 256u * sizeof(float));
+    failed |= !ds4_gpu_tensor_write(t_value_cache, 0, value_cache,
+                                    (size_t)context * 4u * 256u * sizeof(float));
+    failed |= !ds4_gpu_qwen35_full_attention_tensor(
+        t_out, t_q, t_k, t_v, t_key_cache, t_value_cache,
+        map, map_n * sizeof(float), 0, 256u * sizeof(float),
+        position, context);
+    failed |= !ds4_gpu_synchronize();
+    failed |= !ds4_gpu_tensor_read(t_out, 0, out,
+                                   24u * 256u * sizeof(float));
+    return failed;
+}
+
+static int run_full_attention_probe(void) {
+    enum {
+        Q_HEADS = 24,
+        KV_HEADS = 4,
+        HEAD_DIM = 256,
+        Q_STRIDE = 512,
+        POSITION = 255,
+        CONTEXT = 256,
+    };
+    const size_t q_n = (size_t)Q_HEADS * Q_STRIDE;
+    const size_t kv_n = (size_t)KV_HEADS * HEAD_DIM;
+    const size_t out_n = (size_t)Q_HEADS * HEAD_DIM;
+    const size_t cache_n = (size_t)CONTEXT * KV_HEADS * HEAD_DIM;
+    float *map = malloc(2u * HEAD_DIM * sizeof(float));
+    float *q = malloc(q_n * sizeof(float));
+    float *k = malloc(kv_n * sizeof(float));
+    float *v = malloc(kv_n * sizeof(float));
+    float *key_cache = malloc(cache_n * sizeof(float));
+    float *value_cache = malloc(cache_n * sizeof(float));
+    float *prepared_q = malloc(q_n * sizeof(float));
+    float *prepared_key_cache = malloc(cache_n * sizeof(float));
+    float *prepared_value_cache = malloc(cache_n * sizeof(float));
+    float *cpu = malloc(out_n * sizeof(float));
+    float *legacy = malloc(out_n * sizeof(float));
+    float *warp = malloc(out_n * sizeof(float));
+    int failed = !map || !q || !k || !v || !key_cache || !value_cache ||
+                 !prepared_q || !prepared_key_cache || !prepared_value_cache ||
+                 !cpu || !legacy || !warp;
+    if (failed) goto cleanup;
+
+    for (uint32_t d = 0; d < HEAD_DIM; d++) {
+        map[d] = 0.9f + 0.0007f * (float)d;
+        map[HEAD_DIM + d] = 1.1f - 0.0005f * (float)d;
+    }
+    for (size_t i = 0; i < q_n; i++) q[i] = pattern((uint32_t)i, 1201, 0.001f);
+    for (size_t i = 0; i < kv_n; i++) {
+        k[i] = pattern((uint32_t)i, 1213, 0.0012f);
+        v[i] = pattern((uint32_t)i, 1223, 0.0008f);
+    }
+    for (size_t i = 0; i < cache_n; i++) {
+        key_cache[i] = pattern((uint32_t)i, 1231, 0.0009f);
+        value_cache[i] = pattern((uint32_t)i, 1237, 0.0007f);
+    }
+
+    ds4_gpu_tensor *t_out = ds4_gpu_tensor_alloc(out_n * sizeof(float));
+    ds4_gpu_tensor *t_q = ds4_gpu_tensor_alloc(q_n * sizeof(float));
+    ds4_gpu_tensor *t_k = ds4_gpu_tensor_alloc(kv_n * sizeof(float));
+    ds4_gpu_tensor *t_v = ds4_gpu_tensor_alloc(kv_n * sizeof(float));
+    ds4_gpu_tensor *t_key_cache = ds4_gpu_tensor_alloc(cache_n * sizeof(float));
+    ds4_gpu_tensor *t_value_cache = ds4_gpu_tensor_alloc(cache_n * sizeof(float));
+    failed = !t_out || !t_q || !t_k || !t_v || !t_key_cache || !t_value_cache;
+    if (!failed) failed |= !ds4_gpu_set_model_map(map, 2u * HEAD_DIM * sizeof(float));
+
+    unsetenv("DS4_CUDA_QWEN_WARP_ATTN");
+    if (!failed) failed |= run_attention_variant(
+        t_out, t_q, t_k, t_v, t_key_cache, t_value_cache,
+        map, 2u * HEAD_DIM, q, k, v, key_cache, value_cache,
+        POSITION, CONTEXT, legacy);
+    if (!failed) {
+        /* Q/K normalization, RoPE, and the current cache write are shared by
+         * both CUDA variants. Read their prepared values back so this oracle
+         * isolates the attention reduction and online-softmax policy. */
+        failed |= !ds4_gpu_tensor_read(t_q, 0, prepared_q, q_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_read(t_key_cache, 0, prepared_key_cache,
+                                       cache_n * sizeof(float));
+        failed |= !ds4_gpu_tensor_read(t_value_cache, 0, prepared_value_cache,
+                                       cache_n * sizeof(float));
+    }
+    if (!failed) cpu_qwen_attention(cpu, prepared_q, prepared_key_cache,
+                                    prepared_value_cache, POSITION);
+
+    setenv("DS4_CUDA_QWEN_WARP_ATTN", "1", 1);
+    if (!failed) failed |= run_attention_variant(
+        t_out, t_q, t_k, t_v, t_key_cache, t_value_cache,
+        map, 2u * HEAD_DIM, q, k, v, key_cache, value_cache,
+        POSITION, CONTEXT, warp);
+    if (!failed) {
+        const probe_metrics legacy_cpu = measure(legacy, cpu, out_n);
+        const probe_metrics warp_cpu = measure(warp, cpu, out_n);
+        const char *legacy_kind = classify(legacy_cpu, 2e-6, 2e-5);
+        const char *warp_kind = classify(warp_cpu, 2e-6, 2e-5);
+        printf("{\"probe\":\"full_attention\",\"comparison\":\"legacy_vs_cpu\","
+               "\"values\":%zu,\"mae\":%.9g,\"max_abs\":%.9g,"
+               "\"cosine\":%.12g,\"classification\":\"%s\"}\n",
+               out_n, legacy_cpu.mae, legacy_cpu.max_abs,
+               legacy_cpu.cosine, legacy_kind);
+        printf("{\"probe\":\"full_attention\",\"comparison\":\"warp_vs_cpu\","
+               "\"values\":%zu,\"mae\":%.9g,\"max_abs\":%.9g,"
+               "\"cosine\":%.12g,\"classification\":\"%s\"}\n",
+               out_n, warp_cpu.mae, warp_cpu.max_abs,
+               warp_cpu.cosine, warp_kind);
+        failed |= strcmp(legacy_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(warp_kind, "outside_roundoff_envelope") == 0;
+    }
+
+    if (t_value_cache) ds4_gpu_tensor_free(t_value_cache);
+    if (t_key_cache) ds4_gpu_tensor_free(t_key_cache);
+    if (t_v) ds4_gpu_tensor_free(t_v);
+    if (t_k) ds4_gpu_tensor_free(t_k);
+    if (t_q) ds4_gpu_tensor_free(t_q);
+    if (t_out) ds4_gpu_tensor_free(t_out);
+cleanup:
+    unsetenv("DS4_CUDA_QWEN_WARP_ATTN");
+    free(warp); free(legacy); free(cpu);
+    free(prepared_value_cache); free(prepared_key_cache); free(prepared_q);
+    free(value_cache); free(key_cache); free(v); free(k); free(q); free(map);
+    return failed;
+}
+
 static int run_q4_k_probe(void) {
     enum { INPUTS = 256, ROWS = 8 };
     probe_block_q4_k weights[ROWS];
@@ -718,6 +887,7 @@ static int run_q5_k_warp8_probe(void) {
 int main(void) {
     if (!ds4_gpu_init()) return 2;
     int failed = run_gdn_probe();
+    failed |= run_full_attention_probe();
     failed |= run_q4_k_probe();
     failed |= run_q5_k_warp8_probe();
     failed |= run_q6_k_warp8_probe();

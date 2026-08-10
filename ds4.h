@@ -373,6 +373,14 @@ typedef bool (*ds4_token_filter_fn)(void *ud, int token,
 int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
                                 float top_p, float min_p, uint64_t *rng,
                                 ds4_token_filter_fn filter, void *filter_ud);
+/* Return a tokenizer token whose entire decoded piece is a deterministic
+ * common prefix of every grammar-accepted continuation.  When
+ * ignore_leading_ws is true, whitespace-leading alternatives are formatting
+ * choices and are excluded if a non-whitespace continuation exists. */
+int ds4_engine_forced_prefix_token(ds4_engine *e,
+                                   ds4_token_filter_fn filter, void *filter_ud,
+                                   bool ignore_leading_ws,
+                                   bool allow_common_prefix_on_conflict);
 #ifdef DS4_TEST_HOOKS
 int ds4_test_sample_logits(const float *logits, uint32_t n_vocab,
                            float temperature, int top_k,

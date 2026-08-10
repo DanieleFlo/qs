@@ -28565,6 +28565,114 @@ __device__ __forceinline__ static void qwen35_block_reduce_sum(float *sh) {
     }
 }
 
+__device__ __forceinline__ static float
+qwen35_attention_reduce_sum_fast(float v, float *warp_sums) {
+    const uint32_t lane = threadIdx.x & 31u;
+    const uint32_t warp = threadIdx.x >> 5u;
+
+    /* Reduce inside each warp without a block-wide barrier. */
+    #pragma unroll
+    for (uint32_t offset = 16u; offset != 0u; offset >>= 1u) {
+        v += __shfl_down_sync(0xffffffffu, v, offset);
+    }
+
+    /* One partial sum per warp; a 256-thread block has eight warps. */
+    if (lane == 0u) {
+        warp_sums[warp] = v;
+    }
+
+    __syncthreads();
+
+    float sum = 0.0f;
+
+    if (warp == 0u) {
+        sum = lane < 8u ? warp_sums[lane] : 0.0f;
+
+        #pragma unroll
+        for (uint32_t offset = 16u; offset != 0u; offset >>= 1u) {
+            sum += __shfl_down_sync(0xffffffffu, sum, offset);
+        }
+
+        if (lane == 0u) {
+            warp_sums[0] = sum;
+        }
+    }
+
+    __syncthreads();
+
+    return warp_sums[0];
+}
+
+__global__ static void qwen35_attention_rows_warp_kernel(
+        float *out,
+        const float *q_gate,
+        const float *key_cache,
+        const float *value_cache,
+        uint32_t position_start) {
+
+    const uint32_t qh = blockIdx.x;
+    const uint32_t trow = blockIdx.y;
+    const uint32_t d = threadIdx.x;
+
+    const uint32_t position = position_start + trow;
+    const uint32_t kvh = qh / 6u;
+
+    const float *q =
+        q_gate + (uint64_t)trow * 12288u + qh * 512u;
+
+    float acc = 0.0f;
+
+    __shared__ float warp_sums[8];
+    __shared__ float online_m;
+    __shared__ float online_l;
+    __shared__ float alpha;
+    __shared__ float beta_w;
+
+    if (d == 0u) {
+        online_m = -INFINITY;
+        online_l = 0.0f;
+    }
+
+    __syncthreads();
+
+    for (uint32_t t = 0; t <= position; t++) {
+        const uint64_t base =
+            ((uint64_t)t * 4u + kvh) * 256u;
+
+        const float dot =
+            qwen35_attention_reduce_sum_fast(
+                q[d] * key_cache[base + d],
+                warp_sums);
+
+        if (d == 0u) {
+            const float score = dot * (1.0f / 16.0f);
+            const float next_m = fmaxf(online_m, score);
+
+            alpha = expf(online_m - next_m);
+            beta_w = expf(score - next_m);
+
+            online_l = online_l * alpha + beta_w;
+            online_m = next_m;
+        }
+
+        /* Make the new online-softmax weights visible to every thread. */
+        __syncthreads();
+
+        acc =
+            acc * alpha +
+            value_cache[base + d] * beta_w;
+
+        /* The next reduction reaches a block barrier before thread zero can
+         * update alpha and beta, so the legacy trailing barrier is redundant. */
+    }
+
+    const float gate =
+        1.0f / (1.0f + expf(-q[256u + d]));
+
+    out[((uint64_t)trow * 24u + qh) * 256u + d] =
+        (acc / online_l) * gate;
+}
+
 __global__ static void qwen35_prepare_q_kernel(
         float *q_gate,
         const float *norm,
@@ -28891,10 +28999,18 @@ extern "C" int ds4_gpu_qwen35_full_attention_rows_tensor(
         (float *)key_cache->ptr, (float *)value_cache->ptr, position_start);
     if (!cuda_ok(cudaGetLastError(), "qwen35 prepare kv rows")) return 0;
     if (n_tokens >= 512u &&
-        getenv("DS4_CUDA_QWEN_NO_FLASH_ATTN") == NULL) {
+        !cuda_env_flag_enabled("DS4_CUDA_QWEN_NO_FLASH_ATTN", 0)) {
         return qwen35_attention_gemm_rows_launch(
             out_heads, q_gate, key_cache, value_cache,
             position_start, n_tokens);
+    }
+    if (n_tokens == 1u &&
+        cuda_env_flag_enabled("DS4_CUDA_QWEN_WARP_ATTN", 0)) {
+        qwen35_attention_rows_warp_kernel<<<qgrid, 256>>>(
+            (float *)out_heads->ptr, (const float *)q_gate->ptr,
+            (const float *)key_cache->ptr, (const float *)value_cache->ptr,
+            position_start);
+        return cuda_ok(cudaGetLastError(), "qwen35 warp attention rows");
     }
     qwen35_attention_rows_kernel<<<qgrid, 256>>>(
         (float *)out_heads->ptr, (const float *)q_gate->ptr,

@@ -177,6 +177,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/agentic-checkpoint-validation-2026-08-07.md` — gate CUDA Q4_K_S dei
   task 10–11: equivalenza bit-exact, casi lunghi 10k, rollback MTP, metriche
   SSD/GPU e copertura della suite HTTP agentica.
+- `docs/constrained-json-decoding-plan.md` — checklist e criteri di completamento
+  per simulatore DSML, JSON Schema, masking dei logits e output strutturati.
 - `docs/hardware/` — inventario della macchina RTX 3090 e note di riferimento
   su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
@@ -374,6 +376,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/ds4_test.c` — runner principale di unit test e test model-backed;
   include equivalenza Qwen MTP/target-only e fixture deterministiche per
   accettazione completa, rifiuto e rollback parziale.
+- `tests/test_constrained_json_api.py` — suite HTTP live e model-backed per
+  masking DSML/JSON Schema: matrice senza/con history sotto 20k token, prompt
+  di injection ostili, duplicati, Unicode/escape e validazione degli output.
 - `tests/test-vectors/` — prompt corti/lunghi, vettori ufficiali e golden locali
   per token e distribuzione.
 - `tests/test_engine_correctness.c` — confronto della continuazione greedy fra
@@ -401,8 +406,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py`,
   `tests/test_qwen36_numerics.py` — schema, staging, checksum, metriche/gate e
   classificazione sintetica dell'inviluppo numerico Qwen3.6.
-- `tests/qwen_numerics_probe.c` — oracle CPU indipendente per GDN e Q4_K contro
-  i kernel CUDA DS4, eseguibile con `make qwen-numerics CUDA_ARCH=sm_86`.
+- `tests/qwen_numerics_probe.c` — oracle CPU indipendente per GDN, full
+  attention Qwen e matvec Q4_K/Q5_K/Q6_K contro i kernel CUDA DS4, eseguibile
+  con `make qwen-numerics CUDA_ARCH=sm_86`.
 - `tests/test_sampling.c` — comportamento deterministico e filtri del sampling.
 - `tests/test_gpu_args.c`, `tests/test_gpu_args_cli.sh` — parsing e propagazione
   della configurazione GPU.

@@ -1089,6 +1089,47 @@ values, including file contents and edit text, use the request's normal sampling
 settings. That separation is important: deterministic decoding is helpful for
 syntax, but can create repeated text when applied to long code or file bodies.
 
+For Responses requests with `agentic`, DS4 additionally applies a fail-closed
+logit mask to every candidate token. The candidate is simulated through all
+DSML state transitions, JSON parameter values are checked against the active
+tool schema, and `</invoke>` is unavailable until required properties and the
+complete input schema are satisfied. Parsed arguments are validated again
+before they can enter the exact-replay tool memory.
+`tool_choice=required` additionally masks ordinary assistant text until a
+complete tool block has been emitted. The decoder recognizes both established
+`DSML` markers and Qwen's emitted `DSMl` spelling, including markers split over
+multiple vocabulary tokens.
+
+Strict JSON output is available through Chat Completions
+`response_format.type=json_schema` and Responses `text.format.type=json_schema`.
+The same filtered sampler masks JSON syntax and schema-invalid completions, and
+generation stops at the first complete schema-valid document. Structured JSON
+disables reasoning and cannot be combined with tools in one request; unsupported
+assertion keywords such as `$ref`, `pattern`, conditionals, and `contains` are
+rejected instead of being silently ignored.
+
+The real-model adversarial suite exercises both tool calls and structured JSON
+with and without a synthetic multi-message history. Its history fixture is
+5,077 UTF-8 bytes (well below 20k tokens even under a pessimistic byte-level
+tokenizer bound), while the server context is fixed at 32,768 tokens:
+
+```sh
+./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
+  --ctx 32768 --host 127.0.0.1 --port 8080
+
+DS4_CONSTRAINED_BASE_URL=http://127.0.0.1:8080 \
+DS4_CONSTRAINED_SERVER_CTX=32768 \
+make test-constrained-json-live
+```
+
+The suite includes ordinary nested schemas plus hostile prompts containing
+duplicate keys, broken closing delimiters, DSML-looking tags, SQL-style
+injection text, control-character escapes, lone surrogate escapes, forbidden
+tool names, and JSON breakout attempts. It parses returned arguments/content
+with duplicate-key rejection and fails on any `finish_reason: error`. Tool
+scenarios keep one stable agentic registry and isolate the active capability via
+`allowed_tools`, matching the live-KV registry contract.
+
 Minimal OpenAI example:
 
 ```sh

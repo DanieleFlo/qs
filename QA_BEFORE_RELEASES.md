@@ -412,6 +412,12 @@ clients.
 - `GET /v1/models/deepseek-v4-flash` and `GET /v1/models/deepseek-v4-pro`
   should both serve whichever GGUF is loaded.
 - Test OpenAI chat completion, OpenAI Responses, and Anthropic messages.
+- After changing DSML filtering, JSON parsing, tool schemas, or structured
+  output, start the release server with `--ctx 32768` and run
+  `DS4_CONSTRAINED_BASE_URL=http://127.0.0.1:8080
+  DS4_CONSTRAINED_SERVER_CTX=32768 make test-constrained-json-live`. Both the
+  no-history and synthetic-history variants must pass; any malformed JSON,
+  duplicate key, forbidden tool, or `finish_reason: error` is release-blocking.
 - Test SSE streaming with thinking enabled and disabled.
 - Test keepalive during long prefill and confirm clients do not time out.
 - On the eight-L40S CUDA TP target, start `ds4-server` with the release TP
