@@ -1,0 +1,14 @@
+{
+  "tool_call_id": "call_de5111950297b31f208ff122809641cc",
+  "visible_tool_call_id": "return_tra_night",
+  "tool_name": "ssd-skill-b",
+  "short_description": "Deterministic regular deep skill B.",
+  "content": "SKILL_B_OK",
+  "preview": "SKILL_B_OK",
+  "capability_kind": "skill",
+  "hds_id": "ssd-skill-root-b-0001",
+  "hds_node_path": [
+    "ssd-skill-root-b"
+  ],
+  "order": 1
+}

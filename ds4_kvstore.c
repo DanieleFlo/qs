@@ -179,6 +179,7 @@ uint8_t ds4_kvstore_reason_code(const char *reason) {
     if (!strcmp(reason, "shutdown")) return DS4_KVSTORE_REASON_SHUTDOWN;
     if (!strcmp(reason, "agent-system")) return DS4_KVSTORE_REASON_AGENT_SYSTEM;
     if (!strcmp(reason, "agent-session")) return DS4_KVSTORE_REASON_AGENT_SESSION;
+    if (!strcmp(reason, "agent-history")) return DS4_KVSTORE_REASON_AGENT_HISTORY;
     return DS4_KVSTORE_REASON_UNKNOWN;
 }
 
@@ -422,7 +423,7 @@ bool ds4_kvstore_read_header(FILE *fp, ds4_kvstore_entry *e,
         h[2] != KV_CACHE_MAGIC2 || h[3] != KV_CACHE_VERSION) return false;
     if (h[20] != KV_CACHE_PAYLOAD_ABI) return false;
     e->quant_bits = h[4];
-    e->reason = h[5] <= DS4_KVSTORE_REASON_AGENT_SESSION ? h[5] :
+    e->reason = h[5] <= DS4_KVSTORE_REASON_AGENT_HISTORY ? h[5] :
                 DS4_KVSTORE_REASON_UNKNOWN;
     e->ext_flags = h[6];
     e->model_id = h[7];
@@ -482,6 +483,54 @@ static void kv_cache_refresh(ds4_kvstore *kc) {
     closedir(d);
 }
 
+void ds4_kvstore_prune(ds4_kvstore *kc, uint32_t keep_reasons,
+                       int max_system_prompts) {
+    if (!kc || !kc->enabled) return;
+    kv_cache_refresh(kc);
+
+    for (int i = kc->len - 1; i >= 0; i--) {
+        ds4_kvstore_entry *e = &kc->entry[i];
+        if (keep_reasons & DS4_KVSTORE_REASON_BIT(e->reason)) continue;
+        if (unlink(e->path) == 0 || errno == ENOENT) {
+            kv_logf(kc, DS4_KVSTORE_LOG_KVCACHE,
+                    "%s: kv cache removed non-durable agent entry reason=%u file=%s",
+                    kv_log_name(kc), (unsigned)e->reason, e->path);
+        }
+    }
+
+    if (max_system_prompts < 0) max_system_prompts = 0;
+    for (;;) {
+        kv_cache_refresh(kc);
+        int count = 0;
+        int victim = -1;
+        for (int i = 0; i < kc->len; i++) {
+            const ds4_kvstore_entry *e = &kc->entry[i];
+            if (e->reason != DS4_KVSTORE_REASON_AGENT_SYSTEM) continue;
+            count++;
+            if (victim < 0 || e->last_used < kc->entry[victim].last_used ||
+                (e->last_used == kc->entry[victim].last_used &&
+                 e->created_at < kc->entry[victim].created_at) ||
+                (e->last_used == kc->entry[victim].last_used &&
+                 e->created_at == kc->entry[victim].created_at &&
+                 strcmp(e->sha, kc->entry[victim].sha) < 0)) {
+                victim = i;
+            }
+        }
+        if (count <= max_system_prompts || victim < 0) break;
+        ds4_kvstore_entry *e = &kc->entry[victim];
+        if (unlink(e->path) != 0 && errno != ENOENT) {
+            kv_logf(kc, DS4_KVSTORE_LOG_WARNING,
+                    "%s: failed to evict LRU system prompt file=%s: %s",
+                    kv_log_name(kc), e->path, strerror(errno));
+            break;
+        }
+        kv_logf(kc, DS4_KVSTORE_LOG_KVCACHE,
+                "%s: kv cache evicted reason=system-prompt-lru max=%d tokens=%u hits=%u file=%s",
+                kv_log_name(kc), max_system_prompts, e->tokens, e->hits, e->path);
+    }
+    kv_cache_refresh(kc);
+}
+
 bool ds4_kvstore_touch_file(const char *path, uint32_t hits) {
     FILE *fp = fopen(path, "r+b");
     if (!fp) return false;
@@ -526,7 +575,24 @@ static bool kv_cache_incoming_supersedes_continued(
 static bool kv_cache_reason_is_anchor(uint8_t reason) {
     return reason == DS4_KVSTORE_REASON_COLD ||
            reason == DS4_KVSTORE_REASON_EVICT ||
-           reason == DS4_KVSTORE_REASON_SHUTDOWN;
+           reason == DS4_KVSTORE_REASON_SHUTDOWN ||
+           reason == DS4_KVSTORE_REASON_AGENT_SYSTEM ||
+           reason == DS4_KVSTORE_REASON_AGENT_SESSION ||
+           reason == DS4_KVSTORE_REASON_AGENT_HISTORY;
+}
+
+static bool kv_cache_same_system_class(
+        const ds4_kvstore_entry *e,
+        const ds4_kvstore_eviction_context *incoming) {
+    return e && incoming &&
+           incoming->reason == DS4_KVSTORE_REASON_AGENT_SYSTEM &&
+           e->reason == DS4_KVSTORE_REASON_AGENT_SYSTEM;
+}
+
+static int kv_cache_engine_quant_bits(ds4_engine *engine) {
+    /* Qwen3.6 is dense, so there is no routed-expert tensor to inspect. */
+    if (ds4_engine_is_qwen36_q4_k_s(engine)) return 4;
+    return ds4_engine_routed_quant_bits(engine);
 }
 
 double ds4_kvstore_entry_eviction_score(
@@ -569,11 +635,28 @@ void ds4_kvstore_evict(ds4_kvstore *kc, const ds4_tokens *live,
     for (int i = 0; i < kc->len; i++) total += kc->entry[i].file_size;
     const uint64_t target = kc->budget_bytes - extra_bytes;
     while (total > target && kc->len > 0) {
-        int victim = 0;
+        int victim = -1;
+        /* System prompts form their own LRU ring. When a new one needs room,
+         * replace the least recently used system prompt first instead of
+         * letting token length or history hit density choose unpredictably. */
+        if (incoming && incoming->reason == DS4_KVSTORE_REASON_AGENT_SYSTEM) {
+            for (int i = 0; i < kc->len; i++) {
+                if (!kv_cache_same_system_class(&kc->entry[i], incoming)) continue;
+                if (victim < 0 ||
+                    kc->entry[i].last_used < kc->entry[victim].last_used ||
+                    (kc->entry[i].last_used == kc->entry[victim].last_used &&
+                     kc->entry[i].created_at < kc->entry[victim].created_at)) {
+                    victim = i;
+                }
+            }
+        }
+        const bool system_lru = victim >= 0;
+        if (victim < 0) victim = 0;
         double victim_score =
-            ds4_kvstore_entry_eviction_score(&kc->entry[0], live, now,
+            ds4_kvstore_entry_eviction_score(&kc->entry[victim], live, now,
                                              incoming);
-        for (int i = 1; i < kc->len; i++) {
+        for (int i = 0; !system_lru && i < kc->len; i++) {
+            if (i == victim) continue;
             double score =
                 ds4_kvstore_entry_eviction_score(&kc->entry[i], live, now,
                                                  incoming);
@@ -843,7 +926,8 @@ static bool kv_cache_file_text_matches(const char *path, const char sha[41],
 static bool kv_cache_existing_compatible(ds4_kvstore *kc, const char *path,
                                          const char sha[41],
                                          const char *text, size_t text_len,
-                                         int model_id, int quant_bits, int ctx_size) {
+                                         int model_id, int quant_bits, int ctx_size,
+                                         uint8_t reason) {
     if (access(path, F_OK) != 0) return false;
     ds4_kvstore_entry e = {0};
     if (!ds4_kvstore_read_entry_file(path, sha, &e)) return false;
@@ -851,6 +935,12 @@ static bool kv_cache_existing_compatible(ds4_kvstore *kc, const char *path,
                       (!kc->reject_different_quant ||
                        e.quant_bits == (uint8_t)quant_bits) &&
                       e.ctx_size <= (uint32_t)ctx_size &&
+                      /* Content addressing alone cannot distinguish a normal
+                       * linear frontier from an active tool/sub-agent session.
+                       * Never retain an entry under the wrong agent class. */
+                      ((e.reason < DS4_KVSTORE_REASON_AGENT_SYSTEM &&
+                        reason < DS4_KVSTORE_REASON_AGENT_SYSTEM) ||
+                       e.reason == reason) &&
                       kv_cache_file_text_matches(path, sha, text, text_len);
     ds4_kvstore_entry_free(&e);
     if (!compatible) {
@@ -939,7 +1029,7 @@ bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
     ds4_tokens store_tokens = {0};
     ds4_kvstore_tokens_copy_prefix(&store_tokens, tokens, store_len);
 
-    const int quant_bits = ds4_engine_routed_quant_bits(engine);
+    const int quant_bits = kv_cache_engine_quant_bits(engine);
     if (quant_bits != 2 && quant_bits != 4) {
         ds4_tokens_free(&store_tokens);
         return false;
@@ -996,7 +1086,8 @@ bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
 
     if (kv_cache_existing_compatible(kc, path, sha, text, text_len,
                                      model_id,
-                                     quant_bits, ds4_session_ctx(session))) {
+                                     quant_bits, ds4_session_ctx(session),
+                                     reason_code)) {
         kv_cache_rewrite_trailer(kc, path, text, hooks);
         free(text);
         free(path);
@@ -1005,8 +1096,13 @@ bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
     }
 
     ds4_session_payload_file staged = {0};
-    if (ds4_session_stage_payload(session, &staged,
-                                  save_err, sizeof(save_err)) != 0) {
+    const bool direct_qwen = ds4_engine_is_qwen36_q4_k_s(engine);
+    uint64_t payload_bytes = direct_qwen ?
+        ds4_session_payload_bytes(session) : 0;
+    if ((!direct_qwen &&
+         ds4_session_stage_payload(session, &staged,
+                                   save_err, sizeof(save_err)) != 0) ||
+        (direct_qwen && payload_bytes == 0)) {
         kv_logf(kc, DS4_KVSTORE_LOG_KVCACHE,
                 "%s: kv cache skipped tokens=%d reason=%s because KV payload staging failed: %s",
                 kv_log_name(kc),
@@ -1020,7 +1116,7 @@ bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
         ds4_tokens_free(&store_tokens);
         return false;
     }
-    uint64_t payload_bytes = staged.bytes;
+    if (!direct_qwen) payload_bytes = staged.bytes;
 
     uint64_t est_file_bytes = 0, est_required_bytes = 0;
     if (!ds4_kvstore_file_size_fits(kc, (uint64_t)text_len, payload_bytes,
@@ -1047,6 +1143,7 @@ bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
         .model_id = (uint8_t)model_id,
         .quant_bits = (uint8_t)quant_bits,
         .ctx_size = (uint32_t)ds4_session_ctx(session),
+        .reason = reason_code,
         .reject_different_quant = kc->reject_different_quant,
     };
     ds4_kvstore_evict(kc, live_tokens, est_file_bytes, &incoming);
@@ -1084,11 +1181,16 @@ bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
     errno = 0;
     bool ok = fwrite(h, 1, sizeof(h), fp) == sizeof(h) &&
               fwrite(tb, 1, sizeof(tb), fp) == sizeof(tb) &&
-              fwrite(text, 1, text_len, fp) == text_len &&
-              ds4_session_write_staged_payload(&staged, fp,
-                                               save_err, sizeof(save_err)) == 0 &&
-              kv_trailer_write(hooks, fp, text, &trailer_bytes) &&
-              fflush(fp) == 0;
+              fwrite(text, 1, text_len, fp) == text_len;
+    if (ok) {
+        ok = direct_qwen ?
+            ds4_session_save_payload(session, fp,
+                                     save_err, sizeof(save_err)) == 0 :
+            ds4_session_write_staged_payload(&staged, fp,
+                                             save_err, sizeof(save_err)) == 0;
+    }
+    if (ok) ok = kv_trailer_write(hooks, fp, text, &trailer_bytes);
+    if (ok) ok = fflush(fp) == 0;
     int saved_errno = errno;
     if (fclose(fp) != 0) {
         if (!saved_errno) saved_errno = errno;
@@ -1188,13 +1290,15 @@ bool ds4_kvstore_maybe_store_continued(ds4_kvstore *kc,
 }
 
 int ds4_kvstore_find_text_prefix(ds4_kvstore *kc, const char *prompt_text,
-                                 int model_id, int quant_bits, int ctx_size) {
+                                 int model_id, int quant_bits, int ctx_size,
+                                 uint32_t allowed_reasons) {
     if (!prompt_text) return -1;
     const size_t prompt_bytes = strlen(prompt_text);
     kv_cache_refresh(kc);
     int best = -1;
     for (int i = 0; i < kc->len; i++) {
         ds4_kvstore_entry *e = &kc->entry[i];
+        if (!(allowed_reasons & DS4_KVSTORE_REASON_BIT(e->reason))) continue;
         if (e->text_bytes > prompt_bytes || e->text_bytes > SIZE_MAX) continue;
         if ((int)e->tokens < kc->opt.min_tokens) continue;
         if (e->model_id != (uint8_t)model_id) continue;
@@ -1219,16 +1323,18 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
                               ds4_tokens *effective_prompt,
                               ds4_kvstore_load_result *result,
                               const ds4_kvstore_trailer_hooks *hooks,
-                              bool responses_protocol) {
+                              bool responses_protocol,
+                              uint32_t allowed_reasons) {
     if (result) memset(result, 0, sizeof(*result));
     if (effective_prompt) effective_prompt->len = 0;
     if (!kc->enabled || !prompt_text) return 0;
-    const int quant_bits = ds4_engine_routed_quant_bits(engine);
+    const int quant_bits = kv_cache_engine_quant_bits(engine);
     if (quant_bits != 2 && quant_bits != 4) return 0;
     const int model_id = ds4_engine_model_id(engine);
     const size_t prompt_bytes = strlen(prompt_text);
     int idx = ds4_kvstore_find_text_prefix(kc, prompt_text, model_id, quant_bits,
-                                           ds4_session_ctx(session));
+                                           ds4_session_ctx(session),
+                                           allowed_reasons);
     if (idx < 0) return 0;
 
     ds4_kvstore_entry e = kc->entry[idx];
@@ -1319,7 +1425,12 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
         kc->continued_last_store_tokens = loaded;
         const char *key_kind = ds4_kvstore_key_kind(hdr.ext_flags);
         bool consumed = false;
-        if (kc->opt.cold_max_tokens > 0 && loaded > kc->opt.cold_max_tokens) {
+        const bool persistent_agent_checkpoint =
+            hdr.reason == DS4_KVSTORE_REASON_AGENT_SYSTEM ||
+            hdr.reason == DS4_KVSTORE_REASON_AGENT_SESSION ||
+            hdr.reason == DS4_KVSTORE_REASON_AGENT_HISTORY;
+        if (!persistent_agent_checkpoint && kc->opt.cold_max_tokens > 0 &&
+            loaded > kc->opt.cold_max_tokens) {
             unlink(path);
             consumed = true;
             kv_logf(kc, DS4_KVSTORE_LOG_KVCACHE,

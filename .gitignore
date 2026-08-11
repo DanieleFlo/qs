@@ -26,6 +26,9 @@
 /tests/test_metal_session_batch
 /tests/test_q4k_dot
 /tests/test_sampling
+/tests/agent-ssd-live-*.log
+/tests/agent-ssd-live-kv/
+/tests/agent-ssd-live-server.pid
 *.o
 *.dSYM/
 __pycache__/
@@ -34,3 +37,4 @@ __pycache__/
 /gguf-tools/quality-testing/staging/
 .*.swp
 .DS_Store
+/agent

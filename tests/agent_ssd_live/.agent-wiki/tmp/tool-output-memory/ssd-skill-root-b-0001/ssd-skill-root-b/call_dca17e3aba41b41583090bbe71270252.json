@@ -1,0 +1,14 @@
+{
+  "tool_call_id": "call_dca17e3aba41b41583090bbe71270252",
+  "visible_tool_call_id": "hum_umer_tribute",
+  "tool_name": "ssd-skill-b/ssd-fixed-b",
+  "short_description": "Return the fixed B test value.",
+  "content": "FIXED_TOOL_B_OK",
+  "preview": "FIXED_TOOL_B_OK",
+  "capability_kind": "tool",
+  "hds_id": "ssd-skill-root-b-0001",
+  "hds_node_path": [
+    "ssd-skill-root-b"
+  ],
+  "order": 0
+}

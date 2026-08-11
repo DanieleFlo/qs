@@ -25,7 +25,12 @@ typedef enum {
     DS4_KVSTORE_REASON_SHUTDOWN  = 4,
     DS4_KVSTORE_REASON_AGENT_SYSTEM  = 5,
     DS4_KVSTORE_REASON_AGENT_SESSION = 6,
+    DS4_KVSTORE_REASON_AGENT_HISTORY = 7,
 } ds4_kvstore_reason;
+
+#define DS4_KVSTORE_REASON_BIT(reason) (1u << (unsigned)(reason))
+#define DS4_KVSTORE_REASON_ALL UINT32_MAX
+#define DS4_KVSTORE_AGENT_SYSTEM_MAX 10
 
 typedef enum {
     DS4_KVSTORE_LOG_DEFAULT,
@@ -85,6 +90,7 @@ typedef struct {
     uint8_t model_id;
     uint8_t quant_bits;
     uint32_t ctx_size;
+    uint8_t reason;
     bool reject_different_quant;
 } ds4_kvstore_eviction_context;
 
@@ -157,8 +163,14 @@ double ds4_kvstore_entry_eviction_score(const ds4_kvstore_entry *e,
 void ds4_kvstore_evict(ds4_kvstore *kc, const ds4_tokens *live,
                        uint64_t extra_bytes,
                        const ds4_kvstore_eviction_context *incoming);
+/* Remove entries outside keep_reasons and cap durable system-prompt anchors by
+ * strict LRU.  This is used by the managed Qwen agent cache, whose only
+ * cross-process state is the ten most recently used system prompts. */
+void ds4_kvstore_prune(ds4_kvstore *kc, uint32_t keep_reasons,
+                       int max_system_prompts);
 int ds4_kvstore_find_text_prefix(ds4_kvstore *kc, const char *prompt_text,
-                                 int model_id, int quant_bits, int ctx_size);
+                                 int model_id, int quant_bits, int ctx_size,
+                                 uint32_t allowed_reasons);
 
 bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
                                         ds4_engine *engine,
@@ -194,7 +206,8 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
                               ds4_tokens *effective_prompt,
                               ds4_kvstore_load_result *result,
                               const ds4_kvstore_trailer_hooks *hooks,
-                              bool responses_protocol);
+                              bool responses_protocol,
+                              uint32_t allowed_reasons);
 void ds4_kvstore_load_result_free(ds4_kvstore_load_result *result);
 
 bool ds4_kvstore_read_header(FILE *fp, ds4_kvstore_entry *e,

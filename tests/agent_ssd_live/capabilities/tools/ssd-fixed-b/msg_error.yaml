@@ -1,0 +1,8 @@
+invalid_arguments: "Error: invalid arguments for ssd-fixed-b: $error"
+invalid_arguments_object: "Error: arguments for ssd-fixed-b must be a JSON object."
+before_middleware: "Error: failed before executing ssd-fixed-b."
+type_error: "Error while executing ssd-fixed-b: $error"
+unexpected: "Error: ssd-fixed-b failed unexpectedly."
+after_middleware: "Error: failed after executing ssd-fixed-b."
+serialization: "Error: ssd-fixed-b returned a value that could not be serialized."
+

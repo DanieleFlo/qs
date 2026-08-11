@@ -246,6 +246,9 @@ bool ds4_engine_glm_layer_payload_bytes(ds4_engine *e,
  * KV files with the previously-zero reserved byte remain Flash-compatible;
  * Pro and later shapes must use nonzero ids. */
 int ds4_engine_model_id(ds4_engine *e);
+/* True only for the audited Qwen3.6 27B Q4_K_S layout.  Cache policy uses this
+ * narrow predicate instead of guessing from the model path or quant bits. */
+bool ds4_engine_is_qwen36_q4_k_s(ds4_engine *e);
 bool ds4_engine_is_glm_dsa(ds4_engine *e);
 const char *ds4_backend_name(ds4_backend backend);
 bool ds4_think_mode_enabled(ds4_think_mode mode);

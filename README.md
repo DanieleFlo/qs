@@ -1334,11 +1334,36 @@ re-processing if it was written to the disk KV cache. In other words, memory
 cache handles the active session; disk cache is the resume mechanism for
 different sessions.
 
-Enable it with:
+For the audited Qwen3.6 27B Q4_K_S model this cache is enabled automatically at
+`~/.ds4/qwen36-q4ks-kv`. Its default budget is 8192 MiB and its hard ceiling is
+9216 MiB, keeping the complete managed cache below 10 GB decimal. The budget
+also reserves space for active hierarchical skill checkpoints. Its default
+minimum checkpoint length is one token, so short sessions are preserved too;
+`--kv-cache-min-tokens` can still override that policy. Other models retain the
+opt-in behavior below:
 
 ```sh
 ./ds4-server --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192
 ```
+
+Qwen cold caching stores the stable rendered prefix before the task-specific
+user message even when that first request is longer than
+`--kv-cache-cold-max-tokens`. The lookup key is the exact rendered byte prefix,
+while the payload contains the corresponding exact tokens and complete DS4
+session state. Qwen keeps at most ten `agent-system` files across restarts; a
+hit updates recency and the least-recently-used prompt is removed when an
+eleventh distinct prompt is stored.
+
+Only those system-prompt anchors are durable in the managed Qwen cache.
+Conversation history is not written as `agent-history` or `agent-session` on a
+completed turn, slot eviction, or shutdown. HDS delegation instead owns one
+temporary `.dsh` checkpoint per resident frontend slot: a changed system
+prefix while `send-message-to-child-hds` is pending saves the complete parent
+frontier, and the matching child result restores it and prefills only the
+returned result. Regular deep skills use their explicit enter/return `call_id`
+and temporary `.dsk` checkpoints. Both temporary forms are overwritten or
+consumed during the live server session and are deleted on return/shutdown;
+they are never restart caches.
 
 The cache key is the SHA1 of the rendered byte prefix, and files are named
 `<sha1>.kv`. The DS4 payload still stores the exact token IDs and graph state
@@ -1372,7 +1397,8 @@ The fixed header is little-endian:
 0   u8[3]  magic = "KVC"
 3   u8     version = 1
 4   u8     routed expert quant bits, currently 2 or 4
-5   u8     save reason: 0 unknown, 1 cold, 2 continued, 3 evict, 4 shutdown
+5   u8     save reason: 0 unknown, 1 cold, 2 continued, 3 evict, 4 shutdown,
+             5 agent-system, 6 agent-session, 7 agent-history
 6   u8     extension flags, bit 0 = appended tool-id map
 7   u8     reserved
 8   u32    cached token count
@@ -1384,7 +1410,8 @@ The fixed header is little-endian:
 40  u64    DS4 session payload byte count
 ```
 
-The rendered text is the tokenizer-decoded text for the cached token prefix.
+The rendered text is normally tokenizer-decoded text for the cached token
+prefix. Managed Qwen system anchors store the exact pre-user rendered bytes.
 It is both the human-inspectable prefix and the lookup identity: its SHA1 is
 the filename, and a file is reusable only when those bytes are a prefix of the
 incoming rendered prompt. After load, the exact checkpoint tokens from the DS4
@@ -1454,9 +1481,10 @@ Then it stores:
 The logits are raw IEEE-754 `float32` values from the host `ds4_session`
 buffer. They are saved immediately after the checkpoint tokens so a loaded
 snapshot can sample or continue from the exact next-token distribution without
-running one extra decode step. MTP draft logits/state are not persisted; after
-loading a disk checkpoint the draft state is invalidated and rebuilt by normal
-generation.
+running one extra decode step. The audited Qwen3.6 Q4_K_S payload also persists
+the MTP pending hidden state, draft logits and metadata, and the live MTP KV
+rows. Other model payloads invalidate draft state after loading and rebuild it
+through normal generation.
 
 Distributed coordinator sessions use the same `DSV4` payload. Worker-owned
 layer tensors are pulled during save and merged into the normal layer-ordered

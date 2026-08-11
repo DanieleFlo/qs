@@ -193,7 +193,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `ds4_server.c` — eseguibile `ds4-server`: API HTTP compatibili, code, worker,
   session batching, streaming, tool-call mapping e policy della KV su disco;
   per Responses gestisce inoltre il namespace `agentic`, il masking DSML dei
-  nomi e le frame gerarchiche delle skill.
+  nomi e le frame gerarchiche delle skill. Per Qwen3.6 Q4_K_S abilita
+  automaticamente una cache durevole con budget condiviso fra sessioni,
+  prefissi di sistema e checkpoint delle skill; le history Responses vengono
+  canonicalizzate senza reasoning storico prima della persistenza.
 - `ds4_agent.c` — eseguibile `ds4-agent`: TUI, transcript, sessioni persistenti,
   ciclo tool, file/shell/web tools e orchestrazione della generazione.
 - `ds4_bench.c` — benchmark di prefill/decode a diverse frontiere di contesto,
@@ -215,7 +218,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   validazione del 27B Q4_K_M e Q4_K_S, tokenizer/template Qwen e sessione ibrida
   full-attention/Gated DeltaNet CUDA e prefill layer-major a chunk. Espone il
   salvataggio/ripristino session-scoped su SSD dello stato ricorrente Qwen per
-  le frontiere delle skill; snapshot generali e fork Qwen restano esclusi.
+  le frontiere delle skill; per Qwen3.6 Q4_K_S il payload generale portabile
+  comprende inoltre timeline, logits, stato GDN, KV full-attention e stato MTP.
+  Il fork Qwen in memoria resta escluso.
 - `ds4_gpu.h` — interfaccia tensoriale condivisa fra il grafo C e i backend
   accelerati; descrive tensori opachi, operazioni, attention e batching,
   incluse le due primitive interne Qwen per full-attention gated e Gated
@@ -294,7 +299,12 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `ds4_ssd.c`, `ds4_ssd.h` — parsing dei budget SSD, mapping/allocazioni e
   primitive comuni usate dallo streaming.
 - `ds4_kvstore.c`, `ds4_kvstore.h` — formato durevole dei checkpoint KV,
-  validazione dell'envelope e del payload ABI, lookup e gestione dei file.
+  validazione dell'envelope e del payload ABI, lookup, budget/eviction e
+  gestione dei file; per Qwen rende durevoli soltanto gli anchor
+  `agent-system`, limitati a 10 con LRU stretto. `ds4_server.c` conserva invece
+  una sola history HDS temporanea per slot (`.dsh`, cambio system prompt con
+  chiamata child pendente) e checkpoint deep-skill temporanei per `call_id`
+  (`.dsk`); entrambi vengono consumati al ritorno e non sopravvivono al server.
 - `ds4_streaming_hotlist.inc` — hotlist degli esperti DeepSeek da precaricare.
 - `ds4_streaming_hotlist_glm52.inc` — hotlist equivalente per GLM 5.2.
 
@@ -400,7 +410,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   atomico dei checkpoint mancanti, corrotti o troncati.
 - `tests/test_agentic_checkpoint.c` — gate model-backed CUDA Q4_K_S per
   checkpoint/return: casi lunghi 10k, confronto full-vocabulary bit-exact,
-  isolamento sessioni, cancellazione, nesting, context boundary e rollback MTP.
+  isolamento sessioni, cancellazione, nesting, context boundary, rollback MTP
+  e ripristino del payload generale fra oggetti sessione distinti.
 - `tests/run_agentic_checkpoint.sh` — runner riproducibile del gate precedente
   nelle varianti target-only e target con sidecar MTP, con report JSON e log.
 - `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py`,

@@ -1,4 +1,5 @@
 #include "ds4.h"
+#include "ds4_kvstore.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -137,6 +138,36 @@ static int load_checkpoint(ds4_session *session, const char *path,
     return rc;
 }
 
+static int save_session_payload(ds4_session *session, const char *path,
+                                uint64_t *payload_bytes) {
+    char err[256] = {0};
+    const uint64_t expected = ds4_session_payload_bytes(session);
+    FILE *fp = fopen(path, "wb");
+    if (!fp || expected == 0) {
+        if (fp) fclose(fp);
+        return 1;
+    }
+    int rc = ds4_session_save_payload(session, fp, err, sizeof(err));
+    if (rc == 0 && fflush(fp) != 0) rc = 1;
+    if (rc == 0 && fsync(fileno(fp)) != 0) rc = 1;
+    if (fclose(fp) != 0 && rc == 0) rc = 1;
+    if (rc != 0) fprintf(stderr, "session payload save rc=%d: %s\n", rc, err);
+    if (rc == 0 && payload_bytes) *payload_bytes = expected;
+    return rc;
+}
+
+static int load_session_payload(ds4_session *session, const char *path,
+                                uint64_t payload_bytes) {
+    char err[256] = {0};
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 1;
+    int rc = ds4_session_load_payload(session, fp, payload_bytes,
+                                      err, sizeof(err));
+    fclose(fp);
+    if (rc != 0) fprintf(stderr, "session payload load rc=%d: %s\n", rc, err);
+    return rc;
+}
+
 static int copy_file(const char *src, const char *dst, bool truncate_half,
                      bool corrupt) {
     FILE *in = fopen(src, "rb");
@@ -190,6 +221,7 @@ int main(void) {
     const char *model = getenv("DS4_TEST_MODEL");
     const char *mtp = getenv("DS4_TEST_MTP");
     const char *base = getenv("DS4_AGENTIC_TEST_DIR");
+    const bool fast = getenv("DS4_AGENTIC_FAST") != NULL;
     if (!model || !model[0]) {
         fprintf(stderr, "DS4_TEST_MODEL is required\n");
         return 2;
@@ -212,9 +244,11 @@ int main(void) {
     float *child_logits = NULL;
     int rc = 1;
     char checkpoint[4096], corrupt_path[4096], truncated_path[4096];
+    char session_path[4096];
     snprintf(checkpoint, sizeof(checkpoint), "%s/frontier.dsk", dir);
     snprintf(corrupt_path, sizeof(corrupt_path), "%s/corrupt.dsk", dir);
     snprintf(truncated_path, sizeof(truncated_path), "%s/truncated.dsk", dir);
+    snprintf(session_path, sizeof(session_path), "%s/session.dsv", dir);
 
     ds4_engine_options options = {
         .model_path = model,
@@ -225,11 +259,11 @@ int main(void) {
     };
     CHECK(ds4_engine_open(&engine, &options) == 0, "engine open failed");
     const bool mtp_enabled = ds4_engine_has_mtp(engine);
-    const int parent_count = mtp_enabled ? 256 : 10000;
-    const int instruction_count = mtp_enabled ? 64 : 500;
-    const int child_count = mtp_enabled ? 128 : 2000;
-    const int result_count = mtp_enabled ? 32 : 200;
-    const int main_ctx = mtp_enabled ? 4096 : 16384;
+    const int parent_count = fast ? 128 : (mtp_enabled ? 256 : 10000);
+    const int instruction_count = fast ? 32 : (mtp_enabled ? 64 : 500);
+    const int child_count = fast ? 64 : (mtp_enabled ? 128 : 2000);
+    const int result_count = fast ? 16 : (mtp_enabled ? 32 : 200);
+    const int main_ctx = fast ? 1024 : (mtp_enabled ? 4096 : 16384);
     CHECK(ds4_session_create(&live, engine, main_ctx) == 0,
           "live session create failed");
     ds4_tokenize_text(engine, " parent-memory deterministic block", &pattern);
@@ -395,6 +429,83 @@ int main(void) {
     }
     ds4_tokens_free(&nested);
 
+    /* The general Qwen Q4_K_S payload is portable across session objects and
+     * restores all continuation-dependent state, not only target KV rows. */
+    CHECK(ds4_engine_is_qwen36_q4_k_s(engine),
+          "agentic checkpoint gate requires Qwen3.6 Q4_K_S");
+    uint64_t session_payload_bytes = 0;
+    CHECK(save_session_payload(live, session_path, &session_payload_bytes) == 0,
+          "portable session save failed");
+    CHECK(ds4_session_create(&isolated, engine, main_ctx) == 0,
+          "portable destination create failed");
+    CHECK(load_session_payload(isolated, session_path,
+                               session_payload_bytes) == 0,
+          "portable session load failed");
+    ds4_tokens portable_expected = {0};
+    ds4_tokens_copy(&portable_expected, ds4_session_tokens(live));
+    CHECK(ds4_session_copy_logits(live, frontier_logits, vocab) == vocab,
+          "portable source logits copy failed");
+    CHECK(assert_unchanged(isolated, &portable_expected, frontier_logits, vocab,
+                           "portable restore") == 0,
+          "portable restore was not bit-exact");
+    append_tokens(&portable_expected, &result_pattern, 16);
+    CHECK(sync_session(live, &portable_expected, "portable source continuation") == 0,
+          "portable source continuation failed");
+    CHECK(sync_session(isolated, &portable_expected,
+                       "portable restored continuation") == 0,
+          "portable restored continuation failed");
+    CHECK(ds4_session_copy_logits(live, frontier_logits, vocab) == vocab &&
+          ds4_session_copy_logits(isolated, child_logits, vocab) == vocab &&
+          !memcmp(frontier_logits, child_logits,
+                  (size_t)vocab * sizeof(*child_logits)),
+          "portable continuation logits were not bit-exact");
+
+    /* Exercise the actual content-addressed cache path. This catches Qwen's
+     * dense Q4_K_S quant tag (there is no routed-expert tensor to inspect) and
+     * proves that a fresh/page-reloaded session can restore the visible key. */
+    ds4_kvstore store = {0};
+    ds4_kvstore_options store_options = ds4_kvstore_default_options();
+    store_options.min_tokens = 1;
+    CHECK(ds4_kvstore_open(&store, dir, 1024, true, store_options,
+                           "agentic-reload-test", NULL, NULL),
+          "portable kvstore open failed");
+    const ds4_tokens *portable_live = ds4_session_tokens(live);
+    CHECK(ds4_kvstore_store_live_prefix(&store, engine, live, portable_live,
+                                        portable_live->len, "agent-session",
+                                        NULL, NULL, 0),
+          "Qwen visible session cache store failed");
+    size_t visible_len = 0;
+    char *visible_text = ds4_kvstore_render_tokens_text(engine, portable_live,
+                                                        &visible_len);
+    CHECK(visible_text && visible_len > 0,
+          "Qwen visible session key render failed");
+    ds4_session_free(isolated);
+    isolated = NULL;
+    CHECK(ds4_session_create(&isolated, engine, main_ctx) == 0,
+          "reload destination create failed");
+    ds4_tokens reloaded_prompt = {0};
+    ds4_kvstore_load_result reload_result = {0};
+    CHECK(ds4_kvstore_try_load_text(&store, engine, isolated, visible_text,
+                                    &reloaded_prompt, &reload_result,
+                                    NULL, true,
+                                    DS4_KVSTORE_REASON_ALL) == portable_live->len,
+          "Qwen visible session cache reload failed");
+    CHECK(!reload_result.consumed,
+          "persistent Qwen session cache was consumed on reload");
+    CHECK(tokens_equal(ds4_session_tokens(isolated), portable_live),
+          "reloaded Qwen visible session tokens differ");
+    CHECK(assert_unchanged(isolated, portable_live, frontier_logits, vocab,
+                           "visible session disk reload") == 0,
+          "reloaded Qwen visible session logits differ");
+    if (reload_result.path) unlink(reload_result.path);
+    ds4_kvstore_load_result_free(&reload_result);
+    ds4_tokens_free(&reloaded_prompt);
+    free(visible_text);
+    ds4_kvstore_close(&store);
+    ds4_tokens_free(&portable_expected);
+    ds4_session_free(isolated);
+    isolated = NULL;
+
     /* Near-boundary restore: child fills the context, result still resumes at
      * the parent frontier and lands exactly on the context limit. */
     ds4_session_free(live);
@@ -428,7 +539,7 @@ int main(void) {
     ds4_tokens_free(&boundary_child);
 
     fprintf(stdout,
-            "AGENTIC_CHECKPOINT_REPORT {\"model\":\"%s\",\"mtp\":%s,"
+            "AGENTIC_CHECKPOINT_REPORT {\"model\":\"%s\",\"mtp\":%s,\"fast\":%s,"
             "\"parent_tokens\":%d,\"instruction_prefill_tokens\":%d,"
             "\"result_prefill_tokens\":%d,\"discarded_child_tokens\":%d,"
             "\"checkpoint_bytes\":%llu,\"checkpoint_stage_ms\":%.3f,"
@@ -440,13 +551,16 @@ int main(void) {
             "\"session_isolation_rejected\":true,"
             "\"cancel_save_rejected\":true,"
             "\"cancel_restore_rejected\":true,"
+            "\"portable_session_bytes\":%llu,"
+            "\"portable_session_continuation_bit_exact\":true,"
             "\"context_boundary_bit_exact\":true}\n",
-            model, mtp_enabled ? "true" : "false",
+            model, mtp_enabled ? "true" : "false", fast ? "true" : "false",
             parent_count, instruction_count, result_count, discarded_child,
             (unsigned long long)save_metrics.checkpoint_bytes,
             save_metrics.stage_ms, save_metrics.write_ms,
             load_metrics.read_ms, load_metrics.restore_ms,
-            parent_ms, instructions_ms, result_ms);
+            parent_ms, instructions_ms, result_ms,
+            (unsigned long long)session_payload_bytes);
     rc = 0;
 
 fail:
@@ -464,6 +578,7 @@ fail:
     unlink(checkpoint);
     unlink(corrupt_path);
     unlink(truncated_path);
+    unlink(session_path);
     rmdir(dir);
     return rc;
 }

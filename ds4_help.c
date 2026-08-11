@@ -349,9 +349,9 @@ static void print_server_thinking(FILE *fp, const help_colors *c) {
 
 static void print_kv_cache(FILE *fp, const help_colors *c) {
     title(fp, c, "Disk KV Cache");
-    opt(fp, c, "--kv-disk-dir DIR", "Enable disk KV checkpoints in DIR.");
-    opt(fp, c, "--kv-disk-space-mb N", "Disk budget. Default when enabled: 4096");
-    opt(fp, c, "--kv-cache-min-tokens N", "Do not save/load checkpoints shorter than N. Default: 512");
+    opt(fp, c, "--kv-disk-dir DIR", "Enable disk KV checkpoints in DIR (Qwen3.6 Q4_K_S default: ~/.ds4/qwen36-q4ks-kv).");
+    opt(fp, c, "--kv-disk-space-mb N", "Disk budget. Default: 4096; Qwen3.6 Q4_K_S: 8192, max 9216");
+    opt(fp, c, "--kv-cache-min-tokens N", "Do not save/load shorter checkpoints. Default: 512; Qwen3.6 Q4_K_S: 1");
     opt(fp, c, "--kv-cache-cold-max-tokens N", "Save cold first prompts up to N tokens. 0 disables. Default: 30000");
     opt(fp, c, "--kv-cache-continued-interval-tokens N", "Save aligned continued frontiers. 0 disables. Default: 10000");
     opt(fp, c, "--kv-cache-boundary-trim-tokens N", "Trim tail tokens for cold boundary saves. Default: 32");
