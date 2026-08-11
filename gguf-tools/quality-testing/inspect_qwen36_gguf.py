@@ -101,7 +101,7 @@ def compact_metadata(key: str, value, raw_sha256: str):
     return value
 
 
-def inspect_gguf(path: Path) -> dict:
+def inspect_gguf(path: Path, *, include_artifact_sha256: bool = True) -> dict:
     path = path.resolve()
     reader = Reader(path)
     try:
@@ -178,7 +178,7 @@ def inspect_gguf(path: Path) -> dict:
             "artifact": {
                 "filename": path.name,
                 "size_bytes": reader.size,
-                "sha256": sha256_file(path),
+                "sha256": sha256_file(path) if include_artifact_sha256 else None,
             },
             "gguf": {
                 "version": version,

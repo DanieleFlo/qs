@@ -49553,6 +49553,7 @@ static bool qwen_graph_forward_token(
         const ds4_layer_weights *l = &weights->layer[il];
         const bool recurrent = qwen35_layer_is_recurrent(il);
         const double prof_attn_t0 = profile ? now_sec() : 0.0;
+        double prof_layer_attn_ms = 0.0;
         ok = ds4_gpu_rms_norm_weight_tensor(
             g->attn_norm, g->cur, model->map, model->size,
             l->attn_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
@@ -49687,6 +49688,7 @@ static bool qwen_graph_forward_token(
                     prof_recurrent_attn_ms += ms;
                 else
                     prof_full_attn_ms += ms;
+                prof_layer_attn_ms = ms;
 
                 ok = ds4_gpu_begin_commands() != 0;
             }
@@ -49720,8 +49722,15 @@ static bool qwen_graph_forward_token(
             ok = ds4_gpu_end_commands() != 0;
 
             if (ok) {
-                prof_ffn_ms +=
+                const double prof_layer_ffn_ms =
                     (now_sec() - prof_ffn_t0) * 1000.0;
+                prof_ffn_ms += prof_layer_ffn_ms;
+                fprintf(stderr,
+                        "QWEN_DECODE_LAYER_PROFILE pos=%u layer=%u kind=%s "
+                        "attn=%.3fms ffn=%.3fms total=%.3fms\n",
+                        position, il, recurrent ? "recurrent" : "full",
+                        prof_layer_attn_ms, prof_layer_ffn_ms,
+                        prof_layer_attn_ms + prof_layer_ffn_ms);
 
                 ok = ds4_gpu_begin_commands() != 0;
             }
@@ -49896,12 +49905,22 @@ static bool qwen_graph_forward_rows(
         if (profile && ok) ok = ds4_gpu_synchronize() != 0;
         if (profile) {
             const double layer_t1 = now_sec();
+            const double layer_attn_ms = (attn_t1 - layer_t0) * 1000.0;
+            const double layer_ffn_ms = (layer_t1 - attn_t1) * 1000.0;
+            const bool recurrent = qwen35_layer_is_recurrent(il);
             double *attn_ms = qwen35_layer_is_recurrent(il) ?
                 &recurrent_attn_ms : &full_attn_ms;
             double *ffn_ms = qwen35_layer_is_recurrent(il) ?
                 &recurrent_ffn_ms : &full_ffn_ms;
-            *attn_ms += (attn_t1 - layer_t0) * 1000.0;
-            *ffn_ms += (layer_t1 - attn_t1) * 1000.0;
+            *attn_ms += layer_attn_ms;
+            *ffn_ms += layer_ffn_ms;
+            fprintf(stderr,
+                    "QWEN_PREFILL_LAYER_PROFILE pos=%u rows=%u layer=%u kind=%s "
+                    "attn=%.3fms ffn=%.3fms total=%.3fms\n",
+                    position_start, n_tokens, il,
+                    recurrent ? "recurrent" : "full",
+                    layer_attn_ms, layer_ffn_ms,
+                    layer_attn_ms + layer_ffn_ms);
         }
     }
     ds4_gpu_tensor *last = NULL;

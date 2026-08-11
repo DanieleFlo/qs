@@ -1,0 +1,662 @@
+<!DOCTYPE html><html lang="en">
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>[2402.10076] QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference</title><meta property="og:description" content="We introduce QUICK, a group of novel optimized CUDA kernels for the efficient inference of quantized Large Language Models (LLMs). QUICK addresses the shared memory bank-conflict problem of state-of-the-art mixed preci…">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference">
+<meta name="twitter:image:src" content="https://ar5iv.labs.arxiv.org/assets/ar5iv_card.png">
+<meta name="twitter:image:alt" content="ar5iv logo">
+<meta property="og:title" content="QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference">
+<meta property="og:site_name" content="ar5iv">
+<meta property="og:image" content="https://ar5iv.labs.arxiv.org/assets/ar5iv_card.png">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://ar5iv.labs.arxiv.org/html/2402.10076">
+<link rel="canonical" target="_blank" href="https://ar5iv.labs.arxiv.org/html/2402.10076">
+
+<!--Generated on Tue Mar  5 13:51:36 2024 by LaTeXML (version 0.8.8) http://dlmf.nist.gov/LaTeXML/.-->
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+<script>
+  function detectColorScheme(){
+    var theme="light";
+    var current_theme = localStorage.getItem("ar5iv_theme");
+    if(current_theme){
+      if(current_theme == "dark"){
+        theme = "dark";
+      } }
+    else if(!window.matchMedia) { return false; }
+    else if(window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      theme = "dark"; }
+    if (theme=="dark") {
+      document.documentElement.setAttribute("data-theme", "dark");
+    } else {
+      document.documentElement.setAttribute("data-theme", "light"); } }
+
+  detectColorScheme();
+
+  function toggleColorScheme(){
+    var current_theme = localStorage.getItem("ar5iv_theme");
+    if (current_theme) {
+      if (current_theme == "light") {
+        localStorage.setItem("ar5iv_theme", "dark"); }
+      else {
+        localStorage.setItem("ar5iv_theme", "light"); } }
+    else {
+        localStorage.setItem("ar5iv_theme", "dark"); }
+    detectColorScheme(); }
+</script>
+<link media="all" rel="stylesheet" href="/assets/ar5iv-fonts.0.9.0.css"><link media="all" rel="stylesheet" href="/assets/ar5iv.0.9.0.css"><link media="all" rel="stylesheet" href="/assets/ar5iv-site.0.2.2.css">
+</head>
+<body>
+<div class="ltx_page_main">
+<div class="ltx_page_content">
+<article class="ltx_document ltx_authors_1line">
+<div id="p1" class="ltx_para">
+<span id="p1.1" class="ltx_ERROR undefined">\NewEnviron</span>
+<p id="p1.2" class="ltx_p">derivation
+
+<br class="ltx_break">
+<span id="p1.2.1" class="ltx_inline-block ltx_minipage ltx_align_middle" style="width:433.6pt;">
+<span id="S0.E1" class="ltx_equation ltx_eqn_table">
+
+<span><span class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<span class="ltx_eqn_cell ltx_eqn_center_padleft"></span>
+<span class="ltx_eqn_cell ltx_align_center"><math id="S0.E1.m1.1" class="ltx_Math" alttext="\begin{split}\BODY\end{split}" display="block"><semantics id="S0.E1.m1.1a"><mtable displaystyle="true" id="S0.E1.m1.1.1" xref="S0.E1.m1.1.1.1.1.1.1b.cmml"><mtr id="S0.E1.m1.1.1a" xref="S0.E1.m1.1.1.1.1.1.1b.cmml"><mtd class="ltx_align_right" columnalign="right" id="S0.E1.m1.1.1b" xref="S0.E1.m1.1.1.1.1.1.1b.cmml"><merror class="ltx_ERROR undefined undefined" id="S0.E1.m1.1.1.1.1.1.1" xref="S0.E1.m1.1.1.1.1.1.1b.cmml"><mtext id="S0.E1.m1.1.1.1.1.1.1a" xref="S0.E1.m1.1.1.1.1.1.1a.cmml">\BODY</mtext></merror></mtd></mtr></mtable><annotation-xml encoding="MathML-Content" id="S0.E1.m1.1b"><ci id="S0.E1.m1.1.1.1.1.1.1b.cmml" xref="S0.E1.m1.1.1"><merror class="ltx_ERROR undefined undefined" id="S0.E1.m1.1.1.1.1.1.1.cmml" xref="S0.E1.m1.1.1"><mtext id="S0.E1.m1.1.1.1.1.1.1a.cmml" xref="S0.E1.m1.1.1.1.1.1.1a">\BODY</mtext></merror></ci></annotation-xml><annotation encoding="application/x-tex" id="S0.E1.m1.1c">\begin{split}\BODY\end{split}</annotation></semantics></math></span>
+<span class="ltx_eqn_cell ltx_eqn_center_padright"></span>
+<span rowspan="1" class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right"><span class="ltx_tag ltx_tag_equation ltx_align_right">(1)</span></span></span></span>
+</span>
+</span></p>
+</div>
+<h1 class="ltx_title ltx_title_document">QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference</h1>
+<div class="ltx_authors">
+<span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">
+<span id="id1.1.id1" class="ltx_text"></span> <span id="id2.2.id2" class="ltx_text">
+<span id="id2.2.id2.1" class="ltx_tabular ltx_align_middle">
+<span id="id2.2.id2.1.1" class="ltx_tr">
+<span id="id2.2.id2.1.1.1" class="ltx_td ltx_nopad_r ltx_align_center">Taesu Kim      
+Jongho Lee      
+Daehyun Ahn      
+Sarang Kim</span></span>
+<span id="id2.2.id2.1.2" class="ltx_tr">
+<span id="id2.2.id2.1.2.1" class="ltx_td ltx_nopad_r ltx_align_center">Jiwoong Choi      
+Minkyu Kim      
+Hyungjun Kim</span></span>
+</span></span> <span id="id3.3.id3" class="ltx_text"></span>
+<br class="ltx_break">
+<br class="ltx_break">SqueezeBits Inc
+</span></span>
+</div>
+
+<div class="ltx_abstract">
+<h6 class="ltx_title ltx_title_abstract">Abstract</h6>
+<p id="id4.id1" class="ltx_p">We introduce QUICK, a group of novel optimized CUDA kernels for the efficient inference of quantized Large Language Models (LLMs). QUICK addresses the shared memory bank-conflict problem of state-of-the-art mixed precision matrix multiplication kernels. Our method interleaves the quantized weight matrices of LLMs offline to skip the shared memory write-back after the dequantization. We demonstrate up to 1.91x speedup over existing kernels of AutoAWQ on larger batches and up to 1.94x throughput gain on representative LLM models on various NVIDIA GPU devices.</p>
+<p id="id5.id2" class="ltx_p"><span id="id5.id2.1" class="ltx_text ltx_font_bold">Code: <span class="ltx_ref ltx_font_medium ltx_ref_self">https://github.com/SqueezeBits/QUICK</span></span></p>
+</div>
+<section id="S1" class="ltx_section">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">1 </span>Introduction</h2>
+
+<div id="S1.p1" class="ltx_para">
+<p id="S1.p1.1" class="ltx_p">Enhancing the efficiency of Large Language Models (LLMs) has become increasingly crucial due to the escalating demand for deploying state-of-the-art models in real-world scenarios <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib2" title="" class="ltx_ref">2</a>, <a href="#bib.bib8" title="" class="ltx_ref">8</a>, <a href="#bib.bib9" title="" class="ltx_ref">9</a>, <a href="#bib.bib15" title="" class="ltx_ref">15</a>, <a href="#bib.bib16" title="" class="ltx_ref">16</a>]</cite>. The improved performance of LLMs is attributed to their growing size, characterized by a trend toward larger models with parameter counts exceeding several hundred billion. However, the substantial size of these models has necessitated the adoption of model compression techniques such as quantization and pruning <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib1" title="" class="ltx_ref">1</a>, <a href="#bib.bib4" title="" class="ltx_ref">4</a>, <a href="#bib.bib5" title="" class="ltx_ref">5</a>, <a href="#bib.bib11" title="" class="ltx_ref">11</a>, <a href="#bib.bib12" title="" class="ltx_ref">12</a>, <a href="#bib.bib17" title="" class="ltx_ref">17</a>]</cite>.</p>
+</div>
+<div id="S1.p2" class="ltx_para">
+<p id="S1.p2.1" class="ltx_p">Among these techniques, weight-only quantization has garnered significant attention for its potential to compress the memory footprint of LLMs <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib6" title="" class="ltx_ref">6</a>, <a href="#bib.bib11" title="" class="ltx_ref">11</a>, <a href="#bib.bib12" title="" class="ltx_ref">12</a>]</cite>. This approach aims to reduce model size and accelerate computation by quantizing weights to smaller bit sizes while retaining activation tensors at higher precision. Consequently, there is a growing need for fast mixed-precision General Matrix Multiplication (GEMM) kernels to support such operations.</p>
+</div>
+<div id="S1.p3" class="ltx_para">
+<p id="S1.p3.1" class="ltx_p">Despite these advancements, existing open-source kernels for mixed-precision GEMM have demonstrated limitations in throughput, primarily due to the overhead associated with weight dequantization. Analysis of these kernels has revealed shared memory write-back bank conflicts during the dequantization process as a significant bottleneck. Leveraging this insight, we introduce QUICK, a solution designed to mitigate shared memory bank conflicts by reordering weight matrices offline.</p>
+</div>
+</section>
+<section id="S2" class="ltx_section">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">2 </span>Preliminary</h2>
+
+<section id="S2.SS1" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">2.1 </span>Quantization and Dequantization</h3>
+
+<div id="S2.SS1.p1" class="ltx_para">
+<p id="S2.SS1.p1.1" class="ltx_p">Quantization involves the reduction of precision or range of a continuous variable to a discrete set of values. This process is commonly employed to decrease the bit precision of tensors, thereby reducing the memory footprint of Neural Network models. When supported by appropriate computation kernels, quantization enables acceleration of the models with low-precision computations.</p>
+</div>
+<div id="S2.SS1.p2" class="ltx_para">
+<p id="S2.SS1.p2.1" class="ltx_p">Given that LLMs typically encompass billions of parameters, researchers have explored quantization as a means to reduce memory usage and improve inference efficiency. Specifically, weight-only quantization focuses solely on quantizing the weights of the model while maintaining activations at a higher precision, such as 16-bit floating point <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib6" title="" class="ltx_ref">6</a>, <a href="#bib.bib11" title="" class="ltx_ref">11</a>, <a href="#bib.bib12" title="" class="ltx_ref">12</a>]</cite>. This strategy effectively reduces memory requirements by representing weights with fewer bits while retaining activation tensors in floating point precision.</p>
+</div>
+<div id="S2.SS1.p3" class="ltx_para">
+<p id="S2.SS1.p3.1" class="ltx_p">Weight-only quantization is generally recognized for dramatically reducing the memory requirements and preserving the performance of LLMs. However, since activations remain in higher precision, weights must undergo dequantization back to higher precision before being multiplied by activations during inference. This dequantization process has minimal impact on inference efficiency when the batch size is 1 since the computation is mainly memory-bounded in such case. However, for larger batch sizes, GEMMs are mostly computation-bounded, where mixed-precision GEMM operations become slower than their floating-point counterparts due to the overhead associated with dequantization.</p>
+</div>
+</section>
+<section id="S2.SS2" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">2.2 </span>GEMM kernel using Tensor Core</h3>
+
+<div id="S2.SS2.p1" class="ltx_para">
+<p id="S2.SS2.p1.1" class="ltx_p">A substantial portion of the computational workload associated with LLMs primarily comprises GEMMs. Optimizing GEMM operations plays a pivotal role in enhancing the overall efficiency of LLM inference. Particularly on NVIDIA GPUs, GEMM computation has relied on the tiling strategy, which is widely employed to maximize memory reuse through the utilization of shared memory, thereby achieving a more favorable compute-memory ratio.</p>
+</div>
+<figure id="S2.F1" class="ltx_figure"><img src="/html/2402.10076/assets/figures/ldmatrix_pattern.png" id="S2.F1.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="419" height="137" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S2.F1.6.2.1" class="ltx_text" style="font-size:90%;">Figure 1</span>: </span><span id="S2.F1.2.1" class="ltx_text" style="font-size:90%;">Data loading pattern of <span id="S2.F1.2.1.1" class="ltx_text ltx_font_italic">ldmatrix</span> instruction for a single <math id="S2.F1.2.1.m1.1" class="ltx_Math" alttext="8\times 8" display="inline"><semantics id="S2.F1.2.1.m1.1b"><mrow id="S2.F1.2.1.m1.1.1" xref="S2.F1.2.1.m1.1.1.cmml"><mn id="S2.F1.2.1.m1.1.1.2" xref="S2.F1.2.1.m1.1.1.2.cmml">8</mn><mo lspace="0.222em" rspace="0.222em" id="S2.F1.2.1.m1.1.1.1" xref="S2.F1.2.1.m1.1.1.1.cmml">×</mo><mn id="S2.F1.2.1.m1.1.1.3" xref="S2.F1.2.1.m1.1.1.3.cmml">8</mn></mrow><annotation-xml encoding="MathML-Content" id="S2.F1.2.1.m1.1c"><apply id="S2.F1.2.1.m1.1.1.cmml" xref="S2.F1.2.1.m1.1.1"><times id="S2.F1.2.1.m1.1.1.1.cmml" xref="S2.F1.2.1.m1.1.1.1"></times><cn type="integer" id="S2.F1.2.1.m1.1.1.2.cmml" xref="S2.F1.2.1.m1.1.1.2">8</cn><cn type="integer" id="S2.F1.2.1.m1.1.1.3.cmml" xref="S2.F1.2.1.m1.1.1.3">8</cn></apply></annotation-xml><annotation encoding="application/x-tex" id="S2.F1.2.1.m1.1d">8\times 8</annotation></semantics></math> matrix. Two half-precision elements are loaded to the destination register <span id="S2.F1.2.1.2" class="ltx_text ltx_font_italic">d0</span> per each thread lane in a warp.</span></figcaption>
+</figure>
+<div id="S2.SS2.p2" class="ltx_para">
+<p id="S2.SS2.p2.1" class="ltx_p">Recent advancements in NVIDIA GPUs have showcased significant performance improvements in GEMM computation through the utilization of Tensor Cores. These Tensor Core-based GEMMs leverage warp-level PTX instructions, namely <span id="S2.SS2.p2.1.1" class="ltx_text ltx_font_italic">ldmatrix</span> and <span id="S2.SS2.p2.1.2" class="ltx_text ltx_font_italic">mma</span>. The <span id="S2.SS2.p2.1.3" class="ltx_text ltx_font_italic">ldmatrix</span> instruction efficiently loads multiple matrices across all threads within a warp from shared memory into designated registers. As illustrated in Figure <a href="#S2.F1" title="Figure 1 ‣ 2.2 GEMM kernel using Tensor Core ‣ 2 Preliminary ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a>, this loading pattern assigns small fragments of a row to each thread, facilitating warp-level matrix multiply-accumulation using the subsequent <span id="S2.SS2.p2.1.4" class="ltx_text ltx_font_italic">mma</span> instruction.</p>
+</div>
+<div id="S2.SS2.p3" class="ltx_para">
+<p id="S2.SS2.p3.1" class="ltx_p">The <span id="S2.SS2.p3.1.1" class="ltx_text ltx_font_italic">mma</span> instruction, following the <span id="S2.SS2.p3.1.2" class="ltx_text ltx_font_italic">ldmatrix</span> operation, executes the matrix multiply-accumulate operation at the warp level. This instruction performs the multiply-accumulate operation on matrices, requiring specific data patterns for each row of the multiplicands, as well as the accumulators. As previously described, loading matrices into each thread from shared memory is efficiently achieved using the <span id="S2.SS2.p3.1.3" class="ltx_text ltx_font_italic">ldmatrix</span> instruction.</p>
+</div>
+<div id="S2.SS2.p4" class="ltx_para">
+<p id="S2.SS2.p4.1" class="ltx_p">Tensor Core-based GEMM computation entails repetitive calls to these instructions, relying on shared memory to rearrange input tensors to align with the data access pattern required by the <span id="S2.SS2.p4.1.1" class="ltx_text ltx_font_italic">mma</span> instruction. Compared to CUDA Core-based GEMM computation, Tensor Core-based approaches are renowned for achieving significantly higher throughput.</p>
+</div>
+</section>
+<section id="S2.SS3" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">2.3 </span>Mixed precision GEMM kernel</h3>
+
+<figure id="S2.F2" class="ltx_figure"><img src="/html/2402.10076/assets/figures/compute_path.png" id="S2.F2.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="598" height="307" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S2.F2.3.1.1" class="ltx_text" style="font-size:90%;">Figure 2</span>: </span><span id="S2.F2.4.2" class="ltx_text" style="font-size:90%;">Computation overview of original kernel and QUICK. Compared to original kernel, QUICK bypasses 3) shared memory write-back and 4) <span id="S2.F2.4.2.1" class="ltx_text ltx_font_italic">ldmatrix</span> operation of dequantized weights by using interleaving data pattern.</span></figcaption>
+</figure>
+<div id="S2.SS3.p1" class="ltx_para">
+<p id="S2.SS3.p1.1" class="ltx_p">Mixed precision GEMM kernels find widespread application in the inference phase of weight-only quantized LLMs, owing to the inherent difference in bit precision between activation tensors and weight tensors.</p>
+</div>
+<div id="S2.SS3.p2" class="ltx_para">
+<p id="S2.SS3.p2.1" class="ltx_p">When employing weight-only quantization, it becomes necessary to dequantize the quantized weights before executing the matrix multiplication operation within the GEMM kernel, as recent NVIDIA GPUs’ Tensor Cores do not inherently support mixed-precision GEMMs. Consequently, numerous implementations of efficient mixed-precision GEMM kernels leveraging Tensor Cores adopt parallel dequantization of quantized weights.</p>
+</div>
+<div id="S2.SS3.p3" class="ltx_para">
+<p id="S2.SS3.p3.1" class="ltx_p">Typically, these kernels adhere to a common workflow for weight dequantization, as depicted in Figure <a href="#S2.F2" title="Figure 2 ‣ 2.3 Mixed precision GEMM kernel ‣ 2 Preliminary ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">2</span></a>. They fetch quantized and packed weights from global memory to registers, dequantize weights using CUDA cores, and then write the dequantized weights back to shared memory for the following <span id="S2.SS3.p3.1.1" class="ltx_text ltx_font_italic">ldmatrix</span> instruction. The dequantization process employing CUDA cores involves bitwise AND operations to extract target sub-byte weights, bitwise SHIFT operations to rearrange bit positions, and parallel half-precision additions and multiplications to apply zero points and scales.</p>
+</div>
+<div id="S2.SS3.p4" class="ltx_para">
+<p id="S2.SS3.p4.1" class="ltx_p">Parallel dequantization involves expanding quantized weights to larger bit sizes. For example, from 128-bit weight vectors consisting of 32 4-bit weights, dequantization produces 512-bit weight vectors containing 32 16-bit floating-point weights. This results in quantized weights that are four times larger compared to their full precision counterparts under same bandwidth requirement, increasing the burden of shared memory write-back. The augmented quantity of weights exacerbates shared memory bank conflicts during the write-back process of dequantized weights.</p>
+</div>
+<figure id="S2.F3" class="ltx_figure"><img src="/html/2402.10076/assets/figures/bankconflict.png" id="S2.F3.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="598" height="178" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S2.F3.4.2.1" class="ltx_text" style="font-size:90%;">Figure 3</span>: </span><span id="S2.F3.2.1" class="ltx_text" style="font-size:90%;">Number of bank conflicts from benchmark result using NVIDIA Nsight Compute <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib14" title="" class="ltx_ref">14</a>]</cite>. A matrix multiplication of shape <math id="S2.F3.2.1.m1.1" class="ltx_Math" alttext="64\times 8192\times 8192(M\times N\times K)" display="inline"><semantics id="S2.F3.2.1.m1.1b"><mrow id="S2.F3.2.1.m1.1.1" xref="S2.F3.2.1.m1.1.1.cmml"><mrow id="S2.F3.2.1.m1.1.1.3" xref="S2.F3.2.1.m1.1.1.3.cmml"><mn id="S2.F3.2.1.m1.1.1.3.2" xref="S2.F3.2.1.m1.1.1.3.2.cmml">64</mn><mo lspace="0.222em" rspace="0.222em" id="S2.F3.2.1.m1.1.1.3.1" xref="S2.F3.2.1.m1.1.1.3.1.cmml">×</mo><mn id="S2.F3.2.1.m1.1.1.3.3" xref="S2.F3.2.1.m1.1.1.3.3.cmml">8192</mn><mo lspace="0.222em" rspace="0.222em" id="S2.F3.2.1.m1.1.1.3.1b" xref="S2.F3.2.1.m1.1.1.3.1.cmml">×</mo><mn id="S2.F3.2.1.m1.1.1.3.4" xref="S2.F3.2.1.m1.1.1.3.4.cmml">8192</mn></mrow><mo lspace="0em" rspace="0em" id="S2.F3.2.1.m1.1.1.2" xref="S2.F3.2.1.m1.1.1.2.cmml">​</mo><mrow id="S2.F3.2.1.m1.1.1.1.1" xref="S2.F3.2.1.m1.1.1.1.1.1.cmml"><mo stretchy="false" id="S2.F3.2.1.m1.1.1.1.1.2" xref="S2.F3.2.1.m1.1.1.1.1.1.cmml">(</mo><mrow id="S2.F3.2.1.m1.1.1.1.1.1" xref="S2.F3.2.1.m1.1.1.1.1.1.cmml"><mi id="S2.F3.2.1.m1.1.1.1.1.1.2" xref="S2.F3.2.1.m1.1.1.1.1.1.2.cmml">M</mi><mo lspace="0.222em" rspace="0.222em" id="S2.F3.2.1.m1.1.1.1.1.1.1" xref="S2.F3.2.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S2.F3.2.1.m1.1.1.1.1.1.3" xref="S2.F3.2.1.m1.1.1.1.1.1.3.cmml">N</mi><mo lspace="0.222em" rspace="0.222em" id="S2.F3.2.1.m1.1.1.1.1.1.1b" xref="S2.F3.2.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S2.F3.2.1.m1.1.1.1.1.1.4" xref="S2.F3.2.1.m1.1.1.1.1.1.4.cmml">K</mi></mrow><mo stretchy="false" id="S2.F3.2.1.m1.1.1.1.1.3" xref="S2.F3.2.1.m1.1.1.1.1.1.cmml">)</mo></mrow></mrow><annotation-xml encoding="MathML-Content" id="S2.F3.2.1.m1.1c"><apply id="S2.F3.2.1.m1.1.1.cmml" xref="S2.F3.2.1.m1.1.1"><times id="S2.F3.2.1.m1.1.1.2.cmml" xref="S2.F3.2.1.m1.1.1.2"></times><apply id="S2.F3.2.1.m1.1.1.3.cmml" xref="S2.F3.2.1.m1.1.1.3"><times id="S2.F3.2.1.m1.1.1.3.1.cmml" xref="S2.F3.2.1.m1.1.1.3.1"></times><cn type="integer" id="S2.F3.2.1.m1.1.1.3.2.cmml" xref="S2.F3.2.1.m1.1.1.3.2">64</cn><cn type="integer" id="S2.F3.2.1.m1.1.1.3.3.cmml" xref="S2.F3.2.1.m1.1.1.3.3">8192</cn><cn type="integer" id="S2.F3.2.1.m1.1.1.3.4.cmml" xref="S2.F3.2.1.m1.1.1.3.4">8192</cn></apply><apply id="S2.F3.2.1.m1.1.1.1.1.1.cmml" xref="S2.F3.2.1.m1.1.1.1.1"><times id="S2.F3.2.1.m1.1.1.1.1.1.1.cmml" xref="S2.F3.2.1.m1.1.1.1.1.1.1"></times><ci id="S2.F3.2.1.m1.1.1.1.1.1.2.cmml" xref="S2.F3.2.1.m1.1.1.1.1.1.2">𝑀</ci><ci id="S2.F3.2.1.m1.1.1.1.1.1.3.cmml" xref="S2.F3.2.1.m1.1.1.1.1.1.3">𝑁</ci><ci id="S2.F3.2.1.m1.1.1.1.1.1.4.cmml" xref="S2.F3.2.1.m1.1.1.1.1.1.4">𝐾</ci></apply></apply></annotation-xml><annotation encoding="application/x-tex" id="S2.F3.2.1.m1.1d">64\times 8192\times 8192(M\times N\times K)</annotation></semantics></math> was used as the workload.</span></figcaption>
+</figure>
+<div id="S2.SS3.p5" class="ltx_para">
+<p id="S2.SS3.p5.1" class="ltx_p">Given that the <span id="S2.SS3.p5.1.1" class="ltx_text ltx_font_italic">ldmatrix</span> instruction requires the weight matrices to be fully visible on shared memory, this significantly harms the end-to-end latency of mixed-precision matrix multiplication. Benchmarks conducted on state-of-the-art mixed-precision GEMM kernels using NVIDIA’s Nsight Compute <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib14" title="" class="ltx_ref">14</a>]</cite> indicate a notable prevalence of shared memory bank conflicts stemming from the write-back after dequantization, as depicted in Figure <a href="#S2.F3" title="Figure 3 ‣ 2.3 Mixed precision GEMM kernel ‣ 2 Preliminary ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">3</span></a>. Consequently, mixed-precision GEMM kernels often struggle to achieve enhanced throughput compared to half-precision GEMM kernels, particularly with larger batch sizes.</p>
+</div>
+</section>
+</section>
+<section id="S3" class="ltx_section">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">3 </span>Avoiding Bank Conflict</h2>
+
+<div id="S3.p1" class="ltx_para">
+<p id="S3.p1.1" class="ltx_p">In this section, we propose QUICK, a novel way to remove the shared memory write-back bank conflicts of mixed precision matrix multiplication. To alleviate these conflicts effectively, our proposal involves reordering the quantized weight matrix offline to align with the load pattern required by the <span id="S3.p1.1.1" class="ltx_text ltx_font_italic">mma</span> instruction without the <span id="S3.p1.1.2" class="ltx_text ltx_font_italic">ldmatrix</span> instruction.</p>
+</div>
+<section id="S3.SS1" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">3.1 </span>Skipping Shared Memory Write-back During Mixed Precision GEMM</h3>
+
+<div id="S3.SS1.p1" class="ltx_para">
+<p id="S3.SS1.p1.1" class="ltx_p">As previously discussed, state-of-the-art mixed precision GEMM kernels rely on a specific sequence involving dequantization, shared memory write-back, <span id="S3.SS1.p1.1.1" class="ltx_text ltx_font_italic">ldmatrix</span>, and <span id="S3.SS1.p1.1.2" class="ltx_text ltx_font_italic">mma</span>. The <span id="S3.SS1.p1.1.3" class="ltx_text ltx_font_italic">ldmatrix</span> instruction is responsible for loading operands for the subsequent <span id="S3.SS1.p1.1.4" class="ltx_text ltx_font_italic">mma</span> instruction, adhering to a designated pattern among the threads within a warp. With this instruction, each thread in a warp loads fragments of a row, as depicted in Figure <a href="#S2.F1" title="Figure 1 ‣ 2.2 GEMM kernel using Tensor Core ‣ 2 Preliminary ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a>.</p>
+</div>
+<div id="S3.SS1.p2" class="ltx_para">
+<p id="S3.SS1.p2.1" class="ltx_p">Using the <span id="S3.SS1.p2.1.1" class="ltx_text ltx_font_italic">ldmatrix</span> instruction to load GEMM operands to registers is a straightforward approach for floating-point GEMM kernels because transferring data from global memory to shared memory can be efficiently executed. From the Ampere architecture and beyond, asynchronous CUDA memory copy supports pipelining the <span id="S3.SS1.p2.1.2" class="ltx_text ltx_font_italic">mma</span> instruction with global memory load, thereby enhancing the performance of GEMM kernels. This enhancement occurs as the effective memory load overhead can be reduced to the copy from shared memory to registers.
+However, in the case of mixed precision GEMM, there exists a noticeable overhead due to shared memory write-back. This is because the loaded quantized weights must be dequantized using CUDA cores, and the resulting dequantized weights in registers must then be written back to shared memory to serve as operands for the <span id="S3.SS1.p2.1.3" class="ltx_text ltx_font_italic">ldmatrix</span> instruction. This overhead is further exacerbated by numerous shared memory bank-conflict stalls, which ultimately degrade the throughput of kernels.</p>
+</div>
+<div id="S3.SS1.p3" class="ltx_para">
+<p id="S3.SS1.p3.1" class="ltx_p">From the data loading pattern of the <span id="S3.SS1.p3.1.1" class="ltx_text ltx_font_italic">ldmatrix</span> instruction, we observe that this pattern can be pre-applied to the original data since the weight data remains static. Considering the static nature of weight matrices throughout deployment, it becomes feasible to bypass the <span id="S3.SS1.p3.1.2" class="ltx_text ltx_font_italic">ldmatrix</span> instruction for quantized weight matrices via suitable reordering. In this scenario, a direct load from global memory to registers proves sufficient to meet the data pattern requirements essential for the <span id="S3.SS1.p3.1.3" class="ltx_text ltx_font_italic">mma</span> operation. Consequently, we opt to rearrange the quantized weight matrices and bypass the <span id="S3.SS1.p3.1.4" class="ltx_text ltx_font_italic">ldmatrix</span> instruction prior to the <span id="S3.SS1.p3.1.5" class="ltx_text ltx_font_italic">mma</span> operation. Through the optimization of both the weight pattern and the associated computing kernel, we can successfully eliminate shared memory write-back bank conflicts, consequently improving the end-to-end latency of mixed precision GEMM. Importantly, since the total amount of quantized weights to be read from DRAM remains the same, the overall memory bandwidth requirement can be maintained at the same level.</p>
+</div>
+</section>
+<section id="S3.SS2" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">3.2 </span>Interleaving Data Pattern</h3>
+
+<figure id="S3.F4" class="ltx_figure"><img src="/html/2402.10076/assets/figures/ldmatrix_reorder.png" id="S3.F4.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="598" height="399" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S3.F4.8.3.1" class="ltx_text" style="font-size:90%;">Figure 4</span>: </span><span id="S3.F4.4.2" class="ltx_text ltx_font_italic" style="font-size:90%;">ldmatrix<span id="S3.F4.4.2.3" class="ltx_text ltx_font_upright"> instruction-aware weight interleaving to avoid shared memory conflicts. With interleaved weight matrix, direct load from DRAM to registers for each thread without </span>ldmatrix<span id="S3.F4.4.2.2" class="ltx_text ltx_font_upright"> is possible. Note that the figure is illustrating a case of computing <math id="S3.F4.3.1.1.m1.1" class="ltx_Math" alttext="8\times 4\times 8(M\times N\times K)" display="inline"><semantics id="S3.F4.3.1.1.m1.1b"><mrow id="S3.F4.3.1.1.m1.1.1" xref="S3.F4.3.1.1.m1.1.1.cmml"><mrow id="S3.F4.3.1.1.m1.1.1.3" xref="S3.F4.3.1.1.m1.1.1.3.cmml"><mn id="S3.F4.3.1.1.m1.1.1.3.2" xref="S3.F4.3.1.1.m1.1.1.3.2.cmml">8</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F4.3.1.1.m1.1.1.3.1" xref="S3.F4.3.1.1.m1.1.1.3.1.cmml">×</mo><mn id="S3.F4.3.1.1.m1.1.1.3.3" xref="S3.F4.3.1.1.m1.1.1.3.3.cmml">4</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F4.3.1.1.m1.1.1.3.1b" xref="S3.F4.3.1.1.m1.1.1.3.1.cmml">×</mo><mn id="S3.F4.3.1.1.m1.1.1.3.4" xref="S3.F4.3.1.1.m1.1.1.3.4.cmml">8</mn></mrow><mo lspace="0em" rspace="0em" id="S3.F4.3.1.1.m1.1.1.2" xref="S3.F4.3.1.1.m1.1.1.2.cmml">​</mo><mrow id="S3.F4.3.1.1.m1.1.1.1.1" xref="S3.F4.3.1.1.m1.1.1.1.1.1.cmml"><mo stretchy="false" id="S3.F4.3.1.1.m1.1.1.1.1.2" xref="S3.F4.3.1.1.m1.1.1.1.1.1.cmml">(</mo><mrow id="S3.F4.3.1.1.m1.1.1.1.1.1" xref="S3.F4.3.1.1.m1.1.1.1.1.1.cmml"><mi id="S3.F4.3.1.1.m1.1.1.1.1.1.2" xref="S3.F4.3.1.1.m1.1.1.1.1.1.2.cmml">M</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F4.3.1.1.m1.1.1.1.1.1.1" xref="S3.F4.3.1.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F4.3.1.1.m1.1.1.1.1.1.3" xref="S3.F4.3.1.1.m1.1.1.1.1.1.3.cmml">N</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F4.3.1.1.m1.1.1.1.1.1.1b" xref="S3.F4.3.1.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F4.3.1.1.m1.1.1.1.1.1.4" xref="S3.F4.3.1.1.m1.1.1.1.1.1.4.cmml">K</mi></mrow><mo stretchy="false" id="S3.F4.3.1.1.m1.1.1.1.1.3" xref="S3.F4.3.1.1.m1.1.1.1.1.1.cmml">)</mo></mrow></mrow><annotation-xml encoding="MathML-Content" id="S3.F4.3.1.1.m1.1c"><apply id="S3.F4.3.1.1.m1.1.1.cmml" xref="S3.F4.3.1.1.m1.1.1"><times id="S3.F4.3.1.1.m1.1.1.2.cmml" xref="S3.F4.3.1.1.m1.1.1.2"></times><apply id="S3.F4.3.1.1.m1.1.1.3.cmml" xref="S3.F4.3.1.1.m1.1.1.3"><times id="S3.F4.3.1.1.m1.1.1.3.1.cmml" xref="S3.F4.3.1.1.m1.1.1.3.1"></times><cn type="integer" id="S3.F4.3.1.1.m1.1.1.3.2.cmml" xref="S3.F4.3.1.1.m1.1.1.3.2">8</cn><cn type="integer" id="S3.F4.3.1.1.m1.1.1.3.3.cmml" xref="S3.F4.3.1.1.m1.1.1.3.3">4</cn><cn type="integer" id="S3.F4.3.1.1.m1.1.1.3.4.cmml" xref="S3.F4.3.1.1.m1.1.1.3.4">8</cn></apply><apply id="S3.F4.3.1.1.m1.1.1.1.1.1.cmml" xref="S3.F4.3.1.1.m1.1.1.1.1"><times id="S3.F4.3.1.1.m1.1.1.1.1.1.1.cmml" xref="S3.F4.3.1.1.m1.1.1.1.1.1.1"></times><ci id="S3.F4.3.1.1.m1.1.1.1.1.1.2.cmml" xref="S3.F4.3.1.1.m1.1.1.1.1.1.2">𝑀</ci><ci id="S3.F4.3.1.1.m1.1.1.1.1.1.3.cmml" xref="S3.F4.3.1.1.m1.1.1.1.1.1.3">𝑁</ci><ci id="S3.F4.3.1.1.m1.1.1.1.1.1.4.cmml" xref="S3.F4.3.1.1.m1.1.1.1.1.1.4">𝐾</ci></apply></apply></annotation-xml><annotation encoding="application/x-tex" id="S3.F4.3.1.1.m1.1d">8\times 4\times 8(M\times N\times K)</annotation></semantics></math> GEMM using 8 threads for simplicity. QUICK utilizes <math id="S3.F4.4.2.2.m2.1" class="ltx_Math" alttext="16\times 8\times 16(M\times N\times K)" display="inline"><semantics id="S3.F4.4.2.2.m2.1b"><mrow id="S3.F4.4.2.2.m2.1.1" xref="S3.F4.4.2.2.m2.1.1.cmml"><mrow id="S3.F4.4.2.2.m2.1.1.3" xref="S3.F4.4.2.2.m2.1.1.3.cmml"><mn id="S3.F4.4.2.2.m2.1.1.3.2" xref="S3.F4.4.2.2.m2.1.1.3.2.cmml">16</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F4.4.2.2.m2.1.1.3.1" xref="S3.F4.4.2.2.m2.1.1.3.1.cmml">×</mo><mn id="S3.F4.4.2.2.m2.1.1.3.3" xref="S3.F4.4.2.2.m2.1.1.3.3.cmml">8</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F4.4.2.2.m2.1.1.3.1b" xref="S3.F4.4.2.2.m2.1.1.3.1.cmml">×</mo><mn id="S3.F4.4.2.2.m2.1.1.3.4" xref="S3.F4.4.2.2.m2.1.1.3.4.cmml">16</mn></mrow><mo lspace="0em" rspace="0em" id="S3.F4.4.2.2.m2.1.1.2" xref="S3.F4.4.2.2.m2.1.1.2.cmml">​</mo><mrow id="S3.F4.4.2.2.m2.1.1.1.1" xref="S3.F4.4.2.2.m2.1.1.1.1.1.cmml"><mo stretchy="false" id="S3.F4.4.2.2.m2.1.1.1.1.2" xref="S3.F4.4.2.2.m2.1.1.1.1.1.cmml">(</mo><mrow id="S3.F4.4.2.2.m2.1.1.1.1.1" xref="S3.F4.4.2.2.m2.1.1.1.1.1.cmml"><mi id="S3.F4.4.2.2.m2.1.1.1.1.1.2" xref="S3.F4.4.2.2.m2.1.1.1.1.1.2.cmml">M</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F4.4.2.2.m2.1.1.1.1.1.1" xref="S3.F4.4.2.2.m2.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F4.4.2.2.m2.1.1.1.1.1.3" xref="S3.F4.4.2.2.m2.1.1.1.1.1.3.cmml">N</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F4.4.2.2.m2.1.1.1.1.1.1b" xref="S3.F4.4.2.2.m2.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F4.4.2.2.m2.1.1.1.1.1.4" xref="S3.F4.4.2.2.m2.1.1.1.1.1.4.cmml">K</mi></mrow><mo stretchy="false" id="S3.F4.4.2.2.m2.1.1.1.1.3" xref="S3.F4.4.2.2.m2.1.1.1.1.1.cmml">)</mo></mrow></mrow><annotation-xml encoding="MathML-Content" id="S3.F4.4.2.2.m2.1c"><apply id="S3.F4.4.2.2.m2.1.1.cmml" xref="S3.F4.4.2.2.m2.1.1"><times id="S3.F4.4.2.2.m2.1.1.2.cmml" xref="S3.F4.4.2.2.m2.1.1.2"></times><apply id="S3.F4.4.2.2.m2.1.1.3.cmml" xref="S3.F4.4.2.2.m2.1.1.3"><times id="S3.F4.4.2.2.m2.1.1.3.1.cmml" xref="S3.F4.4.2.2.m2.1.1.3.1"></times><cn type="integer" id="S3.F4.4.2.2.m2.1.1.3.2.cmml" xref="S3.F4.4.2.2.m2.1.1.3.2">16</cn><cn type="integer" id="S3.F4.4.2.2.m2.1.1.3.3.cmml" xref="S3.F4.4.2.2.m2.1.1.3.3">8</cn><cn type="integer" id="S3.F4.4.2.2.m2.1.1.3.4.cmml" xref="S3.F4.4.2.2.m2.1.1.3.4">16</cn></apply><apply id="S3.F4.4.2.2.m2.1.1.1.1.1.cmml" xref="S3.F4.4.2.2.m2.1.1.1.1"><times id="S3.F4.4.2.2.m2.1.1.1.1.1.1.cmml" xref="S3.F4.4.2.2.m2.1.1.1.1.1.1"></times><ci id="S3.F4.4.2.2.m2.1.1.1.1.1.2.cmml" xref="S3.F4.4.2.2.m2.1.1.1.1.1.2">𝑀</ci><ci id="S3.F4.4.2.2.m2.1.1.1.1.1.3.cmml" xref="S3.F4.4.2.2.m2.1.1.1.1.1.3">𝑁</ci><ci id="S3.F4.4.2.2.m2.1.1.1.1.1.4.cmml" xref="S3.F4.4.2.2.m2.1.1.1.1.1.4">𝐾</ci></apply></apply></annotation-xml><annotation encoding="application/x-tex" id="S3.F4.4.2.2.m2.1d">16\times 8\times 16(M\times N\times K)</annotation></semantics></math> GEMM with 32 threads and its corresponding interleaving pattern.</span></span></figcaption>
+</figure>
+<div id="S3.SS2.p1" class="ltx_para">
+<p id="S3.SS2.p1.1" class="ltx_p">The interleaving pattern of the quantized weight matrices corresponds to the data loading pattern of the <span id="S3.SS2.p1.1.1" class="ltx_text ltx_font_italic">ldmatrix</span> instruction. To bypass the <span id="S3.SS2.p1.1.2" class="ltx_text ltx_font_italic">ldmatrix.sync.aligned.m8n8</span> instruction of the quantized weight matrices, we rearrange the weights following the data loading pattern of the instruction, as illustrated in Figure <a href="#S3.F4" title="Figure 4 ‣ 3.2 Interleaving Data Pattern ‣ 3 Avoiding Bank Conflict ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">4</span></a>. Since the CUDA kernels of QUICK rely on the <span id="S3.SS2.p1.1.3" class="ltx_text ltx_font_italic">mma.m16n8k16</span> with half-precision, we further devise the reordering pattern to group quantized weights for two 8<math id="S3.SS2.p1.1.m1.1" class="ltx_Math" alttext="\times" display="inline"><semantics id="S3.SS2.p1.1.m1.1a"><mo id="S3.SS2.p1.1.m1.1.1" xref="S3.SS2.p1.1.m1.1.1.cmml">×</mo><annotation-xml encoding="MathML-Content" id="S3.SS2.p1.1.m1.1b"><times id="S3.SS2.p1.1.m1.1.1.cmml" xref="S3.SS2.p1.1.m1.1.1"></times></annotation-xml><annotation encoding="application/x-tex" id="S3.SS2.p1.1.m1.1c">\times</annotation></semantics></math>8 weight blocks. This rearrangement pattern enhances the memory locality of quantized weights and eliminates shared memory write-back bank conflicts.</p>
+</div>
+<figure id="S3.F5" class="ltx_figure"><img src="/html/2402.10076/assets/figures/deq_reorder.png" id="S3.F5.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="598" height="99" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S3.F5.2.1.1" class="ltx_text" style="font-size:90%;">Figure 5</span>: </span><span id="S3.F5.3.2" class="ltx_text" style="font-size:90%;">Parallel i4-f16 dequantization kernel-aware weight reordering.</span></figcaption>
+</figure>
+<div id="S3.SS2.p2" class="ltx_para">
+<p id="S3.SS2.p2.1" class="ltx_p">Moreover, QUICK implements an additional rearrangement of quantized weights based on the pattern of the dequantization kernel. QUICK utilizes a modified version of the parallel dequantization kernel from FasterTransformer <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib13" title="" class="ltx_ref">13</a>]</cite>. The kernel introduces a simple interleaved pattern, as shown in Figure <a href="#S3.F5" title="Figure 5 ‣ 3.2 Interleaving Data Pattern ‣ 3 Avoiding Bank Conflict ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">5</span></a>. To mitigate the overhead associated with rearranging the dequantized weights and further enhance data locality, an additional rearrangement pattern ensuring a sequential weight pattern after dequantization is applied.</p>
+</div>
+<figure id="S3.F6" class="ltx_figure"><img src="/html/2402.10076/assets/figures/combined_reorder.png" id="S3.F6.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="598" height="199" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S3.F6.6.3.1" class="ltx_text" style="font-size:90%;">Figure 6</span>: </span><span id="S3.F6.4.2" class="ltx_text" style="font-size:90%;">QUICK weight interleaving pattern. Note that the figure is illustrating a case of computing <math id="S3.F6.3.1.m1.1" class="ltx_Math" alttext="8\times 4\times 8(M\times N\times K)" display="inline"><semantics id="S3.F6.3.1.m1.1b"><mrow id="S3.F6.3.1.m1.1.1" xref="S3.F6.3.1.m1.1.1.cmml"><mrow id="S3.F6.3.1.m1.1.1.3" xref="S3.F6.3.1.m1.1.1.3.cmml"><mn id="S3.F6.3.1.m1.1.1.3.2" xref="S3.F6.3.1.m1.1.1.3.2.cmml">8</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F6.3.1.m1.1.1.3.1" xref="S3.F6.3.1.m1.1.1.3.1.cmml">×</mo><mn id="S3.F6.3.1.m1.1.1.3.3" xref="S3.F6.3.1.m1.1.1.3.3.cmml">4</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F6.3.1.m1.1.1.3.1b" xref="S3.F6.3.1.m1.1.1.3.1.cmml">×</mo><mn id="S3.F6.3.1.m1.1.1.3.4" xref="S3.F6.3.1.m1.1.1.3.4.cmml">8</mn></mrow><mo lspace="0em" rspace="0em" id="S3.F6.3.1.m1.1.1.2" xref="S3.F6.3.1.m1.1.1.2.cmml">​</mo><mrow id="S3.F6.3.1.m1.1.1.1.1" xref="S3.F6.3.1.m1.1.1.1.1.1.cmml"><mo stretchy="false" id="S3.F6.3.1.m1.1.1.1.1.2" xref="S3.F6.3.1.m1.1.1.1.1.1.cmml">(</mo><mrow id="S3.F6.3.1.m1.1.1.1.1.1" xref="S3.F6.3.1.m1.1.1.1.1.1.cmml"><mi id="S3.F6.3.1.m1.1.1.1.1.1.2" xref="S3.F6.3.1.m1.1.1.1.1.1.2.cmml">M</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F6.3.1.m1.1.1.1.1.1.1" xref="S3.F6.3.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F6.3.1.m1.1.1.1.1.1.3" xref="S3.F6.3.1.m1.1.1.1.1.1.3.cmml">N</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F6.3.1.m1.1.1.1.1.1.1b" xref="S3.F6.3.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F6.3.1.m1.1.1.1.1.1.4" xref="S3.F6.3.1.m1.1.1.1.1.1.4.cmml">K</mi></mrow><mo stretchy="false" id="S3.F6.3.1.m1.1.1.1.1.3" xref="S3.F6.3.1.m1.1.1.1.1.1.cmml">)</mo></mrow></mrow><annotation-xml encoding="MathML-Content" id="S3.F6.3.1.m1.1c"><apply id="S3.F6.3.1.m1.1.1.cmml" xref="S3.F6.3.1.m1.1.1"><times id="S3.F6.3.1.m1.1.1.2.cmml" xref="S3.F6.3.1.m1.1.1.2"></times><apply id="S3.F6.3.1.m1.1.1.3.cmml" xref="S3.F6.3.1.m1.1.1.3"><times id="S3.F6.3.1.m1.1.1.3.1.cmml" xref="S3.F6.3.1.m1.1.1.3.1"></times><cn type="integer" id="S3.F6.3.1.m1.1.1.3.2.cmml" xref="S3.F6.3.1.m1.1.1.3.2">8</cn><cn type="integer" id="S3.F6.3.1.m1.1.1.3.3.cmml" xref="S3.F6.3.1.m1.1.1.3.3">4</cn><cn type="integer" id="S3.F6.3.1.m1.1.1.3.4.cmml" xref="S3.F6.3.1.m1.1.1.3.4">8</cn></apply><apply id="S3.F6.3.1.m1.1.1.1.1.1.cmml" xref="S3.F6.3.1.m1.1.1.1.1"><times id="S3.F6.3.1.m1.1.1.1.1.1.1.cmml" xref="S3.F6.3.1.m1.1.1.1.1.1.1"></times><ci id="S3.F6.3.1.m1.1.1.1.1.1.2.cmml" xref="S3.F6.3.1.m1.1.1.1.1.1.2">𝑀</ci><ci id="S3.F6.3.1.m1.1.1.1.1.1.3.cmml" xref="S3.F6.3.1.m1.1.1.1.1.1.3">𝑁</ci><ci id="S3.F6.3.1.m1.1.1.1.1.1.4.cmml" xref="S3.F6.3.1.m1.1.1.1.1.1.4">𝐾</ci></apply></apply></annotation-xml><annotation encoding="application/x-tex" id="S3.F6.3.1.m1.1d">8\times 4\times 8(M\times N\times K)</annotation></semantics></math> GEMM using 8 threads and 16-bit packed i4-f16 dequantization kernel for simplicity. QUICK utilizes <math id="S3.F6.4.2.m2.1" class="ltx_Math" alttext="16\times 8\times 16(M\times N\times K)" display="inline"><semantics id="S3.F6.4.2.m2.1b"><mrow id="S3.F6.4.2.m2.1.1" xref="S3.F6.4.2.m2.1.1.cmml"><mrow id="S3.F6.4.2.m2.1.1.3" xref="S3.F6.4.2.m2.1.1.3.cmml"><mn id="S3.F6.4.2.m2.1.1.3.2" xref="S3.F6.4.2.m2.1.1.3.2.cmml">16</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F6.4.2.m2.1.1.3.1" xref="S3.F6.4.2.m2.1.1.3.1.cmml">×</mo><mn id="S3.F6.4.2.m2.1.1.3.3" xref="S3.F6.4.2.m2.1.1.3.3.cmml">8</mn><mo lspace="0.222em" rspace="0.222em" id="S3.F6.4.2.m2.1.1.3.1b" xref="S3.F6.4.2.m2.1.1.3.1.cmml">×</mo><mn id="S3.F6.4.2.m2.1.1.3.4" xref="S3.F6.4.2.m2.1.1.3.4.cmml">16</mn></mrow><mo lspace="0em" rspace="0em" id="S3.F6.4.2.m2.1.1.2" xref="S3.F6.4.2.m2.1.1.2.cmml">​</mo><mrow id="S3.F6.4.2.m2.1.1.1.1" xref="S3.F6.4.2.m2.1.1.1.1.1.cmml"><mo stretchy="false" id="S3.F6.4.2.m2.1.1.1.1.2" xref="S3.F6.4.2.m2.1.1.1.1.1.cmml">(</mo><mrow id="S3.F6.4.2.m2.1.1.1.1.1" xref="S3.F6.4.2.m2.1.1.1.1.1.cmml"><mi id="S3.F6.4.2.m2.1.1.1.1.1.2" xref="S3.F6.4.2.m2.1.1.1.1.1.2.cmml">M</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F6.4.2.m2.1.1.1.1.1.1" xref="S3.F6.4.2.m2.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F6.4.2.m2.1.1.1.1.1.3" xref="S3.F6.4.2.m2.1.1.1.1.1.3.cmml">N</mi><mo lspace="0.222em" rspace="0.222em" id="S3.F6.4.2.m2.1.1.1.1.1.1b" xref="S3.F6.4.2.m2.1.1.1.1.1.1.cmml">×</mo><mi id="S3.F6.4.2.m2.1.1.1.1.1.4" xref="S3.F6.4.2.m2.1.1.1.1.1.4.cmml">K</mi></mrow><mo stretchy="false" id="S3.F6.4.2.m2.1.1.1.1.3" xref="S3.F6.4.2.m2.1.1.1.1.1.cmml">)</mo></mrow></mrow><annotation-xml encoding="MathML-Content" id="S3.F6.4.2.m2.1c"><apply id="S3.F6.4.2.m2.1.1.cmml" xref="S3.F6.4.2.m2.1.1"><times id="S3.F6.4.2.m2.1.1.2.cmml" xref="S3.F6.4.2.m2.1.1.2"></times><apply id="S3.F6.4.2.m2.1.1.3.cmml" xref="S3.F6.4.2.m2.1.1.3"><times id="S3.F6.4.2.m2.1.1.3.1.cmml" xref="S3.F6.4.2.m2.1.1.3.1"></times><cn type="integer" id="S3.F6.4.2.m2.1.1.3.2.cmml" xref="S3.F6.4.2.m2.1.1.3.2">16</cn><cn type="integer" id="S3.F6.4.2.m2.1.1.3.3.cmml" xref="S3.F6.4.2.m2.1.1.3.3">8</cn><cn type="integer" id="S3.F6.4.2.m2.1.1.3.4.cmml" xref="S3.F6.4.2.m2.1.1.3.4">16</cn></apply><apply id="S3.F6.4.2.m2.1.1.1.1.1.cmml" xref="S3.F6.4.2.m2.1.1.1.1"><times id="S3.F6.4.2.m2.1.1.1.1.1.1.cmml" xref="S3.F6.4.2.m2.1.1.1.1.1.1"></times><ci id="S3.F6.4.2.m2.1.1.1.1.1.2.cmml" xref="S3.F6.4.2.m2.1.1.1.1.1.2">𝑀</ci><ci id="S3.F6.4.2.m2.1.1.1.1.1.3.cmml" xref="S3.F6.4.2.m2.1.1.1.1.1.3">𝑁</ci><ci id="S3.F6.4.2.m2.1.1.1.1.1.4.cmml" xref="S3.F6.4.2.m2.1.1.1.1.1.4">𝐾</ci></apply></apply></annotation-xml><annotation encoding="application/x-tex" id="S3.F6.4.2.m2.1d">16\times 8\times 16(M\times N\times K)</annotation></semantics></math> GEMM with 32 threads and 32-bit packed i4-f16 dequantization kernel.</span></figcaption>
+</figure>
+<div id="S3.SS2.p3" class="ltx_para">
+<p id="S3.SS2.p3.1" class="ltx_p">Both weight rearrangement patterns avoid shared memory write-backs and ensure the sequential weight pattern after dequantization can be applied concurrently, as the patterns are independent. QUICK integrates both patterns as described in Figure <a href="#S3.F6" title="Figure 6 ‣ 3.2 Interleaving Data Pattern ‣ 3 Avoiding Bank Conflict ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">6</span></a>, achieving optimal end-to-end latency while reducing shared memory bank conflicts and enhancing data locality.</p>
+</div>
+</section>
+<section id="S3.SS3" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">3.3 </span>Tile Size Optimization</h3>
+
+<div id="S3.SS3.p1" class="ltx_para">
+<p id="S3.SS3.p1.1" class="ltx_p">Optimizing the number of active warps per multiprocessor plays an important role in improving the performance of computation kernels. Achieving higher number of active warps per multiprocessor can be beneficial as it facilitates the interleaving of warps and enables better latency hiding. Several factors, including the number of required registers and the size of shared memory, can limit the number of active warps per multiprocessor. In addition to improving throughput by eliminating shared memory write-back bank conflicts, QUICK leverages the reduced shared memory usage within the computation kernel to further enhance computational throughput.</p>
+</div>
+<div id="S3.SS3.p2" class="ltx_para">
+<p id="S3.SS3.p2.1" class="ltx_p">Previous mixed precision GEMM kernels have utilized shared memory to store both activation and weight matrices, with benchmarks indicating that the shared memory size per warp exerts the greatest pressure on the number of active warps per multiprocessor. In contrast, QUICK avoids allocating shared memory for the weight matrices, thereby shifting the pressure from shared memory size to the number of required registers. Leveraging this opportunity, QUICK increases the tile size of mixed precision GEMM, further reducing DRAM accesses while maintaining similar theoretical multiprocessor occupancy. With increased number of activation values processed per computation tile, weight matrices need to be loaded less frequently from DRAM. This optimization results in a further increase in throughput for larger batch sizes, particularly those exceeding 32.</p>
+</div>
+</section>
+</section>
+<section id="S4" class="ltx_section">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">4 </span>Experimental Results</h2>
+
+<div id="S4.p1" class="ltx_para">
+<p id="S4.p1.1" class="ltx_p">In this section, we evaluate the performance improvement provided by QUICK in comparison to both the baseline fp16 kernel and AutoAWQ-Kernel.
+We first compare the efficiency of a single matrix multiplication, followed by the comparison of end-to-end token generation throughput across various LLMs.
+Furthermore, we also present the benchmark results showcasing the integration of QUICK with the vLLM <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib10" title="" class="ltx_ref">10</a>]</cite> framework.
+Note that all experiments involving AutoAWQ-Kernel and QUICK are based on 4-bit weight-only quantization.</p>
+</div>
+<section id="S4.SS1" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">4.1 </span>Matrix Multiplication Performance</h3>
+
+<div id="S4.SS1.p1" class="ltx_para">
+<p id="S4.SS1.p1.2" class="ltx_p">We initially evaluate the performance of QUICK with unit matrix multiplications, with the matrix multiplication dimensions set to <math id="S4.SS1.p1.1.m1.1" class="ltx_Math" alttext="\textit{batch size}\times 8192\times 8192(M\times N\times K)" display="inline"><semantics id="S4.SS1.p1.1.m1.1a"><mrow id="S4.SS1.p1.1.m1.1.1" xref="S4.SS1.p1.1.m1.1.1.cmml"><mrow id="S4.SS1.p1.1.m1.1.1.3" xref="S4.SS1.p1.1.m1.1.1.3.cmml"><mtext class="ltx_mathvariant_italic" id="S4.SS1.p1.1.m1.1.1.3.2" xref="S4.SS1.p1.1.m1.1.1.3.2a.cmml">batch size</mtext><mo lspace="0.222em" rspace="0.222em" id="S4.SS1.p1.1.m1.1.1.3.1" xref="S4.SS1.p1.1.m1.1.1.3.1.cmml">×</mo><mn id="S4.SS1.p1.1.m1.1.1.3.3" xref="S4.SS1.p1.1.m1.1.1.3.3.cmml">8192</mn><mo lspace="0.222em" rspace="0.222em" id="S4.SS1.p1.1.m1.1.1.3.1a" xref="S4.SS1.p1.1.m1.1.1.3.1.cmml">×</mo><mn id="S4.SS1.p1.1.m1.1.1.3.4" xref="S4.SS1.p1.1.m1.1.1.3.4.cmml">8192</mn></mrow><mo lspace="0em" rspace="0em" id="S4.SS1.p1.1.m1.1.1.2" xref="S4.SS1.p1.1.m1.1.1.2.cmml">​</mo><mrow id="S4.SS1.p1.1.m1.1.1.1.1" xref="S4.SS1.p1.1.m1.1.1.1.1.1.cmml"><mo stretchy="false" id="S4.SS1.p1.1.m1.1.1.1.1.2" xref="S4.SS1.p1.1.m1.1.1.1.1.1.cmml">(</mo><mrow id="S4.SS1.p1.1.m1.1.1.1.1.1" xref="S4.SS1.p1.1.m1.1.1.1.1.1.cmml"><mi id="S4.SS1.p1.1.m1.1.1.1.1.1.2" xref="S4.SS1.p1.1.m1.1.1.1.1.1.2.cmml">M</mi><mo lspace="0.222em" rspace="0.222em" id="S4.SS1.p1.1.m1.1.1.1.1.1.1" xref="S4.SS1.p1.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S4.SS1.p1.1.m1.1.1.1.1.1.3" xref="S4.SS1.p1.1.m1.1.1.1.1.1.3.cmml">N</mi><mo lspace="0.222em" rspace="0.222em" id="S4.SS1.p1.1.m1.1.1.1.1.1.1a" xref="S4.SS1.p1.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S4.SS1.p1.1.m1.1.1.1.1.1.4" xref="S4.SS1.p1.1.m1.1.1.1.1.1.4.cmml">K</mi></mrow><mo stretchy="false" id="S4.SS1.p1.1.m1.1.1.1.1.3" xref="S4.SS1.p1.1.m1.1.1.1.1.1.cmml">)</mo></mrow></mrow><annotation-xml encoding="MathML-Content" id="S4.SS1.p1.1.m1.1b"><apply id="S4.SS1.p1.1.m1.1.1.cmml" xref="S4.SS1.p1.1.m1.1.1"><times id="S4.SS1.p1.1.m1.1.1.2.cmml" xref="S4.SS1.p1.1.m1.1.1.2"></times><apply id="S4.SS1.p1.1.m1.1.1.3.cmml" xref="S4.SS1.p1.1.m1.1.1.3"><times id="S4.SS1.p1.1.m1.1.1.3.1.cmml" xref="S4.SS1.p1.1.m1.1.1.3.1"></times><ci id="S4.SS1.p1.1.m1.1.1.3.2a.cmml" xref="S4.SS1.p1.1.m1.1.1.3.2"><mtext class="ltx_mathvariant_italic" id="S4.SS1.p1.1.m1.1.1.3.2.cmml" xref="S4.SS1.p1.1.m1.1.1.3.2">batch size</mtext></ci><cn type="integer" id="S4.SS1.p1.1.m1.1.1.3.3.cmml" xref="S4.SS1.p1.1.m1.1.1.3.3">8192</cn><cn type="integer" id="S4.SS1.p1.1.m1.1.1.3.4.cmml" xref="S4.SS1.p1.1.m1.1.1.3.4">8192</cn></apply><apply id="S4.SS1.p1.1.m1.1.1.1.1.1.cmml" xref="S4.SS1.p1.1.m1.1.1.1.1"><times id="S4.SS1.p1.1.m1.1.1.1.1.1.1.cmml" xref="S4.SS1.p1.1.m1.1.1.1.1.1.1"></times><ci id="S4.SS1.p1.1.m1.1.1.1.1.1.2.cmml" xref="S4.SS1.p1.1.m1.1.1.1.1.1.2">𝑀</ci><ci id="S4.SS1.p1.1.m1.1.1.1.1.1.3.cmml" xref="S4.SS1.p1.1.m1.1.1.1.1.1.3">𝑁</ci><ci id="S4.SS1.p1.1.m1.1.1.1.1.1.4.cmml" xref="S4.SS1.p1.1.m1.1.1.1.1.1.4">𝐾</ci></apply></apply></annotation-xml><annotation encoding="application/x-tex" id="S4.SS1.p1.1.m1.1c">\textit{batch size}\times 8192\times 8192(M\times N\times K)</annotation></semantics></math>.
+Figure <a href="#S4.F7" title="Figure 7 ‣ 4.1 Matrix Multiplication Performance ‣ 4 Experimental Results ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">7</span></a> illustrates the performance of different kernels in terms of Tera-operations per second (TOPS).
+Notably, QUICK demonstrates superior performance compared to previous implementations such as AutoAWQ-Kernel <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib7" title="" class="ltx_ref">7</a>]</cite>, particularly evident with larger batch sizes.
+For instance, when the batch size is 256, QUICK demonstrates a speed improvement of 1.33<math id="S4.SS1.p1.2.m2.1" class="ltx_Math" alttext="\sim" display="inline"><semantics id="S4.SS1.p1.2.m2.1a"><mo id="S4.SS1.p1.2.m2.1.1" xref="S4.SS1.p1.2.m2.1.1.cmml">∼</mo><annotation-xml encoding="MathML-Content" id="S4.SS1.p1.2.m2.1b"><csymbol cd="latexml" id="S4.SS1.p1.2.m2.1.1.cmml" xref="S4.SS1.p1.2.m2.1.1">similar-to</csymbol></annotation-xml><annotation encoding="application/x-tex" id="S4.SS1.p1.2.m2.1c">\sim</annotation></semantics></math>1.91 times compared to AutoAWQ-Kernel.</p>
+</div>
+<figure id="S4.F7" class="ltx_figure"><img src="/html/2402.10076/assets/figures/kernel_benchmarks.png" id="S4.F7.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="598" height="459" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S4.F7.4.2.1" class="ltx_text" style="font-size:90%;">Figure 7</span>: </span><span id="S4.F7.2.1" class="ltx_text" style="font-size:90%;">Benchmark results of matrix multiplication kernels on various GPUs. The shape of matrices is set to <math id="S4.F7.2.1.m1.1" class="ltx_Math" alttext="\textit{batch size}\times 8192\times 8192(M\times N\times K)" display="inline"><semantics id="S4.F7.2.1.m1.1b"><mrow id="S4.F7.2.1.m1.1.1" xref="S4.F7.2.1.m1.1.1.cmml"><mrow id="S4.F7.2.1.m1.1.1.3" xref="S4.F7.2.1.m1.1.1.3.cmml"><mtext class="ltx_mathvariant_italic" id="S4.F7.2.1.m1.1.1.3.2" xref="S4.F7.2.1.m1.1.1.3.2a.cmml">batch size</mtext><mo lspace="0.222em" rspace="0.222em" id="S4.F7.2.1.m1.1.1.3.1" xref="S4.F7.2.1.m1.1.1.3.1.cmml">×</mo><mn id="S4.F7.2.1.m1.1.1.3.3" xref="S4.F7.2.1.m1.1.1.3.3.cmml">8192</mn><mo lspace="0.222em" rspace="0.222em" id="S4.F7.2.1.m1.1.1.3.1b" xref="S4.F7.2.1.m1.1.1.3.1.cmml">×</mo><mn id="S4.F7.2.1.m1.1.1.3.4" xref="S4.F7.2.1.m1.1.1.3.4.cmml">8192</mn></mrow><mo lspace="0em" rspace="0em" id="S4.F7.2.1.m1.1.1.2" xref="S4.F7.2.1.m1.1.1.2.cmml">​</mo><mrow id="S4.F7.2.1.m1.1.1.1.1" xref="S4.F7.2.1.m1.1.1.1.1.1.cmml"><mo stretchy="false" id="S4.F7.2.1.m1.1.1.1.1.2" xref="S4.F7.2.1.m1.1.1.1.1.1.cmml">(</mo><mrow id="S4.F7.2.1.m1.1.1.1.1.1" xref="S4.F7.2.1.m1.1.1.1.1.1.cmml"><mi id="S4.F7.2.1.m1.1.1.1.1.1.2" xref="S4.F7.2.1.m1.1.1.1.1.1.2.cmml">M</mi><mo lspace="0.222em" rspace="0.222em" id="S4.F7.2.1.m1.1.1.1.1.1.1" xref="S4.F7.2.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S4.F7.2.1.m1.1.1.1.1.1.3" xref="S4.F7.2.1.m1.1.1.1.1.1.3.cmml">N</mi><mo lspace="0.222em" rspace="0.222em" id="S4.F7.2.1.m1.1.1.1.1.1.1b" xref="S4.F7.2.1.m1.1.1.1.1.1.1.cmml">×</mo><mi id="S4.F7.2.1.m1.1.1.1.1.1.4" xref="S4.F7.2.1.m1.1.1.1.1.1.4.cmml">K</mi></mrow><mo stretchy="false" id="S4.F7.2.1.m1.1.1.1.1.3" xref="S4.F7.2.1.m1.1.1.1.1.1.cmml">)</mo></mrow></mrow><annotation-xml encoding="MathML-Content" id="S4.F7.2.1.m1.1c"><apply id="S4.F7.2.1.m1.1.1.cmml" xref="S4.F7.2.1.m1.1.1"><times id="S4.F7.2.1.m1.1.1.2.cmml" xref="S4.F7.2.1.m1.1.1.2"></times><apply id="S4.F7.2.1.m1.1.1.3.cmml" xref="S4.F7.2.1.m1.1.1.3"><times id="S4.F7.2.1.m1.1.1.3.1.cmml" xref="S4.F7.2.1.m1.1.1.3.1"></times><ci id="S4.F7.2.1.m1.1.1.3.2a.cmml" xref="S4.F7.2.1.m1.1.1.3.2"><mtext class="ltx_mathvariant_italic" id="S4.F7.2.1.m1.1.1.3.2.cmml" xref="S4.F7.2.1.m1.1.1.3.2">batch size</mtext></ci><cn type="integer" id="S4.F7.2.1.m1.1.1.3.3.cmml" xref="S4.F7.2.1.m1.1.1.3.3">8192</cn><cn type="integer" id="S4.F7.2.1.m1.1.1.3.4.cmml" xref="S4.F7.2.1.m1.1.1.3.4">8192</cn></apply><apply id="S4.F7.2.1.m1.1.1.1.1.1.cmml" xref="S4.F7.2.1.m1.1.1.1.1"><times id="S4.F7.2.1.m1.1.1.1.1.1.1.cmml" xref="S4.F7.2.1.m1.1.1.1.1.1.1"></times><ci id="S4.F7.2.1.m1.1.1.1.1.1.2.cmml" xref="S4.F7.2.1.m1.1.1.1.1.1.2">𝑀</ci><ci id="S4.F7.2.1.m1.1.1.1.1.1.3.cmml" xref="S4.F7.2.1.m1.1.1.1.1.1.3">𝑁</ci><ci id="S4.F7.2.1.m1.1.1.1.1.1.4.cmml" xref="S4.F7.2.1.m1.1.1.1.1.1.4">𝐾</ci></apply></apply></annotation-xml><annotation encoding="application/x-tex" id="S4.F7.2.1.m1.1d">\textit{batch size}\times 8192\times 8192(M\times N\times K)</annotation></semantics></math>.</span></figcaption>
+</figure>
+<div id="S4.SS1.p2" class="ltx_para">
+<p id="S4.SS1.p2.1" class="ltx_p">With larger batch sizes, the token generation process tends to become computation-bounded, making the overhead from the dequantization process more significant.
+As a result, AutoAWQ-Kernel tends to show prominently degraded throughput compared to fp16 kernel when the batch size approaches 128.
+On the other hand, QUICK, by reducing shared memory bank conflict problem, occasionally demonstrates faster speeds than the fp16 kernel, even with larger batch sizes like 128.</p>
+</div>
+</section>
+<section id="S4.SS2" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">4.2 </span>End-to-end Throughput</h3>
+
+<figure id="S4.F8" class="ltx_figure"><img src="/html/2402.10076/assets/figures/e2e_benchmarks.png" id="S4.F8.g1" class="ltx_graphics ltx_centering ltx_img_landscape" width="538" height="411" alt="Refer to caption">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span id="S4.F8.2.1.1" class="ltx_text" style="font-size:90%;">Figure 8</span>: </span><span id="S4.F8.3.2" class="ltx_text" style="font-size:90%;">End-to-end token generation throughput benchmarks of (a) Mistral-7B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib8" title="" class="ltx_ref">8</a>]</cite> on RTX 4090, (b) Vicuna-13B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib3" title="" class="ltx_ref">3</a>]</cite> on RTX A6000, (c) LLaMA-2-13B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib15" title="" class="ltx_ref">15</a>]</cite> on L40, and (d) LLaMA-33B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib16" title="" class="ltx_ref">16</a>]</cite> on A100.</span></figcaption>
+</figure>
+<div id="S4.SS2.p1" class="ltx_para">
+<p id="S4.SS2.p1.1" class="ltx_p">To illustrate the advantages of QUICK in the inference of quantized LLMs, we further evaluate the end-to-end token generation speed of various LLMs.
+We conducted tests on four different models across four different GPUs: Mistral-7B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib8" title="" class="ltx_ref">8</a>]</cite> on RTX 4090, Vicuna-13B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib3" title="" class="ltx_ref">3</a>]</cite> on RTX A6000, LLaMA-2-13B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib15" title="" class="ltx_ref">15</a>]</cite> on L40, and LLaMA-33B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib16" title="" class="ltx_ref">16</a>]</cite> on A100.
+The token generation throughput at the decoding stage was measured in terms of tokens per second.</p>
+</div>
+<div id="S4.SS2.p2" class="ltx_para">
+<p id="S4.SS2.p2.1" class="ltx_p">As the batch size increases, the memory required to store activations and the KV cache also increases, leading to Out-of-Memory (OOM) problem.
+For example, when running Mistral-7B on an RTX 4090 GPU, it is impossible to run the fp16 model with batch size of 256 due to the OOM problem.
+Applying weight-only quantization reduces the amount of memory used to store weights, thereby enabling usage of more memory for storing activations and the KV cache.
+Consequently, larger batch inference becomes possible.
+Even with the same RTX 4090 GPU, a 4-bit quantized Mistral-7B can be operated at a batch size of 256. Moreover, QUICK can achieve up to 1.94 times higher throughput compared to AutoAWQ-Kernel.
+Similar to the Matrix Multiplication performance mentioned in the previous section, QUICK demonstrates superior performance over the fp16 case even at larger batch sizes.</p>
+</div>
+</section>
+<section id="S4.SS3" class="ltx_subsection">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">4.3 </span>vLLM Throughput</h3>
+
+<div id="S4.SS3.p1" class="ltx_para">
+<p id="S4.SS3.p1.1" class="ltx_p">In this section, we present the throughput benchmark results of our initial version of vLLM <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib10" title="" class="ltx_ref">10</a>]</cite> integrated with QUICK (Table <a href="#S4.T1" title="Table 1 ‣ 4.3 vLLM Throughput ‣ 4 Experimental Results ‣ QUICK: Quantization-aware Interleaving and Conflict-free Kernel for efficient LLM inference" class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a>). Benchmarks were done using the throughput benchmark script and the recommended dataset within the vLLM <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib10" title="" class="ltx_ref">10</a>]</cite> framework. Two models, Vicuna-13B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib3" title="" class="ltx_ref">3</a>]</cite> and Llama-2-70B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib15" title="" class="ltx_ref">15</a>]</cite>, were benchmarked to demonstrate scenarios where the full precision model could and could not be loaded onto the GPU device. vLLM with QUICK demonstrated a throughput gain of 27-29% compared to the AWQ implementation in vLLM, and a 33% throughput gain compared to the full precision model.</p>
+</div>
+<figure id="S4.T1" class="ltx_table">
+<figcaption class="ltx_caption"><span class="ltx_tag ltx_tag_table"><span id="S4.T1.2.1.1" class="ltx_text" style="font-size:90%;">Table 1</span>: </span><span id="S4.T1.3.2" class="ltx_text" style="font-size:90%;">Throughput benchmark results of Vicuna-13B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib3" title="" class="ltx_ref">3</a>]</cite> and Llama-2-70B <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib15" title="" class="ltx_ref">15</a>]</cite> models with vLLM <cite class="ltx_cite ltx_citemacro_cite">[<a href="#bib.bib10" title="" class="ltx_ref">10</a>]</cite> integrated with QUICK. Benchmarks were conducted on a machine equipped with an i9-13900K CPU, 128GB RAM, and an A6000 GPU.</span></figcaption>
+<table id="S4.T1.4" class="ltx_tabular ltx_centering ltx_align_top">
+<tr id="S4.T1.4.1" class="ltx_tr">
+<td id="S4.T1.4.1.1" class="ltx_td ltx_align_center ltx_border_tt" rowspan="2"><span id="S4.T1.4.1.1.1" class="ltx_text">Model</span></td>
+<td id="S4.T1.4.1.2" class="ltx_td ltx_align_center ltx_border_tt">FP16</td>
+<td id="S4.T1.4.1.3" class="ltx_td ltx_align_center ltx_border_tt">AWQ</td>
+<td id="S4.T1.4.1.4" class="ltx_td ltx_align_center ltx_border_tt">QUICK</td>
+<td id="S4.T1.4.1.5" class="ltx_td ltx_align_center ltx_border_tt">Speedup</td>
+<td id="S4.T1.4.1.6" class="ltx_td ltx_align_center ltx_border_tt">Speedup</td>
+</tr>
+<tr id="S4.T1.4.2" class="ltx_tr">
+<td id="S4.T1.4.2.1" class="ltx_td ltx_align_center">(tokens/s)</td>
+<td id="S4.T1.4.2.2" class="ltx_td ltx_align_center">(tokens/s)</td>
+<td id="S4.T1.4.2.3" class="ltx_td ltx_align_center">(tokens/s)</td>
+<td id="S4.T1.4.2.4" class="ltx_td ltx_align_center">(FP16)</td>
+<td id="S4.T1.4.2.5" class="ltx_td ltx_align_center">(AWQ)</td>
+</tr>
+<tr id="S4.T1.4.3" class="ltx_tr">
+<td id="S4.T1.4.3.1" class="ltx_td ltx_align_center ltx_border_t">Vicuna-13B</td>
+<td id="S4.T1.4.3.2" class="ltx_td ltx_align_center ltx_border_t">985.2</td>
+<td id="S4.T1.4.3.3" class="ltx_td ltx_align_center ltx_border_t">1030.4</td>
+<td id="S4.T1.4.3.4" class="ltx_td ltx_align_center ltx_border_t">1308.6</td>
+<td id="S4.T1.4.3.5" class="ltx_td ltx_align_center ltx_border_t">33%</td>
+<td id="S4.T1.4.3.6" class="ltx_td ltx_align_center ltx_border_t">27%</td>
+</tr>
+<tr id="S4.T1.4.4" class="ltx_tr">
+<td id="S4.T1.4.4.1" class="ltx_td ltx_align_center ltx_border_bb">Llama-2-70B</td>
+<td id="S4.T1.4.4.2" class="ltx_td ltx_align_center ltx_border_bb">OOM</td>
+<td id="S4.T1.4.4.3" class="ltx_td ltx_align_center ltx_border_bb">224.3</td>
+<td id="S4.T1.4.4.4" class="ltx_td ltx_align_center ltx_border_bb">290.2</td>
+<td id="S4.T1.4.4.5" class="ltx_td ltx_align_center ltx_border_bb">-</td>
+<td id="S4.T1.4.4.6" class="ltx_td ltx_align_center ltx_border_bb">29%</td>
+</tr>
+</table>
+</figure>
+</section>
+</section>
+<section id="S5" class="ltx_section">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">5 </span>Limitation and Future Work</h2>
+
+<div id="S5.p1" class="ltx_para">
+<p id="S5.p1.1" class="ltx_p">While the proposed QUICK technique has demonstrated enhanced throughput at larger batch sizes, such as 128, enabling the utilization of weight-only quantization for larger batch sizes, it still falls short of the efficiency achieved in the fp16 case, particularly at even larger batch sizes (&gt; 512).
+Therefore, further research is needed to optimize the dequantization process further and enhance the efficiency of mixed precision GEMM kernels under such circumstances.</p>
+</div>
+<div id="S5.p2" class="ltx_para">
+<p id="S5.p2.1" class="ltx_p">For instance, future works could focus on exploring methods to leverage the unused shared memory budget resulting from the direct dequantization of quantized weights at registers. Additional software optimizations, such as automated split-k parameter optimization, could be explored further to ensure optimal throughput considering the model, generation configuration, and the GPU device.</p>
+</div>
+</section>
+<section id="S6" class="ltx_section">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">6 </span>Conclusion</h2>
+
+<div id="S6.p1" class="ltx_para">
+<p id="S6.p1.1" class="ltx_p">In this work, we introduce QUICK, a suite of optimized CUDA kernels designed for efficient execution of mixed precision GEMM operations.
+Previous implementations exhibited advantages only for small batch sizes due to shared memory bank conflict problem.
+QUICK, however, overcomes this limitation by employing an interleaving data pattern, which enables superior throughput over fp16 kernels even for larger batch sizes.
+Furthermore, QUICK has demonstrated enhanced end-to-end token generation throughput in various LLM inference frameworks, including AutoAWQ and vLLM.</p>
+</div>
+</section>
+<section id="bib" class="ltx_bibliography">
+<h2 class="ltx_title ltx_title_bibliography">References</h2>
+
+<ul class="ltx_biblist">
+<li id="bib.bib1" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[1]</span>
+<span class="ltx_bibblock">
+Saleh Ashkboos, Maximilian L Croci, Marcelo Gennari do Nascimento, Torsten Hoefler, and James Hensman.
+
+</span>
+<span class="ltx_bibblock">Slicegpt: Compress large language models by deleting rows and columns.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib1.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2401.15024</span>, 2024.
+
+</span>
+</li>
+<li id="bib.bib2" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[2]</span>
+<span class="ltx_bibblock">
+Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, et al.
+
+</span>
+<span class="ltx_bibblock">Language models are few-shot learners.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib2.1.1" class="ltx_text ltx_font_italic">Advances in neural information processing systems</span>, 33:1877–1901, 2020.
+
+</span>
+</li>
+<li id="bib.bib3" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[3]</span>
+<span class="ltx_bibblock">
+Wei-Lin Chiang, Zhuohan Li, Zi Lin, Ying Sheng, Zhanghao Wu, Hao Zhang, Lianmin Zheng, Siyuan Zhuang, Yonghao Zhuang, Joseph E. Gonzalez, Ion Stoica, and Eric P. Xing.
+
+</span>
+<span class="ltx_bibblock">Vicuna: An open-source chatbot impressing gpt-4 with 90%* chatgpt quality, March 2023.
+
+</span>
+</li>
+<li id="bib.bib4" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[4]</span>
+<span class="ltx_bibblock">
+Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer.
+
+</span>
+<span class="ltx_bibblock">Llm.int8(): 8-bit matrix multiplication for transformers at scale.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib4.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2208.07339</span>, 2022.
+
+</span>
+</li>
+<li id="bib.bib5" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[5]</span>
+<span class="ltx_bibblock">
+Elias Frantar and Dan Alistarh.
+
+</span>
+<span class="ltx_bibblock">Sparsegpt: Massive language models can be accurately pruned in one-shot.
+
+</span>
+<span class="ltx_bibblock">In <span id="bib.bib5.1.1" class="ltx_text ltx_font_italic">International Conference on Machine Learning</span>, pages 10323–10337. PMLR, 2023.
+
+</span>
+</li>
+<li id="bib.bib6" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[6]</span>
+<span class="ltx_bibblock">
+Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh.
+
+</span>
+<span class="ltx_bibblock">Gptq: Accurate post-training quantization for generative pre-trained transformers.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib6.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2210.17323</span>, 2022.
+
+</span>
+</li>
+<li id="bib.bib7" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[7]</span>
+<span class="ltx_bibblock">
+Casper Hansen.
+
+</span>
+<span class="ltx_bibblock">Autoawq_kernels.
+
+</span>
+<span class="ltx_bibblock">https://github.com/casper-hansen/AutoAWQ_kernels, 2023.
+
+</span>
+</li>
+<li id="bib.bib8" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[8]</span>
+<span class="ltx_bibblock">
+Albert Q Jiang, Alexandre Sablayrolles, Arthur Mensch, Chris Bamford, Devendra Singh Chaplot, Diego de las Casas, Florian Bressand, Gianna Lengyel, Guillaume Lample, Lucile Saulnier, et al.
+
+</span>
+<span class="ltx_bibblock">Mistral 7b.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib8.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2310.06825</span>, 2023.
+
+</span>
+</li>
+<li id="bib.bib9" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[9]</span>
+<span class="ltx_bibblock">
+Albert Q Jiang, Alexandre Sablayrolles, Antoine Roux, Arthur Mensch, Blanche Savary, Chris Bamford, Devendra Singh Chaplot, Diego de las Casas, Emma Bou Hanna, Florian Bressand, et al.
+
+</span>
+<span class="ltx_bibblock">Mixtral of experts.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib9.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2401.04088</span>, 2024.
+
+</span>
+</li>
+<li id="bib.bib10" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[10]</span>
+<span class="ltx_bibblock">
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Stoica.
+
+</span>
+<span class="ltx_bibblock">Efficient memory management for large language model serving with pagedattention.
+
+</span>
+<span class="ltx_bibblock">In <span id="bib.bib10.1.1" class="ltx_text ltx_font_italic">Proceedings of the ACM SIGOPS 29th Symposium on Operating Systems Principles</span>, 2023.
+
+</span>
+</li>
+<li id="bib.bib11" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[11]</span>
+<span class="ltx_bibblock">
+Changhun Lee, Jungyu Jin, Taesu Kim, Hyungjun Kim, and Eunhyeok Park.
+
+</span>
+<span class="ltx_bibblock">Owq: Outlier-aware weight quantization for efficient fine-tuning and inference of large language models.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib11.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2306.02272</span>, 2024.
+
+</span>
+</li>
+<li id="bib.bib12" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[12]</span>
+<span class="ltx_bibblock">
+Ji Lin, Jiaming Tang, Haotian Tang, Shang Yang, Xingyu Dang, and Song Han.
+
+</span>
+<span class="ltx_bibblock">Awq: Activation-aware weight quantization for llm compression and acceleration.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib12.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2306.00978</span>, 2023.
+
+</span>
+</li>
+<li id="bib.bib13" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[13]</span>
+<span class="ltx_bibblock">
+NVIDIA.
+
+</span>
+<span class="ltx_bibblock">Faster transformer.
+
+</span>
+<span class="ltx_bibblock">https://github.com/NVIDIA/FasterTransformer, 2022.
+
+</span>
+</li>
+<li id="bib.bib14" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[14]</span>
+<span class="ltx_bibblock">
+NVIDIA.
+
+</span>
+<span class="ltx_bibblock">Nvidia nsight compute.
+
+</span>
+<span class="ltx_bibblock">https://docs.nvidia.com/nsight-compute/NsightCompute/index.html, 2024.
+
+</span>
+</li>
+<li id="bib.bib15" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[15]</span>
+<span class="ltx_bibblock">
+Konstantinos I Roumeliotis, Nikolaos D Tselikas, and Dimitrios K Nasiopoulos.
+
+</span>
+<span class="ltx_bibblock">Llama 2: Early adopters’ utilization of meta’s new open-source pretrained model.
+
+</span>
+<span class="ltx_bibblock">2023.
+
+</span>
+</li>
+<li id="bib.bib16" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[16]</span>
+<span class="ltx_bibblock">
+Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric Hambro, Faisal Azhar, et al.
+
+</span>
+<span class="ltx_bibblock">Llama: Open and efficient foundation language models.
+
+</span>
+<span class="ltx_bibblock"><span id="bib.bib16.1.1" class="ltx_text ltx_font_italic">arXiv preprint arXiv:2302.13971</span>, 2023.
+
+</span>
+</li>
+<li id="bib.bib17" class="ltx_bibitem">
+<span class="ltx_tag ltx_tag_bibitem">[17]</span>
+<span class="ltx_bibblock">
+Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and Song Han.
+
+</span>
+<span class="ltx_bibblock">Smoothquant: Accurate and efficient post-training quantization for large language models.
+
+</span>
+<span class="ltx_bibblock">In <span id="bib.bib17.1.1" class="ltx_text ltx_font_italic">International Conference on Machine Learning</span>, pages 38087–38099. PMLR, 2023.
+
+</span>
+</li>
+</ul>
+</section>
+</article>
+</div>
+<div class="ar5iv-footer"><a href="/html/2402.10075" class="ar5iv-nav-button ar5iv-nav-button-prev">◄</a>
+    <a class="ar5iv-home-button" href="/"><img height="40" alt="ar5iv homepage" src="/assets/ar5iv.png"></a>
+    <a href="/feeling_lucky" class="ar5iv-text-button">Feeling<br>lucky?</a>
+    <a href="/land_of_honey_and_milk" rel="nofollow" aria-hidden="true" tabindex="-1"></a>
+    <a href="/log/2402.10076" class="ar5iv-text-button ar5iv-severity-error">Conversion<br>report</a>
+    <a class="ar5iv-text-button" target="_blank" href="https://github.com/dginev/ar5iv/issues/new?template=improve-article--arxiv-id-.md&title=Improve+article+2402.10076">Report<br>an issue</a>
+    <a href="https://arxiv.org/abs/2402.10076" class="ar5iv-text-button arxiv-ui-theme">View&nbsp;original<br>on&nbsp;arXiv</a><a href="/html/2402.10078" class="ar5iv-nav-button ar5iv-nav-button-next">►</a>
+</div><footer class="ltx_page_footer">
+<a class="ar5iv-toggle-color-scheme" href="javascript:toggleColorScheme()" title="Toggle ar5iv color scheme"><span class="color-scheme-icon"></span></a>
+<a class="ar5iv-footer-button" href="https://arxiv.org/help/license" target="_blank">Copyright</a>
+<a class="ar5iv-footer-button" href="https://arxiv.org/help/policies/privacy_policy" target="_blank">Privacy Policy</a>
+
+<div class="ltx_page_logo">Generated  on Tue Mar  5 13:51:36 2024 by <a target="_blank" href="http://dlmf.nist.gov/LaTeXML/" class="ltx_LaTeXML_logo"><span style="letter-spacing:-0.2em; margin-right:0.1em;">L<span class="ltx_font_smallcaps" style="position:relative; bottom:2.2pt;">a</span>T<span class="ltx_font_smallcaps" style="font-size:120%;position:relative; bottom:-0.2ex;">e</span></span><span style="font-size:90%; position:relative; bottom:-0.2ex;">XML</span><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAsAAAAOCAYAAAD5YeaVAAAAAXNSR0IArs4c6QAAAAZiS0dEAP8A/wD/oL2nkwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB9wKExQZLWTEaOUAAAAddEVYdENvbW1lbnQAQ3JlYXRlZCB3aXRoIFRoZSBHSU1Q72QlbgAAAdpJREFUKM9tkL+L2nAARz9fPZNCKFapUn8kyI0e4iRHSR1Kb8ng0lJw6FYHFwv2LwhOpcWxTjeUunYqOmqd6hEoRDhtDWdA8ApRYsSUCDHNt5ul13vz4w0vWCgUnnEc975arX6ORqN3VqtVZbfbTQC4uEHANM3jSqXymFI6yWazP2KxWAXAL9zCUa1Wy2tXVxheKA9YNoR8Pt+aTqe4FVVVvz05O6MBhqUIBGk8Hn8HAOVy+T+XLJfLS4ZhTiRJgqIoVBRFIoric47jPnmeB1mW/9rr9ZpSSn3Lsmir1fJZlqWlUonKsvwWwD8ymc/nXwVBeLjf7xEKhdBut9Hr9WgmkyGEkJwsy5eHG5vN5g0AKIoCAEgkEkin0wQAfN9/cXPdheu6P33fBwB4ngcAcByHJpPJl+fn54mD3Gg0NrquXxeLRQAAwzAYj8cwTZPwPH9/sVg8PXweDAauqqr2cDjEer1GJBLBZDJBs9mE4zjwfZ85lAGg2+06hmGgXq+j3+/DsixYlgVN03a9Xu8jgCNCyIegIAgx13Vfd7vdu+FweG8YRkjXdWy329+dTgeSJD3ieZ7RNO0VAXAPwDEAO5VKndi2fWrb9jWl9Esul6PZbDY9Go1OZ7PZ9z/lyuD3OozU2wAAAABJRU5ErkJggg==" alt="Mascot Sammy"></a>
+</div></footer>
+</div>
+
+    <script>
+      var canMathML = typeof(MathMLElement) == "function";
+      if (!canMathML) {
+        var body = document.querySelector("body");
+        body.firstElementChild.setAttribute('style', 'opacity: 0;');
+        var loading = document.createElement("div");
+        loading.setAttribute("id", "mathjax-loading-spinner");
+        var message = document.createElement("div");
+        message.setAttribute("id", "mathjax-loading-message");
+        message.innerText = "Typesetting Equations...";
+        body.prepend(loading);
+        body.prepend(message);
+
+        var el = document.createElement("script");
+        el.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js";
+        document.querySelector("head").appendChild(el);
+
+        window.MathJax = {
+          startup: {
+            pageReady: () => {
+              return MathJax.startup.defaultPageReady().then(() => {
+                body.removeChild(loading);
+                body.removeChild(message);
+                body.firstElementChild.removeAttribute('style');
+              }); } } };
+      }
+    </script>
+    <script>
+    // Auxiliary function, building the preview feature when
+    // an inline citation is clicked
+    function clicked_cite(e) {
+      e.preventDefault();
+      let cite = this.closest('.ltx_cite');
+      let next = cite.nextSibling;
+      if (next && next.nodeType == Node.ELEMENT_NODE && next.getAttribute('class') == "ar5iv-bibitem-preview") {
+        next.remove();
+        return; }
+      // Before adding a preview modal,
+      // cleanup older previews, in case they're still open
+      document.querySelectorAll('span.ar5iv-bibitem-preview').forEach(function(node) {
+        node.remove();
+      })
+
+      // Create the preview
+      preview = document.createElement('span');
+      preview.setAttribute('class','ar5iv-bibitem-preview');
+      let target = document.getElementById(this.getAttribute('href').slice(1));
+      target.childNodes.forEach(function (child) {
+        preview.append(child.cloneNode(true));
+      });
+      let close_x = document.createElement('button');
+      close_x.setAttribute("aria-label","Close modal for bibliography item preview");
+      close_x.textContent = "×";
+      close_x.setAttribute('class', 'ar5iv-button-close-preview');
+      close_x.setAttribute('onclick','this.parentNode.remove()');
+      preview.append(close_x);
+      preview.querySelectorAll('.ltx_tag_bibitem').forEach(function(node) {
+        node.remove();
+      });
+      cite.parentNode.insertBefore(preview, cite.nextSibling);
+      return;
+    }
+    // Global Document initialization:
+    // - assign the preview feature to all inline citation links
+    document.querySelectorAll(".ltx_cite .ltx_ref").forEach(function (link) {
+      link.addEventListener("click", clicked_cite);
+    });
+    </script>
+    </body>
+</html>

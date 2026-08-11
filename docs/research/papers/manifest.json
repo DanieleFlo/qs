@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "retrieved_policy": "Download the arXiv HTML rendering and generate a navigable semantic Markdown mirror; HTML remains the source of record.",
+  "papers": [
+    {"id": "2412.06464", "slug": "gated-delta-networks", "title": "Gated Delta Networks", "topics": ["qwen", "recurrent", "gdn"], "priority": "core", "why": "Defines the recurrent operator used by Qwen hybrid layers."},
+    {"id": "2205.14135", "slug": "flashattention", "title": "FlashAttention", "topics": ["attention", "io-awareness"], "priority": "core", "why": "Establishes IO-aware exact attention and its traffic model."},
+    {"id": "2307.08691", "slug": "flashattention-2", "title": "FlashAttention-2", "topics": ["attention", "cuda", "parallelism"], "priority": "core", "why": "Refines work partitioning and occupancy for attention kernels."},
+    {"id": "2311.01282", "slug": "flashdecoding-plus-plus", "title": "FlashDecoding++", "topics": ["decode", "attention", "long-context"], "priority": "core", "why": "Targets autoregressive attention latency and long-context decode."},
+    {"id": "2501.01005", "slug": "flashinfer", "title": "FlashInfer", "topics": ["attention", "serving", "kernel-library"], "priority": "core", "why": "Describes a configurable attention-kernel system and scheduling choices."},
+    {"id": "2312.04985", "slug": "sparq-attention", "title": "SparQ Attention", "topics": ["decode", "attention", "bandwidth"], "priority": "adjacent", "why": "Explores reducing memory traffic during generative inference."},
+    {"id": "2309.06180", "slug": "pagedattention-vllm", "title": "Efficient Memory Management for Large Language Model Serving with PagedAttention", "topics": ["kv-cache", "serving", "vllm"], "priority": "core", "why": "Provides the memory-management basis of vLLM serving."},
+    {"id": "2408.11743", "slug": "marlin", "title": "Marlin", "topics": ["quantization", "matmul", "decode"], "priority": "core", "why": "Presents mixed-precision kernels designed for memory-bound autoregressive inference."},
+    {"id": "2402.10076", "slug": "quick", "title": "QUICK", "topics": ["quantization", "matmul", "memory-layout"], "priority": "core", "why": "Studies interleaved weight layouts and conflict reduction for quantized inference."},
+    {"id": "2310.19102", "slug": "atom", "title": "Atom", "topics": ["quantization", "serving", "low-bit"], "priority": "core", "why": "Combines low-bit serving with hardware-aware kernels and layouts."},
+    {"id": "2306.00978", "slug": "awq", "title": "AWQ", "topics": ["quantization", "weights"], "priority": "core", "why": "Defines activation-aware weight quantization used by several CUDA runtimes."},
+    {"id": "2210.17323", "slug": "gptq", "title": "GPTQ", "topics": ["quantization", "weights"], "priority": "core", "why": "Foundational post-training weight quantization reference for local runtimes."},
+    {"id": "2211.10438", "slug": "smoothquant", "title": "SmoothQuant", "topics": ["quantization", "int8", "activations"], "priority": "adjacent", "why": "Explains activation smoothing for integer matrix multiplication."},
+    {"id": "2405.04532", "slug": "qserve", "title": "QServe", "topics": ["quantization", "serving", "w4a8"], "priority": "core", "why": "Connects W4A8 quantization, kernels and serving throughput."},
+    {"id": "2402.02750", "slug": "kivi", "title": "KIVI", "topics": ["kv-cache", "quantization"], "priority": "core", "why": "Studies tuning-free asymmetric KV-cache quantization."},
+    {"id": "2401.18079", "slug": "kvquant", "title": "KVQuant", "topics": ["kv-cache", "quantization", "long-context"], "priority": "core", "why": "Provides KV-cache quantization methods and quality measurements."},
+    {"id": "2403.02310", "slug": "sarathi-serve", "title": "Sarathi-Serve", "topics": ["serving", "prefill", "decode", "scheduling"], "priority": "adjacent", "why": "Explores chunked prefill and stall-free request scheduling."},
+    {"id": "2401.09670", "slug": "distserve", "title": "DistServe", "topics": ["serving", "prefill", "decode"], "priority": "adjacent", "why": "Separates prefill and decode resource planning and metrics."},
+    {"id": "2402.16363", "slug": "llm-inference-roofline", "title": "LLM Inference Performance Engineering", "topics": ["roofline", "performance-model"], "priority": "core", "why": "Supports arithmetic-intensity and memory/compute-bound diagnosis."},
+    {"id": "2211.17192", "slug": "speculative-decoding", "title": "Fast Inference from Transformers via Speculative Decoding", "topics": ["speculative", "decode"], "priority": "adjacent", "why": "Defines lossless speculative decoding and its acceptance model."},
+    {"id": "2302.01318", "slug": "speculative-sampling", "title": "Accelerating Large Language Model Decoding with Speculative Sampling", "topics": ["speculative", "decode"], "priority": "adjacent", "why": "Independent reference for exact speculative sampling."},
+    {"id": "2401.10774", "slug": "medusa", "title": "Medusa", "topics": ["multi-token", "decode"], "priority": "adjacent", "why": "Explores multiple decoding heads and tree verification."},
+    {"id": "2404.19737", "slug": "multi-token-prediction", "title": "Better and Faster Large Language Models via Multi-token Prediction", "topics": ["multi-token", "training", "decode"], "priority": "adjacent", "why": "Clarifies multi-token prediction semantics relevant to Qwen MTP."},
+    {"id": "2303.06865", "slug": "flexgen", "title": "FlexGen", "topics": ["offload", "memory", "serving"], "priority": "adjacent", "why": "Provides a cost model for constrained-memory inference and offload."}
+  ]
+}

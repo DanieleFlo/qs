@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "id": "2412.06464",
+      "canonical_url": "https://arxiv.org/abs/2412.06464",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2412.06464",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2412.06464-gated-delta-networks.html",
+      "semantic_text": "docs/research/papers/text/2412.06464-gated-delta-networks.md",
+      "sha256": "546b941932c0391e312fe94c7c2cf1b19c8bc1f0fdc47f3018ab604823e8d1e7",
+      "bytes": 527684
+    },
+    {
+      "id": "2205.14135",
+      "canonical_url": "https://arxiv.org/abs/2205.14135",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2205.14135",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2205.14135-flashattention.html",
+      "semantic_text": "docs/research/papers/text/2205.14135-flashattention.md",
+      "sha256": "8aa3fd77ce56efc8619bcd613a0001bf80cf852d69a12d8a562139294665e835",
+      "bytes": 894637
+    },
+    {
+      "id": "2307.08691",
+      "canonical_url": "https://arxiv.org/abs/2307.08691",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2307.08691",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2307.08691-flashattention-2.html",
+      "semantic_text": "docs/research/papers/text/2307.08691-flashattention-2.md",
+      "sha256": "2c54fb0ea53451526a932dcd6747a881d6ee8bc0c49c1618287cfe680051a555",
+      "bytes": 700497
+    },
+    {
+      "id": "2311.01282",
+      "canonical_url": "https://arxiv.org/abs/2311.01282",
+      "rendered_url": "https://arxiv.org/html/2311.01282",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2311.01282-flashdecoding-plus-plus.html",
+      "semantic_text": "docs/research/papers/text/2311.01282-flashdecoding-plus-plus.md",
+      "sha256": "609ffa2c627c6c6669181203b4fe29aa749b3e984e22a39e0ac058054e17e5ed",
+      "bytes": 431674
+    },
+    {
+      "id": "2501.01005",
+      "canonical_url": "https://arxiv.org/abs/2501.01005",
+      "rendered_url": "https://arxiv.org/html/2501.01005",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2501.01005-flashinfer.html",
+      "semantic_text": "docs/research/papers/text/2501.01005-flashinfer.md",
+      "sha256": "8104fb3441c2e316573dd49a123328ea10e5000aea1667e392ac802fc9808fa1",
+      "bytes": 471582
+    },
+    {
+      "id": "2312.04985",
+      "canonical_url": "https://arxiv.org/abs/2312.04985",
+      "rendered_url": "https://arxiv.org/html/2312.04985",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2312.04985-sparq-attention.html",
+      "semantic_text": "docs/research/papers/text/2312.04985-sparq-attention.md",
+      "sha256": "9f493c69a58f914685f36707afd9686e5170a47280177c0bef106a2c6c2de5a8",
+      "bytes": 1195917
+    },
+    {
+      "id": "2309.06180",
+      "canonical_url": "https://arxiv.org/abs/2309.06180",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2309.06180",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2309.06180-pagedattention-vllm.html",
+      "semantic_text": "docs/research/papers/text/2309.06180-pagedattention-vllm.md",
+      "sha256": "f5af66a1083db1d4904c4092d6be84afa4e8628b633ed4f9130d9f60725e1b2f",
+      "bytes": 334566
+    },
+    {
+      "id": "2408.11743",
+      "canonical_url": "https://arxiv.org/abs/2408.11743",
+      "rendered_url": "https://arxiv.org/html/2408.11743",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2408.11743-marlin.html",
+      "semantic_text": "docs/research/papers/text/2408.11743-marlin.md",
+      "sha256": "7de0956eacf27ca15fa52f0af63be2ea8e2b59c1e661d90c419e6f35ea5df8ca",
+      "bytes": 527041
+    },
+    {
+      "id": "2402.10076",
+      "canonical_url": "https://arxiv.org/abs/2402.10076",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2402.10076",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2402.10076-quick.html",
+      "semantic_text": "docs/research/papers/text/2402.10076-quick.md",
+      "sha256": "4f2b1341cf3ae4f00d5d0f8cc51f36c0332770dc6f42e747ab3e9cc906231c70",
+      "bytes": 79738
+    },
+    {
+      "id": "2310.19102",
+      "canonical_url": "https://arxiv.org/abs/2310.19102",
+      "rendered_url": "https://arxiv.org/html/2310.19102",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2310.19102-atom.html",
+      "semantic_text": "docs/research/papers/text/2310.19102-atom.md",
+      "sha256": "1b8e7018779cb3b8c88bb46a300964e65c9f926f5744390437e8e900fea49b76",
+      "bytes": 265872
+    },
+    {
+      "id": "2306.00978",
+      "canonical_url": "https://arxiv.org/abs/2306.00978",
+      "rendered_url": "https://arxiv.org/html/2306.00978",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2306.00978-awq.html",
+      "semantic_text": "docs/research/papers/text/2306.00978-awq.md",
+      "sha256": "91d42a70f7352992f5533f4358a43098c3d94fa69f85a36689fe23e4295d48ff",
+      "bytes": 251295
+    },
+    {
+      "id": "2210.17323",
+      "canonical_url": "https://arxiv.org/abs/2210.17323",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2210.17323",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2210.17323-gptq.html",
+      "semantic_text": "docs/research/papers/text/2210.17323-gptq.md",
+      "sha256": "b4e947b3f192dc8cc3e696a901a8b38f09ba7b9dea5e30a78e12420033df9437",
+      "bytes": 451835
+    },
+    {
+      "id": "2211.10438",
+      "canonical_url": "https://arxiv.org/abs/2211.10438",
+      "rendered_url": "https://arxiv.org/html/2211.10438",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2211.10438-smoothquant.html",
+      "semantic_text": "docs/research/papers/text/2211.10438-smoothquant.md",
+      "sha256": "085d85ccd8e4038eef555608fedd1eb3fae7c163669a308371a2f590475a810d",
+      "bytes": 316298
+    },
+    {
+      "id": "2405.04532",
+      "canonical_url": "https://arxiv.org/abs/2405.04532",
+      "rendered_url": "https://arxiv.org/html/2405.04532",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2405.04532-qserve.html",
+      "semantic_text": "docs/research/papers/text/2405.04532-qserve.md",
+      "sha256": "cd7c4bc322f8e4cc7dc138cc904b7a779d83f787274b9edbcf07cd8b0ed5a8c6",
+      "bytes": 612887
+    },
+    {
+      "id": "2402.02750",
+      "canonical_url": "https://arxiv.org/abs/2402.02750",
+      "rendered_url": "https://arxiv.org/html/2402.02750",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2402.02750-kivi.html",
+      "semantic_text": "docs/research/papers/text/2402.02750-kivi.md",
+      "sha256": "27289693f4afb905b4aa81314d56b9927ec5ca2749034140ece5de412e039592",
+      "bytes": 631339
+    },
+    {
+      "id": "2401.18079",
+      "canonical_url": "https://arxiv.org/abs/2401.18079",
+      "rendered_url": "https://arxiv.org/html/2401.18079",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2401.18079-kvquant.html",
+      "semantic_text": "docs/research/papers/text/2401.18079-kvquant.md",
+      "sha256": "b69178c019789635f5431b534b9d396e3217dc991906c26de3dafd7a866a82c6",
+      "bytes": 917850
+    },
+    {
+      "id": "2403.02310",
+      "canonical_url": "https://arxiv.org/abs/2403.02310",
+      "rendered_url": "https://arxiv.org/html/2403.02310",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2403.02310-sarathi-serve.html",
+      "semantic_text": "docs/research/papers/text/2403.02310-sarathi-serve.md",
+      "sha256": "0d13fedf24d45ef65b5032e847a2788acf41a5bb5e5b0f90c6a82058e9fbd443",
+      "bytes": 221927
+    },
+    {
+      "id": "2401.09670",
+      "canonical_url": "https://arxiv.org/abs/2401.09670",
+      "rendered_url": "https://arxiv.org/html/2401.09670",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2401.09670-distserve.html",
+      "semantic_text": "docs/research/papers/text/2401.09670-distserve.md",
+      "sha256": "8bd1662e45de2e2d984ed81acfe0d6ba0bf75f456f9021dd1a05ce2d82692078",
+      "bytes": 549098
+    },
+    {
+      "id": "2402.16363",
+      "canonical_url": "https://arxiv.org/abs/2402.16363",
+      "rendered_url": "https://arxiv.org/html/2402.16363",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2402.16363-llm-inference-roofline.html",
+      "semantic_text": "docs/research/papers/text/2402.16363-llm-inference-roofline.md",
+      "sha256": "1bbaaa3309cf1c6549746f2f921dcaf39a44dff2f87df0bfc6e8d3fc4d35ea7a",
+      "bytes": 570125
+    },
+    {
+      "id": "2211.17192",
+      "canonical_url": "https://arxiv.org/abs/2211.17192",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2211.17192",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2211.17192-speculative-decoding.html",
+      "semantic_text": "docs/research/papers/text/2211.17192-speculative-decoding.md",
+      "sha256": "6297cb23589ef4f822046191ae28cf31a3ec7b538afd72a5f3bbd5eb83ae33ae",
+      "bytes": 761011
+    },
+    {
+      "id": "2302.01318",
+      "canonical_url": "https://arxiv.org/abs/2302.01318",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2302.01318",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2302.01318-speculative-sampling.html",
+      "semantic_text": "docs/research/papers/text/2302.01318-speculative-sampling.md",
+      "sha256": "a9255af95f76182286b3bb057509aedcbea388ac854b9fe86e4a8d1662281cc6",
+      "bytes": 313581
+    },
+    {
+      "id": "2401.10774",
+      "canonical_url": "https://arxiv.org/abs/2401.10774",
+      "rendered_url": "https://arxiv.org/html/2401.10774",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2401.10774-medusa.html",
+      "semantic_text": "docs/research/papers/text/2401.10774-medusa.md",
+      "sha256": "0104144f051028b641674cf90b3a73b7597328f28e1bf33e7559dff153a18b01",
+      "bytes": 618452
+    },
+    {
+      "id": "2404.19737",
+      "canonical_url": "https://arxiv.org/abs/2404.19737",
+      "rendered_url": "https://ar5iv.labs.arxiv.org/html/2404.19737",
+      "renderer": "ar5iv-fallback",
+      "html": "docs/research/papers/html/2404.19737-multi-token-prediction.html",
+      "semantic_text": "docs/research/papers/text/2404.19737-multi-token-prediction.md",
+      "sha256": "deac69a46746aea1e4dd921232c9403879b7014f1d1c21704fb3ee334c732f19",
+      "bytes": 923437
+    },
+    {
+      "id": "2303.06865",
+      "canonical_url": "https://arxiv.org/abs/2303.06865",
+      "rendered_url": "https://arxiv.org/html/2303.06865",
+      "renderer": "arxiv-html",
+      "html": "docs/research/papers/html/2303.06865-flexgen.html",
+      "semantic_text": "docs/research/papers/text/2303.06865-flexgen.md",
+      "sha256": "cdb31d18b610cc0c31b68a38f56a2ffe93f1c5c9372c561e92d7dbeac26bd18b",
+      "bytes": 1693568
+    }
+  ],
+  "failures": []
+}

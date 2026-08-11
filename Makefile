@@ -47,7 +47,7 @@ DS4_LINK_LIBS ?= $(CUDA_LDLIBS)
 METAL_LDLIBS := $(LDLIBS)
 endif
 
-.PHONY: all help clean test test-constrained-json-live test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics strix-halo rocm
+.PHONY: all help clean test test-constrained-json-live test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics perf-doctor perf-harness-test perf-fast-test perf-direction-ab perf-slow-test research-fetch research-index research-check strix-halo rocm
 
 ifeq ($(UNAME_S),Darwin)
 all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
@@ -169,6 +169,43 @@ cuda-regression: tests/cuda_long_context_smoke
 qwen-numerics: tests/qwen_numerics_probe
 	./tests/qwen_numerics_probe
 endif
+
+perf-doctor:
+	python3 tools/perf_harness.py doctor
+
+perf-harness-test:
+	python3 -m unittest tests.test_perf_harness -v
+
+perf-fast-test: perf-harness-test
+
+PERF_MODEL ?= gguf/Qwen3.6-27B-Q4_K_S.gguf
+PERF_PROMPT ?= tests/long_context_story_prompt.txt
+
+perf-direction-ab:
+	@test -n "$(PERF_ID)" || (echo "set a unique PERF_ID, for example PERF_ID=score4-01"; exit 2)
+	@test -n "$(PERF_CANDIDATE_ENV)" || (echo "set PERF_CANDIDATE_ENV=NAME=VALUE"; exit 2)
+	python3 tools/perf_harness.py run --id "$(PERF_ID)-baseline" \
+		--model "$(PERF_MODEL)" --prompt "$(PERF_PROMPT)" \
+		--hypothesis "freeze direction baseline for $(PERF_ID)" \
+		--metric gen_steady_tps --baseline-run
+	python3 tools/perf_harness.py run --id "$(PERF_ID)-candidate" \
+		--model "$(PERF_MODEL)" --prompt "$(PERF_PROMPT)" \
+		--hypothesis "test $(PERF_CANDIDATE_ENV) for $(PERF_ID)" \
+		--metric gen_steady_tps --env "$(PERF_CANDIDATE_ENV)" \
+		--baseline "performance-results/$(PERF_ID)-baseline/experiment.json"
+
+perf-slow-test: perf-fast-test qwen-numerics
+	python3 -m unittest tests.test_qwen36_fixtures tests.test_qwen36_numerics -v
+
+research-fetch:
+	python3 tools/fetch_research_corpus.py --refresh
+	python3 tools/build_research_indexes.py
+
+research-index:
+	python3 tools/build_research_indexes.py
+
+research-check: research-index
+	python3 -m unittest tests.test_research_corpus -v
 
 ds4.o: ds4.c ds4.h ds4_ssd.h ds4_distributed.h ds4_gpu.h
 	$(CC) $(CFLAGS) -c -o $@ ds4.c

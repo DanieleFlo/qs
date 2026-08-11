@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-08-11",
+  "repositories": [
+    {"name": "llama.cpp", "repository": "ggml-org/llama.cpp", "commit": "2468576f241235452013308597e6de1b78866996", "class": "upstream", "evidence": "A"},
+    {"name": "vLLM", "repository": "vllm-project/vllm", "commit": "87668ab69b3e2c849a607ece36e8a43bde7c7ee5", "class": "upstream", "evidence": "A"},
+    {"name": "TensorRT-LLM", "repository": "NVIDIA/TensorRT-LLM", "commit": "6b052851c9888138da3399f32c8cfe4e0ef40b28", "class": "vendor-upstream", "evidence": "A"},
+    {"name": "SGLang", "repository": "sgl-project/sglang", "commit": "b20c375c10443e4f4a5656689a04d514194364fd", "class": "upstream", "evidence": "A"},
+    {"name": "MLC LLM", "repository": "mlc-ai/mlc-llm", "commit": "2f78caa4db0f90730a11ee3bb5cbd5f23bf67f9f", "class": "upstream", "evidence": "A"},
+    {"name": "ExLlamaV3", "repository": "turboderp-org/exllamav3", "commit": "4f8ad0121f483ba66a5336244a4c3b6d7210385e", "class": "specialized-upstream", "evidence": "A"},
+    {"name": "Ollama", "repository": "ollama/ollama", "commit": "96fb6d2fa9944bb76e2c5c3f73086a12457b301b", "class": "distribution", "evidence": "A-runtime/B-kernels"},
+    {"name": "Aphrodite Engine", "repository": "PygmalionAI/aphrodite-engine", "commit": "a028d477625acd419a2e604042738d23f7ab792d", "class": "serving-runtime", "evidence": "B"},
+    {"name": "ik_llama.cpp", "repository": "ikawrakow/ik_llama.cpp", "commit": "26ceed9d4091a1696cf50e2ed87e5767d5811d81", "class": "independent-llama-fork", "evidence": "B+"},
+    {"name": "buun-llama-cpp", "repository": "spiritbuun/buun-llama-cpp", "commit": "ba09e2a80bcfcf81bb36e3f98c02d2924248c5d3", "class": "experimental-llama-fork", "evidence": "B-/C"},
+    {"name": "KoboldCpp", "repository": "LostRuins/koboldcpp", "commit": "bf9b9bd45512209a2438851d4afecc82032cefc7", "class": "llama-fork-distribution", "evidence": "B-runtime/C-kernels"},
+    {"name": "club-3090", "repository": "noonghunna/club-3090", "commit": "3701bd7421a250371d381864c90da8509bf800ef", "class": "hardware-recipes", "evidence": "B-operational"},
+    {"name": "club3090 llama.cpp MoE cache", "repository": "noonghunna/llama.cpp", "commit": "e0a20894906a79dad7016cb3c12a237a8c5230b3", "class": "llama-fork-ampere", "evidence": "B-specialized"},
+    {"name": "Genesis vLLM patches", "repository": "Sandermage/genesis-vllm-patches", "commit": "34e269301cc3df71ae4b0da00a0a159b16b4e5d8", "class": "vllm-runtime-overlay", "evidence": "B-operational/C-unreproduced"}
+  ]
+}

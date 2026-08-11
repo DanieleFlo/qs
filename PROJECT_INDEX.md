@@ -179,12 +179,16 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   SSD/GPU e copertura della suite HTTP agentica.
 - `docs/constrained-json-decoding-plan.md` — checklist e criteri di completamento
   per simulatore DSML, JSON Schema, masking dei logits e output strutturati.
+- `docs/agent_performance_contract.md` — gate operativo per gli esperimenti CUDA:
+  baseline, ipotesi falsificabile, correttezza, statistica e verdetto.
+- `docs/todo-harness.md` — roadmap completa del GPU kernel engineering harness.
 - `docs/hardware/` — inventario della macchina RTX 3090 e note di riferimento
   su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
 ### Build ed eseguibili
 
 - `Makefile` — selezione piattaforma, compilazione C/Objective-C/CUDA/ROCm,
+  gate rapidi e confronto model-backed `perf-direction-ab` in un comando,
   linking, target dei binari e suite di test.
 - `download_model.sh` — download dei modelli e support model conosciuti dal
   progetto.
@@ -199,8 +203,29 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   canonicalizzate senza reasoning storico prima della persistenza.
 - `ds4_agent.c` — eseguibile `ds4-agent`: TUI, transcript, sessioni persistenti,
   ciclo tool, file/shell/web tools e orchestrazione della generazione.
-- `ds4_bench.c` — benchmark di prefill/decode a diverse frontiere di contesto,
-  con snapshot o replay fuori dalle finestre cronometrate.
+- `ds4_bench.c` — benchmark di prefill/decode a diverse frontiere di contesto;
+  ripete gli sweep mantenendo il modello residente e usa snapshot o replay fuori
+  dalle finestre cronometrate.
+- `tools/perf_harness.py` — CLI senza dipendenze che orchestra probe hardware,
+  suite ripetute di `ds4-bench` e confronti baseline/candidate in JSON.
+- `performance/workloads.yaml` — workload canonici direction/quick/standard/slow/exhaustive,
+  separati per fase, batch, context e prefill chunk.
+- `performance/README.md` — comandi brevi e confini verificati del harness.
+- `performance/references.md` — fonti primarie, implementazioni di confronto e
+  letteratura HTML, con criteri espliciti per separare evidenza e fuffa.
+- `docs/research/INDEX.md` — ingresso alla knowledge base locale: paper HTML
+  archiviati e hashati, schede delle piattaforme, fork RTX 3090, guide tematiche
+  e indici gerarchici con intervalli di riga.
+- `docs/research/papers/manifest.json`, `corpus-lock.json` — selezione motivata
+  dei paper e provenance esatta degli artefatti scaricati.
+- `docs/research/sources-lock.json` — commit fissati e grado di evidenza dei
+  runtime, fork e raccolte operative analizzati.
+- `tools/fetch_research_corpus.py` — scarica arXiv HTML, usa ar5iv come fallback
+  dichiarato e genera il testo semantico locale.
+- `tools/build_research_indexes.py` — rigenera catalogo e indici con range di
+  riga calcolati dal contenuto effettivo.
+- `tests/test_research_corpus.py` — verifica completezza, SHA, range, indici e
+  limite dei link esterni nelle schede repository.
 - `ds4_eval.c` — harness di valutazione end-to-end su piccoli set di domande,
   con rendering, inferenza reale ed estrazione/valutazione delle risposte.
 - `ds4_help.c`, `ds4_help.h` — testo e rendering condiviso dell'help dei binari.
@@ -220,7 +245,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   salvataggio/ripristino session-scoped su SSD dello stato ricorrente Qwen per
   le frontiere delle skill; per Qwen3.6 Q4_K_S il payload generale portabile
   comprende inoltre timeline, logits, stato GDN, KV full-attention e stato MTP.
-  Il fork Qwen in memoria resta escluso.
+  Il fork Qwen in memoria resta escluso. Il profiler Qwen opzionale emette
+  tempi strutturati attention/FFN per ogni layer di prefill e decode, consumati
+  dal comando profile-network del performance harness.
 - `ds4_gpu.h` — interfaccia tensoriale condivisa fra il grafo C e i backend
   accelerati; descrive tensori opachi, operazioni, attention e batching,
   incluse le due primitive interne Qwen per full-attention gated e Gated

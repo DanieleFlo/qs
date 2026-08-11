@@ -41,6 +41,7 @@ typedef struct {
     int ctx_alloc;
     int step_incr;
     int gen_tokens;
+    int repetitions;
     int power_percent;
     uint32_t prefill_chunk;
     uint32_t ssd_streaming_cache_experts;
@@ -206,6 +207,7 @@ static bench_config parse_options(int argc, char **argv) {
         .ctx_max = 32768,
         .step_incr = 2048,
         .gen_tokens = 128,
+        .repetitions = 1,
         .step_mul = 1.0,
     };
 
@@ -254,6 +256,8 @@ static bench_config parse_options(int argc, char **argv) {
             c.step_mul = parse_double_arg(need_arg(&i, argc, argv, arg), arg);
         } else if (!strcmp(arg, "--gen-tokens") || !strcmp(arg, "--tokens") || !strcmp(arg, "-n")) {
             c.gen_tokens = parse_nonnegative_int(need_arg(&i, argc, argv, arg), arg);
+        } else if (!strcmp(arg, "--repetitions")) {
+            c.repetitions = parse_int(need_arg(&i, argc, argv, arg), arg);
         } else if (!strcmp(arg, "--csv")) {
             c.csv_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--dump-frontier-logits-dir")) {
@@ -676,10 +680,10 @@ int main(int argc, char **argv) {
     const uint64_t snapshot_max_bytes = bench_snapshot_max_bytes();
     bool warned_large_snapshot = false;
     char err[256];
-    int previous = 0;
     int rc = 0;
-
-    for (int frontier = cfg.ctx_start; ; frontier = next_frontier(&cfg, frontier)) {
+    for (int repetition = 0; repetition < cfg.repetitions && rc == 0; repetition++) {
+      int previous = 0;
+      for (int frontier = cfg.ctx_start; ; frontier = next_frontier(&cfg, frontier)) {
         ds4_tokens prefix = {
             .v = prompt.v,
             .len = frontier,
@@ -720,11 +724,14 @@ int main(int argc, char **argv) {
                 }
             } else if (payload_bytes > 0) {
                 if (ds4_session_save_snapshot(session, &snap, err, sizeof(err)) != 0) {
-                    fprintf(stderr, "ds4-bench: snapshot at %d failed: %s\n", frontier, err);
-                    rc = 1;
-                    break;
+                    fprintf(stderr,
+                            "ds4-bench: snapshot at %d unavailable (%s); replaying prefix\n",
+                            frontier,
+                            err);
+                    have_snapshot = false;
+                } else {
+                    have_snapshot = true;
                 }
-                have_snapshot = true;
             }
         }
 
@@ -810,6 +817,7 @@ int main(int argc, char **argv) {
 
         previous = frontier;
         if (frontier >= cfg.ctx_max) break;
+      }
     }
 
     if (out != stdout) fclose(out);
