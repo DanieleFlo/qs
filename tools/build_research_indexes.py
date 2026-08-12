@@ -9,7 +9,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 RESEARCH = ROOT / "docs" / "research"
-GROUPS = ("papers/text", "platforms", "forks", "guides")
+GROUPS = ("papers/text", "platforms", "forks", "guides", "cuda")
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 
 
@@ -97,6 +97,7 @@ def main() -> int:
         "platforms": "Architettura e kernel delle maggiori piattaforme di inferenza locale.",
         "forks": "Fork e raccolte con ottimizzazioni consumer/RTX 3090, classificati per evidenza.",
         "guides": "Mappe trasversali problema → fonti → implementazioni da ispezionare.",
+        "cuda": "Comandi, strumenti, primitive sm_86 e ipotesi CUDA collegate alle misure DS4.",
     }
     for item in catalog:
         rel = Path(item["index"]).relative_to("docs/research").as_posix()

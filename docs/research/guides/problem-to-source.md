@@ -1,5 +1,9 @@
 # Mappa problema → soluzione esistente
 
+Prima di tradurre una fonte in codice, usare il componente
+[CUDA](../cuda/_INDEX.md) per scegliere fra timeline, metriche hardware,
+resource usage e SASS; occupancy e throughput non sono sinonimi.
+
 ## Decode Q4_K memory-bound
 
 Leggere Marlin, QUICK e Atom; poi confrontare llama.cpp MMVQ/vec-dot, ik_llama MMVQ e ExLlamaV3 GEMM. Cercare caricamento cooperativo, packing per lane, riuso di scale e dispatch GEMV distinto da GEMM.

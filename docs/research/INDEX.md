@@ -17,6 +17,7 @@ Accesso alternativo compatto: [indice degli indici](indexes/INDEX.md).
 - [platforms](platforms/_INDEX.md) — Architettura e kernel delle maggiori piattaforme di inferenza locale.
 - [forks](forks/_INDEX.md) — Fork e raccolte con ottimizzazioni consumer/RTX 3090, classificati per evidenza.
 - [guides](guides/_INDEX.md) — Mappe trasversali problema → fonti → implementazioni da ispezionare.
+- [cuda](cuda/_INDEX.md) — Comandi, strumenti, primitive sm_86 e ipotesi CUDA collegate alle misure DS4.
 
 ## Provenienza
 

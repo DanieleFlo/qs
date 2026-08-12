@@ -1,5 +1,8 @@
 # Perché LM Studio raggiunge 37,66 token/s con Qwen3.6 27B e come replicarlo in DS4
 
+> Analisi storica e fonte di ipotesi. Per lo stato canonico delle soluzioni
+> mantenute e scartate vedere `docs/qwen36-performance-ledger.md`.
+
 Data dell'analisi: 6 agosto 2026.
 
 Questa nota descrive il confronto sul Qwen3.6 27B Q4_K_S e sulla stessa RTX

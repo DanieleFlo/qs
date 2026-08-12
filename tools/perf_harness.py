@@ -12,6 +12,7 @@ import math
 import os
 import platform
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -57,6 +58,18 @@ LAYER_PROFILE_RE = re.compile(
     r"pos=(?P<position>\d+) (?:rows=(?P<rows>\d+) )?"
     r"layer=(?P<layer>\d+) kind=(?P<kind>\w+) "
     r"attn=(?P<attn>[0-9.]+)ms ffn=(?P<ffn>[0-9.]+)ms "
+    r"total=(?P<total>[0-9.]+)ms"
+)
+DECODE_PROFILE_RE = re.compile(
+    r"QWEN_DECODE_PROFILE pos=(?P<position>\d+) "
+    r"embed=(?P<embed>[0-9.]+)ms "
+    r"recurrent_attn=(?P<recurrent_attn>[0-9.]+)ms "
+    r"full_attn=(?P<full_attn>[0-9.]+)ms "
+    r"\[qkv=(?P<full_qkv>[0-9.]+) core=(?P<full_core>[0-9.]+) "
+    r"out=(?P<full_out>[0-9.]+)\] "
+    r"ffn=(?P<ffn>[0-9.]+)ms "
+    r"output=(?P<output>[0-9.]+)ms "
+    r"read=(?P<read>[0-9.]+)ms "
     r"total=(?P<total>[0-9.]+)ms"
 )
 
@@ -382,6 +395,23 @@ def parse_layer_profiles(text: str) -> list[dict[str, Any]]:
     return rows
 
 
+def parse_decode_profiles(text: str) -> list[dict[str, Any]]:
+    profiles = []
+    for match in DECODE_PROFILE_RE.finditer(text):
+        row = match.groupdict()
+        profiles.append({
+            "position": int(row["position"]),
+            **{
+                f"{name}_ms": float(row[name])
+                for name in (
+                    "embed", "recurrent_attn", "full_attn", "full_qkv",
+                    "full_core", "full_out", "ffn", "output", "read", "total",
+                )
+            },
+        })
+    return profiles
+
+
 def network_profile_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         raise HarnessError("DS4 emitted no Qwen layer profile rows")
@@ -503,6 +533,52 @@ def logits_drift(baseline_path: Path, candidate_path: Path,
             "minimum_cosine_similarity": 0.999,
         },
     }
+
+
+def decode_result_drift(baseline_path: Path, candidate_path: Path,
+                        top_k: int = 20) -> dict[str, Any]:
+    baseline_meta = read_json(baseline_path, "baseline decode result")
+    candidate_meta = read_json(candidate_path, "candidate decode result")
+    baseline_tokens = baseline_meta.get("generated_tokens")
+    candidate_tokens = candidate_meta.get("generated_tokens")
+    if not isinstance(baseline_tokens, list) or not isinstance(candidate_tokens, list):
+        raise HarnessError("decode result is missing generated_tokens")
+    tokens_equal = baseline_tokens == candidate_tokens
+    report = logits_drift(baseline_path, candidate_path, top_k)
+    logits_passed = report["status"] == "PASS"
+    report.update({
+        "format": "ds4-decode-drift-v1",
+        "status": "PASS" if tokens_equal and logits_passed else "FAIL",
+        "generated_tokens": {
+            "baseline_count": len(baseline_tokens),
+            "candidate_count": len(candidate_tokens),
+            "equal": tokens_equal,
+            "first_difference": next((
+                index for index, (left, right) in enumerate(
+                    zip(baseline_tokens, candidate_tokens)
+                ) if left != right
+            ), (min(len(baseline_tokens), len(candidate_tokens))
+                if len(baseline_tokens) != len(candidate_tokens) else None)),
+        },
+        "gates": {
+            **report["gates"],
+            "generated_tokens_equal": True,
+        },
+    })
+    return report
+
+
+def correctness_artifacts(context: int, generation_tokens: int) -> list[tuple[str, str]]:
+    artifacts = [("frontier", f"frontier_{context:06d}.logits.json")]
+    if generation_tokens > 0:
+        artifacts.append(("decode", f"frontier_{context:06d}.decode.json"))
+    return artifacts
+
+
+def compare_correctness_artifact(kind: str, baseline: Path,
+                                 candidate: Path) -> dict[str, Any]:
+    return (decode_result_drift(baseline, candidate)
+            if kind == "decode" else logits_drift(baseline, candidate))
 
 
 def correctness_test(baseline_path: Path, candidate_path: Path,
@@ -768,7 +844,7 @@ def benchmark_model(args: argparse.Namespace) -> int:
         None if args.baseline_run else Path(args.baseline).resolve().parent / "logits"
     )
     try:
-        if args.suite == "direction":
+        if args.suite in {"direction", "long-context-slow"}:
             contexts = sorted(int(item["context"]) for item in workloads)
             common = ("generation_tokens", "prefill_chunk", "backend", "batch")
             if any(
@@ -777,18 +853,34 @@ def benchmark_model(args: argparse.Namespace) -> int:
                 for item in workloads[1:] for key in common
             ):
                 raise HarnessError(
-                    "direction workloads must share generation/prefill/backend/batch"
+                    f"{args.suite} workloads must share generation/prefill/backend/batch"
                 )
-            if len(contexts) != 2:
+            if args.suite == "direction" and len(contexts) != 2:
                 raise HarnessError("direction suite must contain exactly two contexts")
+            if len(contexts) < 2:
+                raise HarnessError(f"{args.suite} suite needs at least two contexts")
+            step_incr = contexts[1] - contexts[0]
+            if any(right - left != step_incr
+                   for left, right in zip(contexts, contexts[1:])):
+                raise HarnessError(
+                    f"{args.suite} contexts must be evenly spaced for a resident sweep"
+                )
             sweep = dict(
                 workloads[0], context=contexts[0], context_max=contexts[1],
-                step_incr=contexts[1] - contexts[0],
+                step_incr=step_incr,
             )
-            sweep_logits = out_dir / "direction-sweep-logits"
+            sweep["context_max"] = contexts[-1]
+            sweep_logits = out_dir / f"{args.suite}-sweep-logits"
+            if use_warmup:
+                warm_csv = out_dir / f"{args.suite}-sweep.warmup.csv"
+                bench_once(
+                    binary, model, prompt, sweep, env, warm_csv,
+                    out_dir / f"{args.suite}-sweep-warmup-logits",
+                )
+                warm_csv.unlink(missing_ok=True)
             rows = bench_once(
                 binary, model, prompt, sweep, env,
-                out_dir / "direction-sweep.csv", sweep_logits,
+                out_dir / f"{args.suite}-sweep.csv", sweep_logits,
                 repetitions=args.repetitions,
             )
             for workload in workloads:
@@ -796,30 +888,42 @@ def benchmark_model(args: argparse.Namespace) -> int:
                 samples = [row for row in rows if int(row["ctx_tokens"]) == context]
                 if len(samples) != args.repetitions:
                     raise HarnessError(
-                        f"direction sweep emitted {len(samples)} samples for context {context}; "
+                        f"{args.suite} sweep emitted {len(samples)} samples for context {context}; "
                         f"expected {args.repetitions}"
                     )
-                frontier_name = f"frontier_{context:06d}.logits.json"
                 candidate_logits_dir = out_dir / "logits" / workload["id"]
                 candidate_logits_dir.mkdir(parents=True, exist_ok=True)
-                candidate_logits = candidate_logits_dir / frontier_name
-                shutil.copy2(sweep_logits / frontier_name, candidate_logits)
-                if args.baseline_run:
-                    correctness_rows.append({
-                        "workload": workload["id"], "status": "BASELINE",
-                        "candidate_logits": str(candidate_logits),
-                    })
-                else:
-                    baseline_logits = baseline_logits_root / workload["id"] / frontier_name
-                    if baseline_logits.is_file():
-                        drift = logits_drift(baseline_logits, candidate_logits)
-                        drift["workload"] = workload["id"]
-                        correctness_rows.append(drift)
-                    else:
+                for artifact_kind, artifact_name in correctness_artifacts(
+                    context, int(workload.get("generation_tokens", 0))
+                ):
+                    candidate_artifact = candidate_logits_dir / artifact_name
+                    shutil.copy2(sweep_logits / artifact_name, candidate_artifact)
+                    if args.baseline_run:
                         correctness_rows.append({
-                            "workload": workload["id"], "status": "NOT_VERIFIED",
-                            "reason": "matching baseline frontier logits are missing",
+                            "workload": workload["id"], "artifact": artifact_kind,
+                            "status": "BASELINE",
+                            "candidate_artifact": str(candidate_artifact),
                         })
+                    else:
+                        baseline_artifact = (
+                            baseline_logits_root / workload["id"] / artifact_name
+                        )
+                        if baseline_artifact.is_file():
+                            drift = compare_correctness_artifact(
+                                artifact_kind, baseline_artifact, candidate_artifact
+                            )
+                            drift.update({
+                                "workload": workload["id"],
+                                "artifact": artifact_kind,
+                            })
+                            correctness_rows.append(drift)
+                        else:
+                            correctness_rows.append({
+                                "workload": workload["id"],
+                                "artifact": artifact_kind,
+                                "status": "NOT_VERIFIED",
+                                "reason": f"matching baseline {artifact_kind} artifact is missing",
+                            })
                 results.append({
                     "id": workload["id"], "status": "measured",
                     "definition": workload, **aggregate_runs([samples]),
@@ -843,24 +947,36 @@ def benchmark_model(args: argparse.Namespace) -> int:
                 binary, model, prompt, workload, env, path,
                 candidate_logits_dir, repetitions=args.repetitions,
             )]
-            frontier_name = f"frontier_{workload['context']:06d}.logits.json"
-            candidate_logits = candidate_logits_dir / frontier_name
-            if args.baseline_run:
-                correctness_rows.append({
-                    "workload": workload["id"], "status": "BASELINE",
-                    "candidate_logits": str(candidate_logits),
-                })
-            else:
-                baseline_logits = baseline_logits_root / workload["id"] / frontier_name
-                if baseline_logits.is_file() and candidate_logits.is_file():
-                    drift = logits_drift(baseline_logits, candidate_logits)
-                    drift["workload"] = workload["id"]
-                    correctness_rows.append(drift)
-                else:
+            for artifact_kind, artifact_name in correctness_artifacts(
+                int(workload["context"]), int(workload.get("generation_tokens", 0))
+            ):
+                candidate_artifact = candidate_logits_dir / artifact_name
+                if args.baseline_run:
                     correctness_rows.append({
-                        "workload": workload["id"], "status": "NOT_VERIFIED",
-                        "reason": "matching baseline frontier logits are missing",
+                        "workload": workload["id"], "artifact": artifact_kind,
+                        "status": "BASELINE",
+                        "candidate_artifact": str(candidate_artifact),
                     })
+                else:
+                    baseline_artifact = (
+                        baseline_logits_root / workload["id"] / artifact_name
+                    )
+                    if baseline_artifact.is_file() and candidate_artifact.is_file():
+                        drift = compare_correctness_artifact(
+                            artifact_kind, baseline_artifact, candidate_artifact
+                        )
+                        drift.update({
+                            "workload": workload["id"],
+                            "artifact": artifact_kind,
+                        })
+                        correctness_rows.append(drift)
+                    else:
+                        correctness_rows.append({
+                            "workload": workload["id"],
+                            "artifact": artifact_kind,
+                            "status": "NOT_VERIFIED",
+                            "reason": f"matching baseline {artifact_kind} artifact is missing",
+                        })
             results.append({
                 "id": workload["id"], "status": "measured",
                 "definition": workload, **aggregate_runs(runs),
@@ -894,7 +1010,13 @@ def benchmark_model(args: argparse.Namespace) -> int:
                        "PASS" if correctness_rows and
                        all(row["status"] == "PASS" for row in correctness_rows) else
                        "NOT_VERIFIED"),
-            "frontier_logits": correctness_rows,
+            "artifacts": correctness_rows,
+            "frontier_logits": [
+                row for row in correctness_rows if row.get("artifact") == "frontier"
+            ],
+            "decode_results": [
+                row for row in correctness_rows if row.get("artifact") == "decode"
+            ],
         },
     }
     record_path = out_dir / "experiment.json"
@@ -983,7 +1105,7 @@ def compare_records(baseline: dict[str, Any],
     elif correctness != "PASS":
         verdict = "NEED_MORE_DATA"
         reason = "performance comparison has no passing correctness report"
-    elif candidate.get("suite") in {"direction", "quick"}:
+    elif candidate.get("suite") in {"direction", "long-context-direction", "quick"}:
         verdict = "NEED_MORE_DATA"
         reason = "direction suite is preliminary; confirm with the slow suite"
     elif dominant_regressions:
@@ -1065,6 +1187,7 @@ def cmd_profile_network(args: argparse.Namespace) -> int:
         command += ["--dump-frontier-logits-dir", str(logits_dir)]
     result = run_command(command, env=env)
     rows = parse_layer_profiles(result.stderr)
+    decode_profiles = parse_decode_profiles(result.stderr)
     report = network_profile_report(rows)
     report.update({
         "created_at": utc_now(), "context": args.context,
@@ -1073,6 +1196,8 @@ def cmd_profile_network(args: argparse.Namespace) -> int:
         "model": str(model.resolve()), "binary": str(binary.resolve()),
         "environment_overrides": dict(item.split("=", 1) for item in args.env),
         "hardware": hardware_profile(),
+        "decode_token_profiles": decode_profiles,
+        "decode_token_summary": decode_profiles[-1] if decode_profiles else None,
     })
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(
@@ -1085,6 +1210,17 @@ def cmd_profile_network(args: argparse.Namespace) -> int:
             f"  {item['phase']} layer {item['layer']:02d} "
             f"{item['kind']} {item['stage']}: {item['duration_ms']:.3f} ms "
             f"({item['percent_profiled_time']:.1f}%)"
+        )
+    if report["decode_token_summary"]:
+        detail = report["decode_token_summary"]
+        print(
+            "  decode token: "
+            f"total={detail['total_ms']:.3f} ms "
+            f"full-core={detail['full_core_ms']:.3f} ms "
+            f"recurrent-attn={detail['recurrent_attn_ms']:.3f} ms "
+            f"ffn={detail['ffn_ms']:.3f} ms "
+            f"output={detail['output_ms']:.3f} ms "
+            f"read={detail['read_ms']:.3f} ms"
         )
     print(f"wrote {output}", file=sys.stderr)
     if args.baseline:
@@ -1223,6 +1359,37 @@ def cmd_model_cost(args: argparse.Namespace) -> int:
     return 0
 
 
+def workflow_command(args: argparse.Namespace) -> tuple[list[str], dict[str, str]]:
+    env = os.environ.copy()
+    env["CUDA_ARCH"] = args.cuda_arch
+    if args.name == "validate":
+        return [str(ROOT / "tools" / "perf-qwen-validate.sh")], env
+    if not args.id:
+        raise HarnessError("long-context workflows require --id")
+    env["PERF_MODEL"] = str(Path(args.model))
+    env["PERF_PROMPT"] = str(Path(args.prompt))
+    env["PERF_RESULTS"] = str(Path(args.results))
+    action = args.name.removeprefix("long-context-")
+    command = [
+        str(ROOT / "tools" / "perf-qwen-long-context.sh"),
+        action,
+        args.id,
+    ]
+    for item in args.candidate_env:
+        if "=" not in item:
+            raise HarnessError(f"candidate environment must be NAME=VALUE: {item}")
+        command.extend(("--env", item))
+    return command, env
+
+
+def cmd_workflow(args: argparse.Namespace) -> int:
+    command, env = workflow_command(args)
+    if args.dry_run:
+        print(shlex.join(command))
+        return 0
+    return subprocess.run(command, cwd=ROOT, env=env).returncode
+
+
 def print_compact(record: dict[str, Any]) -> None:
     print(f"experiment {record['experiment_id']} ({record['suite']})")
     for workload in record["workloads"]:
@@ -1254,7 +1421,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--binary", default=str(ROOT / "ds4-bench"))
     run.add_argument("--workloads", default=str(DEFAULT_WORKLOADS))
     run.add_argument("--suite", default="direction",
-                     choices=("direction", "quick", "standard", "slow", "exhaustive"))
+                     choices=("direction", "long-context-direction", "quick",
+                              "standard", "slow", "long-context-slow",
+                              "exhaustive"))
     run.add_argument("--repetitions", type=int, default=2)
     run.add_argument("--warmup", choices=("auto", "always", "never"), default="auto")
     run.add_argument("--hypothesis", required=True)
@@ -1321,6 +1490,23 @@ def build_parser() -> argparse.ArgumentParser:
     cost.add_argument("--network-profile")
     cost.add_argument("--output")
     cost.set_defaults(func=cmd_model_cost)
+    workflow = commands.add_parser(
+        "workflow", help="run a documented Qwen build/profile/benchmark command list"
+    )
+    workflow.add_argument(
+        "--name", required=True,
+        choices=("validate", "long-context-profile",
+                 "long-context-direction", "long-context-slow"),
+    )
+    workflow.add_argument("--id")
+    workflow.add_argument("--model", default=str(ROOT / "gguf" / "Qwen3.6-27B-Q4_K_S.gguf"))
+    workflow.add_argument("--prompt", default=str(ROOT / "tests" / "long_context_story_prompt.txt"))
+    workflow.add_argument("--results", default=str(DEFAULT_RESULTS))
+    workflow.add_argument("--cuda-arch", default="sm_86")
+    workflow.add_argument("--candidate-env", action="append", default=[],
+                          metavar="NAME=VALUE")
+    workflow.add_argument("--dry-run", action="store_true")
+    workflow.set_defaults(func=cmd_workflow)
     return parser
 
 

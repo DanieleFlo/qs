@@ -8002,63 +8002,63 @@
               "title": "Mappa problema → soluzione esistente",
               "level": 1,
               "start": 1,
-              "end": 33,
-              "summary": "Leggere Marlin, QUICK e Atom; poi confrontare llama.cpp MMVQ/vec-dot, ik_llama MMVQ e ExLlamaV3 GEMM."
+              "end": 37,
+              "summary": "Prima di tradurre una fonte in codice, usare il componente"
             },
             {
               "title": "Decode Q4_K memory-bound",
               "level": 2,
-              "start": 3,
-              "end": 6,
+              "start": 7,
+              "end": 10,
               "summary": "Leggere Marlin, QUICK e Atom; poi confrontare llama.cpp MMVQ/vec-dot, ik_llama MMVQ e ExLlamaV3 GEMM."
             },
             {
               "title": "Prefill Q4_K compute-bound",
               "level": 2,
-              "start": 7,
-              "end": 10,
+              "start": 11,
+              "end": 14,
               "summary": "Confrontare llama.cpp MMQ, kernel Marlin/QServe e schedule MLC."
             },
             {
               "title": "Full-attention decode a context lungo",
               "level": 2,
-              "start": 11,
-              "end": 14,
+              "start": 15,
+              "end": 18,
               "summary": "Leggere FlashDecoding++, FlashInfer e SparQ."
             },
             {
               "title": "Gated Delta Net",
               "level": 2,
-              "start": 15,
-              "end": 18,
+              "start": 19,
+              "end": 22,
               "summary": "Partire dal paper GDN e dall'implementazione autori; confrontare llama.cpp e ik_llama `gated_delta_net.cu`."
             },
             {
               "title": "KV cache e 24 GiB",
               "level": 2,
-              "start": 19,
-              "end": 22,
+              "start": 23,
+              "end": 26,
               "summary": "Leggere PagedAttention, KIVI e KVQuant."
             },
             {
               "title": "Launch overhead e CUDA Graph",
               "level": 2,
-              "start": 23,
-              "end": 26,
+              "start": 27,
+              "end": 30,
               "summary": "Confrontare vLLM, TensorRT-LLM e SGLang."
             },
             {
               "title": "Speculative e MTP",
               "level": 2,
-              "start": 27,
-              "end": 30,
+              "start": 31,
+              "end": 34,
               "summary": "Leggere i due paper speculative, Medusa e multi-token prediction."
             },
             {
               "title": "Offload e memoria insufficiente",
               "level": 2,
-              "start": 31,
-              "end": 33,
+              "start": 35,
+              "end": 37,
               "summary": "Leggere FlexGen e le ricette consumer, ma non confondere throughput batch con latenza batch 1."
             }
           ]
@@ -8114,6 +8114,275 @@
               "start": 23,
               "end": 25,
               "summary": "Prima PASS numerico, poi microbenchmark, suite direction e infine slow."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "cuda",
+      "index": "docs/research/cuda/_INDEX.md",
+      "documents": [
+        {
+          "path": "docs/research/cuda/ampere-sm86-primitives.md",
+          "sections": [
+            {
+              "title": "Primitive Ampere `sm_86` e trasferibilità a DS4",
+              "level": 1,
+              "start": 1,
+              "end": 94,
+              "summary": "La guida Ampere NVIDIA distingue `sm_80` da `sm_86`."
+            },
+            {
+              "title": "Limiti della RTX 3090 rilevanti",
+              "level": 2,
+              "start": 3,
+              "end": 11,
+              "summary": "La guida Ampere NVIDIA distingue `sm_80` da `sm_86`."
+            },
+            {
+              "title": "Coalescing e layout",
+              "level": 2,
+              "start": 12,
+              "end": 29,
+              "summary": "Da compute capability 6.0 gli accessi di un warp vengono serviti dal numero di"
+            },
+            {
+              "title": "Shuffle e riduzioni warp",
+              "level": 2,
+              "start": 30,
+              "end": 45,
+              "summary": "`shfl.sync` scambia registri fra lane del warp e sincronizza il member mask."
+            },
+            {
+              "title": "Async copy e pipeline",
+              "level": 2,
+              "start": 46,
+              "end": 67,
+              "summary": "Ampere accelera copie global→shared asincrone, evita il registro intermedio e"
+            },
+            {
+              "title": "L1/shared carveout e cache operator",
+              "level": 2,
+              "start": 68,
+              "end": 74,
+              "summary": "Ampere unifica L1, texture e shared con carveout configurabile."
+            },
+            {
+              "title": "CUDA Graph",
+              "level": 2,
+              "start": 75,
+              "end": 82,
+              "summary": "I graph ammortizzano overhead host quando una topologia viene rilanciata molte"
+            },
+            {
+              "title": "Occupancy come vincolo, non obiettivo",
+              "level": 2,
+              "start": 83,
+              "end": 94,
+              "summary": "Calcolo minimo per un kernel con `T` thread e `R` registri/thread:"
+            }
+          ]
+        },
+        {
+          "path": "docs/research/cuda/ds4-hypothesis-map.md",
+          "sections": [
+            {
+              "title": "Mappa CUDA → prossimi esperimenti DS4",
+              "level": 1,
+              "start": 1,
+              "end": 68,
+              "summary": "A 10.666 token split-K32 porta il decode da 3,51 a 14,29 tok/s con 16/16 token"
+            },
+            {
+              "title": "Stato misurato da cui partire",
+              "level": 2,
+              "start": 3,
+              "end": 16,
+              "summary": "A 10.666 token split-K32 porta il decode da 3,51 a 14,29 tok/s con 16/16 token"
+            },
+            {
+              "title": "Classificazione aggiornata",
+              "level": 2,
+              "start": 17,
+              "end": 28,
+              "summary": "Il problema iniziale era parallelismo insufficiente del core full-attention:"
+            },
+            {
+              "title": "Esperimenti ordinati",
+              "level": 2,
+              "start": 29,
+              "end": 38,
+              "summary": "Sezione strutturale; consultare il contenuto locale indicato."
+            },
+            {
+              "title": "Idee sospese finché manca evidenza",
+              "level": 2,
+              "start": 39,
+              "end": 50,
+              "summary": "condiviso il costo di shared/barrier può superare il beneficio."
+            },
+            {
+              "title": "Nuova intuizione concreta",
+              "level": 2,
+              "start": 51,
+              "end": 60,
+              "summary": "Il prossimo passo non è cambiare il numero di warp."
+            },
+            {
+              "title": "Criterio verso 20 tok/s",
+              "level": 2,
+              "start": 61,
+              "end": 68,
+              "summary": "14,29 tok/s corrisponde a circa 70 ms/token fuori profiler; 20 tok/s richiede"
+            }
+          ]
+        },
+        {
+          "path": "docs/research/cuda/profiling-commands.md",
+          "sections": [
+            {
+              "title": "Comandi CUDA per misurare prima di ottimizzare",
+              "level": 1,
+              "start": 1,
+              "end": 106,
+              "summary": "1."
+            },
+            {
+              "title": "Ordine degli strumenti",
+              "level": 2,
+              "start": 3,
+              "end": 14,
+              "summary": "1."
+            },
+            {
+              "title": "Timing con eventi",
+              "level": 2,
+              "start": 15,
+              "end": 25,
+              "summary": "Gli eventi registrano timestamp nella stream e sono appropriati per kernel o"
+            },
+            {
+              "title": "Nsight Systems: timeline prima delle metriche",
+              "level": 2,
+              "start": 26,
+              "end": 53,
+              "summary": "Verificare installazione:"
+            },
+            {
+              "title": "Nsight Compute: un hotspot, poche sezioni",
+              "level": 2,
+              "start": 54,
+              "end": 79,
+              "summary": "Prima elencare ciò che la versione locale supporta:"
+            },
+            {
+              "title": "Replay, cache e clock",
+              "level": 2,
+              "start": 80,
+              "end": 90,
+              "summary": "`ncu` può richiedere più replay per raccogliere le metriche."
+            },
+            {
+              "title": "Albero di classificazione",
+              "level": 2,
+              "start": 91,
+              "end": 101,
+              "summary": "Sezione strutturale; consultare il contenuto locale indicato."
+            },
+            {
+              "title": "Regola di memoria",
+              "level": 2,
+              "start": 102,
+              "end": 106,
+              "summary": "Salvare report grezzo, comando, versione tool, filtro del kernel, invocation,"
+            }
+          ]
+        },
+        {
+          "path": "docs/research/cuda/sources.md",
+          "sections": [
+            {
+              "title": "Fonti primarie CUDA",
+              "level": 1,
+              "start": 1,
+              "end": 28,
+              "summary": "Registro delle fonti NVIDIA usate dalle schede CUDA."
+            },
+            {
+              "title": "Scopo e versione",
+              "level": 2,
+              "start": 3,
+              "end": 9,
+              "summary": "Registro delle fonti NVIDIA usate dalle schede CUDA."
+            },
+            {
+              "title": "Documentazione ufficiale",
+              "level": 2,
+              "start": 10,
+              "end": 23,
+              "summary": "Sezione strutturale; consultare il contenuto locale indicato."
+            },
+            {
+              "title": "Gerarchia dell'evidenza",
+              "level": 2,
+              "start": 24,
+              "end": 28,
+              "summary": "Queste fonti sono Tier A per semantica e strumenti."
+            }
+          ]
+        },
+        {
+          "path": "docs/research/cuda/toolchain-binary-inspection.md",
+          "sections": [
+            {
+              "title": "Toolchain e ispezione binaria CUDA",
+              "level": 1,
+              "start": 1,
+              "end": 113,
+              "summary": "Prima di cambiare tile, numero di warp o shared memory bisogna sapere cosa ha"
+            },
+            {
+              "title": "Domanda operativa",
+              "level": 2,
+              "start": 3,
+              "end": 11,
+              "summary": "Prima di cambiare tile, numero di warp o shared memory bisogna sapere cosa ha"
+            },
+            {
+              "title": "Inventario locale 2026-08-11",
+              "level": 2,
+              "start": 12,
+              "end": 25,
+              "summary": "L'assenza dei tre ultimi strumenti è una capacità mancante, non una ragione per"
+            },
+            {
+              "title": "Comandi canonici",
+              "level": 2,
+              "start": 26,
+              "end": 71,
+              "summary": "Mostrare versioni e opzioni realmente disponibili:"
+            },
+            {
+              "title": "Lettura corretta delle risorse",
+              "level": 2,
+              "start": 72,
+              "end": 84,
+              "summary": "i 65.536 registri/SM; l'allocazione avviene a granularità hardware."
+            },
+            {
+              "title": "Evidenza DS4 già raccolta",
+              "level": 2,
+              "start": 85,
+              "end": 101,
+              "summary": "`cuobjdump --dump-resource-usage ./ds4-bench` sul binario corrente riporta:"
+            },
+            {
+              "title": "Output da memorizzare per esperimento",
+              "level": 2,
+              "start": 102,
+              "end": 113,
+              "summary": "toolkit e driver:"
             }
           ]
         }

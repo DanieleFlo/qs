@@ -1,5 +1,8 @@
 # Progressione di ottimizzazione CUDA — Qwen3.6 27B Q4_K_S su RTX 3090
 
+> Checklist storica. I verdetti consolidati e gli esperimenti successivi sono
+> registrati in `docs/qwen36-performance-ledger.md`.
+
 Data di creazione: 6 agosto 2026.
 
 Questo documento è la checklist di riferimento per completare le ottimizzazioni

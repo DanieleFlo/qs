@@ -158,6 +158,12 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/qwen36-performance-experiments-2026-08-05.md` — registro riproducibile
   dei test prestazionali Qwen CUDA, inclusi candidati scartati, confronto locale
   con LM Studio, gate 500/15 e verifiche numeriche associate.
+- `docs/qwen36-performance-ledger.md` — registro canonico e compatto delle
+  ottimizzazioni Qwen CUDA mantenute, scartate o ancora da confermare; unifica
+  le decisioni disperse nei documenti datati e conserva il ciclo sperimentale.
+- `docs/research/cuda/` — componente della knowledge base dedicato a toolchain,
+  profiling, SASS/resource usage, primitive Ampere `sm_86` e mappa delle
+  prossime ipotesi CUDA falsificabili per DS4.
 - `docs/qwen36-lmstudio-decoding-analysis-2026-08-06.md` — guida didattica al
   decoding LM Studio/llama.cpp su RTX 3090: MMVQ Q8_1, caratteristiche GPU,
   implementazioni DS4 riuscite o scartate, risultati dei gate e piano per
@@ -208,6 +214,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   dalle finestre cronometrate.
 - `tools/perf_harness.py` — CLI senza dipendenze che orchestra probe hardware,
   suite ripetute di `ds4-bench` e confronti baseline/candidate in JSON.
+- `tools/perf-qwen-validate.sh`, `tools/perf-qwen-long-context.sh` — workflow
+  eseguibili richiamati dall'harness per build/correctness e per il ciclo
+  profile, direction A/B e slow sui contesti 8K–16K.
 - `performance/workloads.yaml` — workload canonici direction/quick/standard/slow/exhaustive,
   separati per fase, batch, context e prefill chunk.
 - `performance/README.md` — comandi brevi e confini verificati del harness.

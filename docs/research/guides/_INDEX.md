@@ -17,14 +17,14 @@ Paper, documentazione NVIDIA, repository che implementa direttamente il kernel, 
 
 Leggere Marlin, QUICK e Atom; poi confrontare llama.cpp MMVQ/vec-dot, ik_llama MMVQ e ExLlamaV3 GEMM.
 
-- righe 3–6: **Decode Q4_K memory-bound** — Leggere Marlin, QUICK e Atom; poi confrontare llama.cpp MMVQ/vec-dot, ik_llama MMVQ e ExLlamaV3 GEMM.
-- righe 7–10: **Prefill Q4_K compute-bound** — Confrontare llama.cpp MMQ, kernel Marlin/QServe e schedule MLC.
-- righe 11–14: **Full-attention decode a context lungo** — Leggere FlashDecoding++, FlashInfer e SparQ.
-- righe 15–18: **Gated Delta Net** — Partire dal paper GDN e dall'implementazione autori; confrontare llama.cpp e ik_llama `gated_delta_net.cu`.
-- righe 19–22: **KV cache e 24 GiB** — Leggere PagedAttention, KIVI e KVQuant.
-- righe 23–26: **Launch overhead e CUDA Graph** — Confrontare vLLM, TensorRT-LLM e SGLang.
-- righe 27–30: **Speculative e MTP** — Leggere i due paper speculative, Medusa e multi-token prediction.
-- righe 31–33: **Offload e memoria insufficiente** — Leggere FlexGen e le ricette consumer, ma non confondere throughput batch con latenza batch 1.
+- righe 7–10: **Decode Q4_K memory-bound** — Leggere Marlin, QUICK e Atom; poi confrontare llama.cpp MMVQ/vec-dot, ik_llama MMVQ e ExLlamaV3 GEMM.
+- righe 11–14: **Prefill Q4_K compute-bound** — Confrontare llama.cpp MMQ, kernel Marlin/QServe e schedule MLC.
+- righe 15–18: **Full-attention decode a context lungo** — Leggere FlashDecoding++, FlashInfer e SparQ.
+- righe 19–22: **Gated Delta Net** — Partire dal paper GDN e dall'implementazione autori; confrontare llama.cpp e ik_llama `gated_delta_net.cu`.
+- righe 23–26: **KV cache e 24 GiB** — Leggere PagedAttention, KIVI e KVQuant.
+- righe 27–30: **Launch overhead e CUDA Graph** — Confrontare vLLM, TensorRT-LLM e SGLang.
+- righe 31–34: **Speculative e MTP** — Leggere i due paper speculative, Medusa e multi-token prediction.
+- righe 35–37: **Offload e memoria insufficiente** — Leggere FlexGen e le ricette consumer, ma non confondere throughput batch con latenza batch 1.
 
 ## [Checklist di trasferimento RTX 3090](rtx3090-transfer-checklist.md)
 

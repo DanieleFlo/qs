@@ -472,6 +472,91 @@ static int write_frontier_logits_json(
     return 0;
 }
 
+static int write_decode_result_json(
+        const bench_config *cfg,
+        ds4_engine         *engine,
+        ds4_session        *session,
+        int                 frontier,
+        const int          *generated_tokens,
+        int                 generated_count) {
+    if (!cfg->dump_frontier_logits_dir || generated_count <= 0) return 0;
+
+    const int vocab = ds4_engine_vocab_size(engine);
+    float *logits = malloc((size_t)vocab * sizeof(logits[0]));
+    if (!logits) {
+        fprintf(stderr, "ds4-bench: out of memory copying post-decode logits\n");
+        return 1;
+    }
+    if (ds4_session_copy_logits(session, logits, vocab) != vocab) {
+        fprintf(stderr,
+                "ds4-bench: failed to copy post-decode logits at frontier %d\n",
+                frontier);
+        free(logits);
+        return 1;
+    }
+
+    char path[PATH_MAX];
+    const int n = snprintf(path,
+                           sizeof(path),
+                           "%s/frontier_%06d.decode.json",
+                           cfg->dump_frontier_logits_dir,
+                           frontier);
+    if (n <= 0 || (size_t)n >= sizeof(path)) {
+        fprintf(stderr, "ds4-bench: post-decode result path is too long\n");
+        free(logits);
+        return 1;
+    }
+
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        fprintf(stderr, "ds4-bench: failed to open %s: %s\n", path, strerror(errno));
+        free(logits);
+        return 1;
+    }
+
+    const int argmax = ds4_session_argmax(session);
+    fprintf(fp, "{\n  \"source\":\"ds4-bench-decode\",\n  \"model\":");
+    json_write_string(fp, cfg->model_path);
+    fprintf(fp,
+            ",\n  \"backend\":\"%s\",\n  \"quality\":%s,\n"
+            "  \"quant_bits\":%d,\n  \"prompt_tokens\":%d,\n"
+            "  \"frontier_tokens\":%d,\n  \"generated_count\":%d,\n"
+            "  \"final_position\":%d,\n  \"ctx\":%d,\n  \"vocab\":%d,\n"
+            "  \"generated_tokens\":[",
+            ds4_backend_name(cfg->backend),
+            cfg->quality ? "true" : "false",
+            ds4_engine_routed_quant_bits(engine),
+            frontier,
+            frontier,
+            generated_count,
+            ds4_session_pos(session),
+            cfg->ctx_alloc,
+            vocab);
+    for (int i = 0; i < generated_count; i++) {
+        if (i) fputc(',', fp);
+        fprintf(fp, "%d", generated_tokens[i]);
+    }
+    fprintf(fp,
+            "],\n  \"argmax_id\":%d,\n  \"argmax_logit\":%.9g,\n"
+            "  \"logits\":[",
+            argmax,
+            logits[argmax]);
+    for (int i = 0; i < vocab; i++) {
+        if (i) fputc(',', fp);
+        if ((i % 8) == 0) fputs("\n    ", fp);
+        if (isfinite(logits[i])) fprintf(fp, "%.9g", logits[i]);
+        else fputs("null", fp);
+    }
+    fputs("\n  ]\n}\n", fp);
+    if (fclose(fp) != 0) {
+        fprintf(stderr, "ds4-bench: failed to close %s\n", path);
+        free(logits);
+        return 1;
+    }
+    free(logits);
+    return 0;
+}
+
 static int next_frontier(const bench_config *c, int cur) {
     if (cur >= c->ctx_max) return c->ctx_max;
     int next;
@@ -739,9 +824,16 @@ int main(int argc, char **argv) {
         double gen_first_sec = 0.0;
         double gen_steady_sec = 0.0;
         int gen_done = 0;
-        int *gen_token_buf = cfg.show_output && cfg.gen_tokens > 0
+        const bool capture_generated_tokens =
+            cfg.show_output || cfg.dump_frontier_logits_dir != NULL;
+        int *gen_token_buf = capture_generated_tokens && cfg.gen_tokens > 0
             ? malloc((size_t)cfg.gen_tokens * sizeof(gen_token_buf[0]))
             : NULL;
+        if (capture_generated_tokens && cfg.gen_tokens > 0 && !gen_token_buf) {
+            fprintf(stderr, "ds4-bench: out of memory capturing generated tokens\n");
+            rc = 1;
+            break;
+        }
         int gen_token_count = 0;
         for (int i = 0; i < cfg.gen_tokens; i++) {
             if (ds4_session_pos(session) + 1 >= ds4_session_ctx(session)) {
@@ -780,6 +872,11 @@ int main(int argc, char **argv) {
             }
             fprintf(stderr, "\"\n");
             fflush(stderr);
+        }
+        if (rc == 0 &&
+            write_decode_result_json(&cfg, engine, session, frontier,
+                                     gen_token_buf, gen_token_count) != 0) {
+            rc = 1;
         }
         free(gen_token_buf);
         if (rc != 0) break;

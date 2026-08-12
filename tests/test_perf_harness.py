@@ -38,6 +38,30 @@ class PerfHarnessTests(unittest.TestCase):
         for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
             self.assertEqual(workloads[0][key], workloads[1][key])
 
+    def test_long_context_suites_cover_the_observed_cliff(self) -> None:
+        direction = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "long-context-direction"
+        )
+        slow = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "long-context-slow"
+        )
+        self.assertEqual([item["context"] for item in direction], [10666])
+        self.assertEqual([item["context"] for item in slow], [8192, 12288, 16384])
+        for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
+            self.assertEqual(len({item[key] for item in slow}), 1)
+
+    def test_workflow_dry_run_builds_the_documented_script_command(self) -> None:
+        parser = HARNESS.build_parser()
+        args = parser.parse_args([
+            "workflow", "--name", "long-context-profile", "--id", "probe",
+            "--candidate-env", "DS4_CUDA_QWEN_SPLIT_K_ATTN=1", "--dry-run",
+        ])
+        command, env = HARNESS.workflow_command(args)
+        self.assertTrue(command[0].endswith("perf-qwen-long-context.sh"))
+        self.assertEqual(command[1:3], ["profile", "probe"])
+        self.assertIn("DS4_CUDA_QWEN_SPLIT_K_ATTN=1", command)
+        self.assertEqual(env["CUDA_ARCH"], "sm_86")
+
     def test_summary_marks_noisy_samples_unstable(self) -> None:
         stable = HARNESS.summary([100.0, 101.0, 99.0, 100.5, 99.5])
         noisy = HARNESS.summary([50.0, 150.0, 60.0, 140.0, 100.0])
@@ -87,11 +111,18 @@ class PerfHarnessTests(unittest.TestCase):
             "attn=2.000ms ffn=5.000ms total=7.000ms\n"
             "QWEN_DECODE_LAYER_PROFILE pos=128 layer=1 kind=full "
             "attn=3.000ms ffn=1.000ms total=4.000ms\n"
+            "QWEN_DECODE_PROFILE pos=128 embed=0.100ms "
+            "recurrent_attn=5.000ms full_attn=3.000ms "
+            "[qkv=0.500 core=2.000 out=0.500] ffn=6.000ms "
+            "output=1.000ms read=0.200ms total=15.300ms\n"
         )
         report = HARNESS.network_profile_report(HARNESS.parse_layer_profiles(text))
         self.assertEqual(report["hotspots"][0]["stage"], "ffn")
         self.assertEqual(report["hotspots"][0]["layer"], 0)
         self.assertAlmostEqual(report["stage_percent"]["attention"], 100.0 * 5.0 / 11.0)
+        decode = HARNESS.parse_decode_profiles(text)
+        self.assertEqual(decode[0]["position"], 128)
+        self.assertAlmostEqual(decode[0]["full_core_ms"], 2.0)
 
     def test_logits_drift_detects_direction_and_argmax(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -107,6 +138,23 @@ class PerfHarnessTests(unittest.TestCase):
             report = HARNESS.logits_drift(baseline, candidate, top_k=4)
             self.assertEqual(report["status"], "PASS")
             self.assertTrue(report["argmax"]["equal"])
+
+    def test_decode_drift_rejects_generated_token_divergence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = root / "baseline.decode.json"
+            candidate = root / "candidate.decode.json"
+            common = {"prompt_tokens": 3, "logits": [1.0, 3.0, 2.0, 0.0]}
+            baseline.write_text(json.dumps({
+                **common, "generated_tokens": [10, 11, 12],
+            }), encoding="utf-8")
+            candidate.write_text(json.dumps({
+                **common, "generated_tokens": [10, 99, 12],
+            }), encoding="utf-8")
+            report = HARNESS.decode_result_drift(baseline, candidate, top_k=4)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertFalse(report["generated_tokens"]["equal"])
+            self.assertEqual(report["generated_tokens"]["first_difference"], 1)
 
     def test_model_cost_separates_memory_decode_and_compute_prefill(self) -> None:
         metadata = {

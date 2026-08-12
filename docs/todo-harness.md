@@ -13,9 +13,10 @@ condizione di completamento.
 - Suite direction con due prove e due campioni per feedback rapido; non può
   emettere KEEP. Suite slow per conferma con warm-up e almeno cinque
   ripetizioni richieste dal contratto operativo.
-- Baseline e candidate conservano automaticamente i logits alle frontiere.
-  Argmax, top-20 overlap, cosine, MAE/RMSE e valori non finiti partecipano al
-  verdetto prima della promozione.
+- Baseline e candidate conservano automaticamente logits alle frontiere,
+  sequenza greedy e logits finali post-decode. Uguaglianza dei token, argmax,
+  top-20 overlap, cosine, MAE/RMSE e valori non finiti partecipano al verdetto
+  prima della promozione.
 - Il runtime Qwen CUDA emette tempi strutturati per layer separando attention e
   FFN e distinguendo Gated DeltaNet ricorrente e full attention.
 - Smoke reale RTX 3090: build sm_86 riuscita. Il profilo definitivo 1.024/512
@@ -42,6 +43,22 @@ condizione di completamento.
   8 schede piattaforma, 6 schede fork/RTX 3090 e 3 guide problema→soluzione.
   Quattro indici di gruppo, indice principale e indice degli indici contengono
   analisi e intervalli di riga verificati automaticamente da `research-check`.
+- Workflow ripetuti consolidati in script eseguibili richiamati dal comando
+  `perf_harness.py workflow`; aggiunte direction a 10.666 e slow residente
+  8K/12K/16K. Le
+  decisioni Qwen mantenute e respinte confluiscono nel ledger canonico
+  `docs/qwen36-performance-ledger.md`.
+- Split-K32 è KEEP e default automatico da 8K. Nello slow residente (cinque
+  run/punto) porta 4,56 → 15,49 tok/s a 8K, 3,31 → 14,70 a 12K e
+  2,60 → 13,94 a 16K; tutti i 16 token greedy coincidono in ogni frontiera,
+  top-20 è 1,0 e il coseno resta sopra 0,9999999999991. Uno smoke successivo
+  senza flag conferma il dispatch di produzione a 10.666: 3,62 → 14,27
+  tok/s. Il profilo del residuo classifica FFN (46,40 ms) e attenzione
+  ricorrente (18,92 ms) prima del core full-attention lungo (11,78 ms).
+- Aggiunto il componente `docs/research/cuda/`: fonti primarie NVIDIA,
+  comandi di profiling e ispezione binaria, primitive Ampere sm_86 e mappa
+  falsificabile verso i prossimi esperimenti DS4. `research-check` ne verifica
+  indicizzazione e catalogo.
 
 Principio generale:
 

@@ -540,9 +540,10 @@ static int run_full_attention_probe(void) {
     float *cpu = malloc(out_n * sizeof(float));
     float *legacy = malloc(out_n * sizeof(float));
     float *warp = malloc(out_n * sizeof(float));
+    float *split_k = malloc(out_n * sizeof(float));
     int failed = !map || !q || !k || !v || !key_cache || !value_cache ||
                  !prepared_q || !prepared_key_cache || !prepared_value_cache ||
-                 !cpu || !legacy || !warp;
+                 !cpu || !legacy || !warp || !split_k;
     if (failed) goto cleanup;
 
     for (uint32_t d = 0; d < HEAD_DIM; d++) {
@@ -569,6 +570,7 @@ static int run_full_attention_probe(void) {
     if (!failed) failed |= !ds4_gpu_set_model_map(map, 2u * HEAD_DIM * sizeof(float));
 
     unsetenv("DS4_CUDA_QWEN_WARP_ATTN");
+    unsetenv("DS4_CUDA_QWEN_SPLIT_K_ATTN");
     if (!failed) failed |= run_attention_variant(
         t_out, t_q, t_k, t_v, t_key_cache, t_value_cache,
         map, 2u * HEAD_DIM, q, k, v, key_cache, value_cache,
@@ -591,11 +593,19 @@ static int run_full_attention_probe(void) {
         t_out, t_q, t_k, t_v, t_key_cache, t_value_cache,
         map, 2u * HEAD_DIM, q, k, v, key_cache, value_cache,
         POSITION, CONTEXT, warp);
+    unsetenv("DS4_CUDA_QWEN_WARP_ATTN");
+    setenv("DS4_CUDA_QWEN_SPLIT_K_ATTN", "1", 1);
+    if (!failed) failed |= run_attention_variant(
+        t_out, t_q, t_k, t_v, t_key_cache, t_value_cache,
+        map, 2u * HEAD_DIM, q, k, v, key_cache, value_cache,
+        POSITION, CONTEXT, split_k);
     if (!failed) {
         const probe_metrics legacy_cpu = measure(legacy, cpu, out_n);
         const probe_metrics warp_cpu = measure(warp, cpu, out_n);
+        const probe_metrics split_k_cpu = measure(split_k, cpu, out_n);
         const char *legacy_kind = classify(legacy_cpu, 2e-6, 2e-5);
         const char *warp_kind = classify(warp_cpu, 2e-6, 2e-5);
+        const char *split_k_kind = classify(split_k_cpu, 2e-6, 2e-5);
         printf("{\"probe\":\"full_attention\",\"comparison\":\"legacy_vs_cpu\","
                "\"values\":%zu,\"mae\":%.9g,\"max_abs\":%.9g,"
                "\"cosine\":%.12g,\"classification\":\"%s\"}\n",
@@ -606,8 +616,14 @@ static int run_full_attention_probe(void) {
                "\"cosine\":%.12g,\"classification\":\"%s\"}\n",
                out_n, warp_cpu.mae, warp_cpu.max_abs,
                warp_cpu.cosine, warp_kind);
+        printf("{\"probe\":\"full_attention\",\"comparison\":\"split_k_vs_cpu\","
+               "\"values\":%zu,\"mae\":%.9g,\"max_abs\":%.9g,"
+               "\"cosine\":%.12g,\"classification\":\"%s\"}\n",
+               out_n, split_k_cpu.mae, split_k_cpu.max_abs,
+               split_k_cpu.cosine, split_k_kind);
         failed |= strcmp(legacy_kind, "outside_roundoff_envelope") == 0;
         failed |= strcmp(warp_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(split_k_kind, "outside_roundoff_envelope") == 0;
     }
 
     if (t_value_cache) ds4_gpu_tensor_free(t_value_cache);
@@ -618,7 +634,8 @@ static int run_full_attention_probe(void) {
     if (t_out) ds4_gpu_tensor_free(t_out);
 cleanup:
     unsetenv("DS4_CUDA_QWEN_WARP_ATTN");
-    free(warp); free(legacy); free(cpu);
+    unsetenv("DS4_CUDA_QWEN_SPLIT_K_ATTN");
+    free(split_k); free(warp); free(legacy); free(cpu);
     free(prepared_value_cache); free(prepared_key_cache); free(prepared_q);
     free(value_cache); free(key_cache); free(v); free(k); free(q); free(map);
     return failed;

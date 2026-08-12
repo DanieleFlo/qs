@@ -60,7 +60,7 @@ class ResearchCorpusTests(unittest.TestCase):
     def test_master_and_index_of_indexes_reach_every_group(self) -> None:
         master = (RESEARCH / "INDEX.md").read_text(encoding="utf-8")
         meta = (RESEARCH / "indexes" / "INDEX.md").read_text(encoding="utf-8")
-        for group in ("papers/text", "platforms", "forks", "guides"):
+        for group in ("papers/text", "platforms", "forks", "guides", "cuda"):
             self.assertIn(f"{group}/_INDEX.md", master)
             self.assertIn(f"../{group}/_INDEX.md", meta)
 

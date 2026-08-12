@@ -6,6 +6,10 @@
     "decode-b1-c2k-direction": {"phase": "decode", "batch": 1, "context": 2048, "generation_tokens": 8, "prefill_chunk": 128, "backend": "cuda", "weight": 1.0},
     "decode-b1-c2k": {"phase": "decode", "batch": 1, "context": 2048, "generation_tokens": 64, "prefill_chunk": 512, "backend": "cuda", "weight": 1.0},
     "decode-b1-c8k": {"phase": "decode", "batch": 1, "context": 8192, "generation_tokens": 64, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c8k-long": {"phase": "decode", "batch": 1, "context": 8192, "generation_tokens": 16, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c10666-direction": {"phase": "decode", "batch": 1, "context": 10666, "generation_tokens": 16, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c12k": {"phase": "decode", "batch": 1, "context": 12288, "generation_tokens": 16, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c16k-long": {"phase": "decode", "batch": 1, "context": 16384, "generation_tokens": 16, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
     "decode-b1-c16k": {"phase": "decode", "batch": 1, "context": 16384, "generation_tokens": 128, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
     "decode-b1-c32k": {"phase": "decode", "batch": 1, "context": 32768, "generation_tokens": 128, "prefill_chunk": 4096, "backend": "cuda", "weight": 0.5},
     "prefill-b1-c512": {"phase": "prefill", "batch": 1, "context": 512, "generation_tokens": 0, "prefill_chunk": 512, "backend": "cuda", "weight": 1.0},
@@ -15,9 +19,11 @@
   },
   "suites": {
     "direction": ["decode-b1-c128-direction", "decode-b1-c2k-direction"],
+    "long-context-direction": ["decode-b1-c10666-direction"],
     "quick": ["decode-b1-c128-direction", "prefill-b1-c512", "decode-b1-c2k"],
     "standard": ["decode-b1-c2k", "decode-b1-c8k", "prefill-b1-c512", "prefill-b1-c2k", "throughput-b4-c2k"],
     "slow": ["decode-b1-c2k", "decode-b1-c8k", "decode-b1-c16k", "prefill-b1-c512", "prefill-b1-c2k", "prefill-b1-c8k", "throughput-b4-c2k"],
+    "long-context-slow": ["decode-b1-c8k-long", "decode-b1-c12k", "decode-b1-c16k-long"],
     "exhaustive": ["decode-b1-c2k", "decode-b1-c8k", "decode-b1-c16k", "decode-b1-c32k", "prefill-b1-c512", "prefill-b1-c2k", "prefill-b1-c8k", "throughput-b4-c2k"]
   }
 }

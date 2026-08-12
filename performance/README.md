@@ -3,6 +3,40 @@
 Il punto d'ingresso unico è tools/perf_harness.py. Riusa ds4-bench e gli scorer
 Qwen esistenti: non introduce un secondo percorso di inferenza.
 
+## Workflow eseguibili
+
+Le sequenze ripetute non vanno ricostruite dalla shell history. Sono mantenute
+in due script eseguibili e richiamate dal sottocomando `workflow`:
+
+    python3 tools/perf_harness.py workflow --name validate
+
+    python3 tools/perf_harness.py workflow \
+      --name long-context-profile --id splitk-default-01
+
+    python3 tools/perf_harness.py workflow \
+      --name long-context-direction --id splitk-default-01
+
+    python3 tools/perf_harness.py workflow \
+      --name long-context-slow --id splitk-default-confirm-01
+
+`tools/perf-qwen-validate.sh` contiene build CUDA e gate numerici/unitari.
+`tools/perf-qwen-long-context.sh` contiene profile, A/B direction e conferma
+slow. `--dry-run` stampa il comando senza eseguirlo. Le suite canoniche
+`long-context-direction` e `long-context-slow` sono definite in
+`performance/workloads.yaml`; la prima non può emettere KEEP.
+La conferma slow usa un solo sweep residente 8K/12K/16K per lato, con warm-up
+separato, 16 token per frontiera e cinque ripetizioni, evitando un nuovo
+caricamento del modello per ogni frontiera.
+Il baseline forza il fallback riproducibile con
+`DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1`; il candidato verifica il dispatch di
+produzione, che usa split-K32 automaticamente da 8K. `--candidate-env` resta
+disponibile per esperimenti su partizioni e soglie, ma non serve nel run
+canonico.
+
+Il registro unico di soluzioni mantenute e scartate è
+`docs/qwen36-performance-ledger.md`. I documenti datati restano fonti storiche,
+ma una decisione nuova va sempre memorizzata anche nel ledger.
+
 ## Ciclo di sviluppo rapido
 
 `make perf-fast-test` esegue soltanto i test unitari del harness e termina in
@@ -36,8 +70,11 @@ emettere KEEP, soltanto NEED_MORE_DATA o un rifiuto per drift numerico.
       --hypothesis "freeze direction baseline" \
       --metric gen_steady_tps --baseline-run
 
-La candidate usa automaticamente i logits delle due frontiere salvati dalla
-baseline. Il verdetto mostra quindi velocità e drift nello stesso comando:
+La candidate usa automaticamente gli artefatti della baseline. Per ogni
+workload con generazione l'harness confronta sia i logits alla frontiera
+post-prefill, sia la sequenza greedy completa e i logits finali post-decode.
+Il verdetto mostra quindi velocità e drift nello stesso comando e il gate
+attraversa i kernel di decode oggetto dell'esperimento:
 
     python3 tools/perf_harness.py run --id candidate-direction \
       --model gguf/Qwen3.6-27B-Q4_K_S.gguf \
@@ -104,6 +141,9 @@ fuori dal profiler. Qwen usa intenzionalmente il percorso token-by-token sotto
 frontiera di 1.024 token divisa in due chunk. Il report usa il secondo chunk:
 il primo riscalda lazy setup e risoluzione dei pesi e viene registrato fra le
 righe cold scartate, non come costo stabile del layer 0.
+Con `--generation-tokens` il report include inoltre `decode_token_summary`, che
+scompone il token profilato in embedding, attenzione ricorrente, full-attention
+(`qkv`, core e proiezione di uscita), FFN, output head e readback.
 
 È anche possibile confrontare separatamente due dump realmente prodotti dai
 run direction precedenti:
@@ -113,7 +153,10 @@ run direction precedenti:
       performance-results/candidate-direction/logits/decode-b1-c128-direction/frontier_000128.logits.json
 
 Il gate controlla valori non finiti, argmax, overlap top-20, MAE/RMSE/errore
-massimo dei logits centrati e cosine similarity.
+massimo dei logits centrati e cosine similarity. Gli artefatti
+`frontier_N.decode.json` aggiungono uguaglianza esatta degli ID generati e il
+confronto dei logits dopo l'ultimo token; una divergenza della sequenza è FAIL
+anche quando il frontier prefill è identico.
 
 ## Cost model e margine teorico
 
