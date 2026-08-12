@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import array
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,6 +40,12 @@ class PerfHarnessTests(unittest.TestCase):
         for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
             self.assertEqual(workloads[0][key], workloads[1][key])
 
+    def test_r8_slow_reuses_the_short_context_frontiers(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "r8-slow"
+        )
+        self.assertEqual([item["context"] for item in workloads], [128, 2048])
+
     def test_long_context_suites_cover_the_observed_cliff(self) -> None:
         direction = HARNESS.load_workloads(
             ROOT / "performance" / "workloads.yaml", "long-context-direction"
@@ -48,6 +55,7 @@ class PerfHarnessTests(unittest.TestCase):
         )
         self.assertEqual([item["context"] for item in direction], [10666])
         self.assertEqual([item["context"] for item in slow], [8192, 12288, 16384])
+        self.assertEqual([item["generation_tokens"] for item in slow], [64, 64, 64])
         for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
             self.assertEqual(len({item[key] for item in slow}), 1)
 
@@ -62,6 +70,44 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(command[1:3], ["profile", "probe"])
         self.assertIn("DS4_CUDA_QWEN_SPLIT_K_ATTN=1", command)
         self.assertEqual(env["CUDA_ARCH"], "sm_86")
+
+    def test_r8_workflow_uses_the_runtime_relink_script(self) -> None:
+        parser = HARNESS.build_parser()
+        args = parser.parse_args([
+            "workflow", "--name", "r8-slow", "--id", "r8-confirm",
+            "--dry-run",
+        ])
+        command, env = HARNESS.workflow_command(args)
+        self.assertTrue(command[0].endswith("perf-qwen-r8.sh"))
+        self.assertEqual(command[1:], ["slow", "r8-confirm"])
+        self.assertEqual(env["CUDA_ARCH"], "sm_86")
+
+    def test_r8_long_workflow_uses_the_same_automation(self) -> None:
+        parser = HARNESS.build_parser()
+        args = parser.parse_args([
+            "workflow", "--name", "r8-long", "--id", "gqa-confirm",
+            "--dry-run",
+        ])
+        command, _env = HARNESS.workflow_command(args)
+        self.assertTrue(command[0].endswith("perf-qwen-r8.sh"))
+        self.assertEqual(command[1:], ["long", "gqa-confirm"])
+
+    def test_r8_workflow_builds_all_runtimes_and_uses_explicit_rollback(self) -> None:
+        script = (ROOT / "tools" / "perf-qwen-r8.sh").read_text(encoding="utf-8")
+        self.assertIn("ds4 ds4-bench ds4-server", script)
+        self.assertIn("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1", script)
+
+    def test_binary_freshness_reports_a_newer_build_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, source = root / "ds4", root / "ds4_cuda.o"
+            binary.write_bytes(b"binary")
+            source.write_bytes(b"object")
+            os.utime(binary, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(source, ns=(2_000_000_000, 2_000_000_000))
+            report = HARNESS.binary_freshness(binary, [source])
+            self.assertFalse(report["fresh"])
+            self.assertEqual(report["newer_inputs"], [str(source)])
 
     def test_summary_marks_noisy_samples_unstable(self) -> None:
         stable = HARNESS.summary([100.0, 101.0, 99.0, 100.5, 99.5])

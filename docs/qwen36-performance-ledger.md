@@ -53,12 +53,12 @@ sono `docs/qwen36-performance-experiments-2026-08-05.md`,
 - Lo smoke del dispatch di produzione, senza flag candidato, conferma a 10.666
   token 3,62 → 14,27 tok/s (+293,66%); 16/16 token greedy, argmax e top-20
   coincidono e il coseno finale è 0,9999999999996.
-- Il candidato opt-in Q8_1-R8 conserva 8/8 sequenze e 512/512 argmax. Nel
+- Il decode Q8_1-R8 conserva 8/8 sequenze e 512/512 argmax. Nel
   direction sweep residente porta il decode 128 da 17,41 a 32,69 tok/s e il
   decode 2K da 10,71 a 14,93 tok/s; la variante finale riusa il weight decode
-  fra i due residui ed è stata confermata con cinque campioni non instabili.
-  Non è ancora default: manca la conferma slow a cinque ripetizioni e resta
-  sotto il riferimento storico di circa 40 tok/s.
+  fra i due residui ed è stato confermato con cinque campioni non instabili.
+  Dal 2026-08-12 è default per client e server; il fallback F32 esplicito è
+  `DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1`.
 
 ## Soluzioni mantenute
 
@@ -74,7 +74,7 @@ sono `docs/qwen36-performance-experiments-2026-08-05.md`,
 | Output head | Q6_K F32 warp8 | 248.320 → 31.040 blocchi; bit-exact contro block256 | KEEP |
 | GDN | Stato ricorrente e convoluzionale mantenuti in registri nel percorso multi-riga | prefill 549,50 → 740,15 tok/s su Q4_K_M; probe entro roundoff | KEEP |
 | Long-context | Split-K32 automatico da 8K, legacy sotto soglia | slow residente, 5 run/punto: 4,56 → 15,49 tok/s a 8K, 3,31 → 14,70 a 12K, 2,60 → 13,94 a 16K; 16/16 token identici su tutti i punti | KEEP |
-| Decode opt-in | Q8_1-R8 a due stadi per Q4_K/Q5_K/Q6_K, weight decode fuso | probe entro roundoff, 8/8 e 512/512; 17,41→32,69 a 128 e 10,71→14,93 a 2K; cinque run finali stabili | DIRECTION; flag `DS4_CUDA_QWEN_DECODE_Q8_1_R8=1`, non default |
+| Decode | Q8_1-R8 a due stadi per Q4_K/Q5_K/Q6_K, weight decode fuso | probe entro roundoff, 8/8 e 512/512; 17,41→32,69 a 128 e 10,71→14,93 a 2K; cinque run finali stabili | KEEP; default, rollback `DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1` |
 
 ## Soluzioni scartate o non promosse
 
@@ -346,8 +346,8 @@ sweep indicava +7,03% a 2K ma aveva un outlier a 128; la conferma a cinque run
 produce 32,69 tok/s a 128 (CV 1,33%, +1,33% sul R8 non fuso) e 14,93 tok/s a
 2K (CV 1,61%, invariato). Il gate completo sul run
 `ds4-phase7-q8-1-r8-fused-full-001` è nuovamente 8/8 e 512/512. Verdetto:
-`KEEP` dentro il candidato R8 opt-in; non cambia la decisione di non renderlo
-ancora default.
+`KEEP` dentro il candidato R8 allora opt-in; la successiva conferma e la
+decisione dell'utente ne hanno poi autorizzato la promozione a default.
 
 La variante mista successiva manteneva R8 su Q4/Q6 e usava il solo primo
 blocco Q8_1 su Q5, motivata dal frozen step dove Q5-only conservava il top-1.
@@ -358,7 +358,8 @@ teacher-forced 256/256, greedy 229/256, prima divergenza al passo 3 di
 diagnostici rimossi. La sicurezza locale di Q5-only non si trasferisce alla
 dinamica autoregressiva quando gli stati precedenti sono R8.
 
-Verdetto: `DIRECTION`, patch mantenuta dietro flag e non promossa a default.
+Verdetto di questa fase: `DIRECTION`, patch mantenuta dietro flag. La decisione
+è storica ed è superata dalla promozione descritta nella sezione 2026-08-12.
 La qualità e il vantaggio su F32 sono dimostrati, ma il target 40 tok/s e la
 regola ledger dei cinque run slow non sono ancora soddisfatti. Il prossimo
 esperimento deve ottimizzare il MMVQ R8, in particolare Q6, non il quantizzatore
@@ -368,7 +369,7 @@ che vale meno dello 0,2% del tempo dell'output head.
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | F32 | warp8 F32 | — | PASS | — | 0 | 0 | 0 | 8/8 | 512/512 | 17,41 | baseline |
 | Q8_1 | MMVQ | maxabs/FP16 | bit-exact vs storico | 5.120/5.120 `qs` | +0,301071 | −0,014439 Q4-only | −0,111027 Q4+Q5 | 7/8 | 484/512 | 34,50 storico | REJECT |
-| Q8_1-R8 | doppio MMVQ con weight decode fuso | due stadi maxabs/FP16 | PASS Q4/Q5/Q6 | PASS CPU-policy | circa +0,0000035 output head | +0,0000706 output head | +0,0000706 | 8/8 | 512/512 | 32,69 | DIRECTION, opt-in |
+| Q8_1-R8 | doppio MMVQ con weight decode fuso | due stadi maxabs/FP16 | PASS Q4/Q5/Q6 | PASS CPU-policy | circa +0,0000035 output head | +0,0000706 output head | +0,0000706 | 8/8 | 512/512 | 32,69 | DIRECTION nella fase; poi promosso |
 
 ## Analisi del residuo a 8K, 2026-08-11
 
@@ -416,10 +417,142 @@ Questi file sono ignorati da Git e non sono golden. Il fallback riproducibile
 per gli A/B è `DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1`; il force flag
 `DS4_CUDA_QWEN_SPLIT_K_ATTN=1` rimane solo per probe e soglie sperimentali.
 
+## Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12
+
+È stato ispezionato vLLM al commit fissato
+`87668ab69b3e2c849a607ece36e8a43bde7c7ee5`, in particolare
+`csrc/libtorch_stable/quantization/marlin/marlin_template.h`,
+`gptq_marlin_repack.cu` e il percorso Qwen3 Next. I principi trasferibili sono
+preprocessing/repack nel layout di consumo, metadata separati dal payload caldo,
+pipeline global→shared→registri e specializzazione per shape/architettura. Il
+kernel GPTQ/AWQ non è copiabile direttamente: DS4 deve conservare GGUF K-quant,
+la policy R8 e l'ordine aritmetico validato.
+
+Sono state falsificate due applicazioni locali del principio dei metadata
+precalcolati. Entrambe calcolavano nel quantizzatore R8 le quattro somme esatte
+di otto interi usate dai termini `m*qsum`, eliminando due `DP4A` per residuo nel
+dot Q4/Q5:
+
+| Candidato | Layout | ctx 128 | ctx 2K | Media | Esito |
+|---|---|---:|---:|---:|---|
+| `r8-qsum-meta` | quattro `int16` accodati a ogni blocco Q8_1, stride 36→44 B | −2,84% | +1,69% | −0,58% | REJECT |
+| `r8-qsum-sidecar` | payload Q8_1 invariato, due sidecar contigui | −1,28% | −1,72% | −1,50% | REJECT |
+
+Il probe CUDA era `PASS` in entrambi i casi. Il sidecar evita l'aumento di
+stride ma sostituisce istruzioni intere economiche con load addizionali; nessuna
+variante è mantenuta. Artefatti:
+`performance-results/r8-qsum-meta-{base,candidate}-direction-20260812` e
+`performance-results/r8-qsum-sidecar-candidate-direction-20260812`.
+
+La discrepanza osservata dall'utente non era una regressione del kernel: il
+client `ds4` aveva timestamp 2026-08-11 19:24, mentre `ds4-bench` e
+`ds4_cuda.o` erano stati aggiornati il 2026-08-12. Il benchmark era quindi
+collegato al percorso R8 nuovo, il client interattivo no. Dopo il relink di
+`ds4` allo stesso HEAD `22e04a5`, uno smoke interattivo breve con
+`DS4_CUDA_QWEN_DECODE_Q8_1_R8=1` e capacità `--ctx 32768` ha misurato
+36,47 t/s prefill e **32,09 t/s generation**, coerente con 32,05 t/s del
+direction benchmark eseguito nella stessa sessione di lavoro; il log utente col
+binario vecchio riportava 15,59/17,97 t/s.
+
+Per impedire la ricorrenza, `doctor` controlla ora la freschezza separata di
+`ds4` e `ds4-bench`, mentre `tools/perf-qwen-r8.sh` rilinka sempre entrambi e
+offre `build`, `direction` e `slow`. `--ctx` resta capacità massima: la velocità
+interattiva va confrontata a parità di posizione corrente, token di prompt e
+fase; i turni successivi accumulano contesto e l'attention riduce naturalmente
+il vantaggio relativo del matvec R8.
+
+Il nuovo workflow slow ha poi completato cinque campioni residenti per lato:
+F32 17,23 t/s (CV 5,94%) contro R8 31,75 (CV 2,79%) a 128 e F32 10,55
+(CV 6,16%) contro R8 14,19 (CV 3,92%) a 2K. Il gate frontier/decode è `PASS` e
+i guadagni sono +84,27%/+34,50%. L'harness restituisce correttamente
+`NEED_MORE_DATA`, non `KEEP`, perché i due campioni F32 sono instabili oltre la
+soglia del 5%; entrambi i lati R8 sono invece stabili. Artefatti:
+`performance-results/r8-visible-confirm-20260812-{baseline,r8}`.
+
+## Stabilizzazione R8 long-context e riuso GQA, 2026-08-12
+
+La riproduzione a 10.666 token ha separato due fenomeni che prima venivano
+confusi. Con R8 ma senza split-K il token profilato richiede 239,554 ms
+(circa 4,17 t/s), dei quali 202,409 ms nel core full-attention. Con il dispatch
+split-K32 corrente scende a 38,193 ms (circa 26,18 t/s) e 9,445 ms nel core.
+Questa firma spiega i run sotto 10 t/s: non è il normale decadimento residuo
+di R8, ma l'esecuzione del percorso seriale, tipicamente per binario/configurazione
+non aggiornati o per `DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1`.
+
+Le fonti FlashInfer e llama.cpp suggeriscono inoltre di sfruttare la struttura
+GQA: Qwen3.6 ha 24 query head e 4 KV head, quindi sei query condividono la
+stessa riga K/V. Il candidato mantenuto fonde due query head per CTA split-K,
+carica K/V una sola volta e conserva riduzione e online-softmax indipendenti
+per ogni testa. Il gruppo 2 lascia 12×32 CTA, sufficiente a coprire gli 82 SM
+di GA102; i gruppi 3 e 6 riducono troppo il parallelismo utile.
+
+| Variante R8 split-K32 | 8K | 12K | 16K | Media vs scalare | Esito |
+|---|---:|---:|---:|---:|---|
+| una query/CTA | 29,12 | 26,67 | 24,47 | baseline | stabile |
+| due query/CTA | 30,63 | 28,91 | 27,08 | **+8,08%** | KEEP |
+| tre query/CTA, direction 10.666 | — | 26,41 | — | −3,58% locale | REJECT |
+| sei query/CTA, direction 10.666 | — | 27,61 | — | +0,80% locale | REJECT |
+
+Il punto 8K del run a 16 token aveva un outlier; una conferma separata da sette
+run e 64 token ha prodotto 29,081→30,440 t/s di media (+4,67%), mediane
+29,14→30,71 (+5,39%) e CV 0,79%/3,18%. A 12K e 16K i cinque run erano già
+stabili e migliorano rispettivamente +8,40% e +10,67%. Il gate model-backed è
+`PASS`: 16/16 token identici a ogni frontiera, top-20 overlap 1,0 e cosine
+praticamente 1; il drift massimo post-decode resta fra 0,0010 e 0,0027.
+
+Il profilo finale del default gruppo 2 a 10.666 porta il core attention
+9,445→5,999 ms (−36,48%) e il token 38,193→36,321 ms. La misura end-to-end è
+più rappresentativa del totale perché il profiler perturba e mostra rumore
+compensatorio negli altri stadi. Il default è ora gruppo 2 quando split-K è
+attivo; `DS4_CUDA_QWEN_NO_GQA_GROUP_ATTN=1` ripristina il baseline e
+`DS4_CUDA_QWEN_GQA_GROUP_ATTN=1|2|3|6` resta diagnostico.
+
+Su richiesta dell'utente, il percorso R8 fuso è stato promosso nello stesso
+checkpoint a baseline di produzione. Il comando normale non richiede più
+`DS4_CUDA_QWEN_DECODE_Q8_1_R8=1`: sia `./ds4` sia `./ds4-server` entrano in
+R8 per i matvec Q4_K/Q5_K/Q6_K a singolo token. Il vecchio flag positivo resta
+compatibile, mentre `DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1` forza il riferimento
+F32. Lo script A/B usa quest'ultimo soltanto sul lato baseline, perciò il lato
+candidato verifica davvero la configurazione senza variabili richiesta in
+produzione.
+
+Il run `r8-default-noenv-20260812`, lanciato senza alcuna variabile `DS4_*`, è
+bit-identico all'artefatto R8 validato sia a 128 sia a 2K: MAE e massimo errore
+dei logits sono zero, top-20 overlap 1,0 e le due sequenze da 8 token coincidono.
+Le due sole ripetizioni prestazionali (29,71/13,71 t/s) non sostituiscono lo
+slow a cinque run e il punto 2K è marcato instabile; questo run certifica il
+dispatch predefinito, non una nuova mediana prestazionale.
+
+Un tentativo di calcolare `expf` una sola volta per CTA e distribuire i pesi
+via shared memory ha invece perso il 2,83% medio su 8K/12K/16K: le barriere
+aggiunte costano più delle `expf` ridondanti, quindi la patch è stata rimossa.
+
+Dopo GQA2 è stato riaperto anche il limite a 64 partizioni, per verificare se
+le CTA aggiuntive compensassero il dimezzamento dei blocchi per query head. Il
+direction a due run mostrava +1,53% ma era instabile. La conferma 7×64 token a
+10.666 produce K32 29,014 t/s medi e K64 28,713 (−1,04%), con mediane
+29,08/29,15 e CV 3,98%/3,76%. `REJECT`: limite e default restano K32.
+Artefatti: `gqa-fusion-k64-20260812` e
+`performance-results/gqa-fusion-c10666-k{32,64}.csv`.
+
+La visibilità è stata chiusa anche lato runtime: non solo `ds4`, ma pure
+`ds4-server` era più vecchio di `ds4_cuda.o`. Il workflow R8 rilinka ora tutti
+i consumer (`ds4`, `ds4-bench`, `ds4-server`), `doctor` ne verifica la
+freschezza separatamente e l'azione `r8-long` automatizza probe più A/B
+GQA1/GQA2 a 8K/12K/16K con 64 token per frontiera. Dopo la build i tre check
+sono `ready=true`.
+
+Artefatti: `performance-results/r8-nosplit-profile-20260812.json`,
+`r8-longctx-profile-20260812.json`, `r8-gqa2-longctx-profile-20260812.json`,
+`gqa-fusion-confirm-{base,g2}-20260812` e `gqa-fusion-c8k64-{base,g2}.csv`.
+I dati portano DS4 vicino, ma non ancora stabilmente oltre 30 t/s a 10–12K:
+il gap residuo rispetto a LM Studio rimane principalmente nei matvec FFN/GDN,
+non nel solo core attention.
+
 ## Coda ordinata
 
-1. **MMVQ R8, soprattutto output Q6_K**: confermare prima con cinque run slow,
-   poi ridurre il doppio dot/load mantenendo i due residui; il profilo attribuisce
+1. **MMVQ R8, soprattutto output Q6_K**: ridurre il doppio dot/load mantenendo
+   i due residui; il profilo attribuisce
    3,295 ms al solo MMVQ Q6 e appena 0,005 ms al quantizzatore.
 2. **Repack/layout Q4_K_S compatibile F32**: guadagno potenziale alto
    (il candidato MMVQ espone circa 13 tok/s), difficoltà medio-alta. Preparare

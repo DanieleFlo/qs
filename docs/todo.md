@@ -1396,7 +1396,8 @@ anchor A1/A2 e Q8_1-R8. STEP 10 W4A16 non è stato avviato: R8 soddisfa già i
 gate qualitativi rigidi ed è competitivo con F32, quindi W4A16 non è ancora
 necessario secondo la regola della Phase 8.
 
-Il risultato mantenuto è un decode **opt-in**, non il nuovo default:
+In questa fase il risultato era ancora **opt-in**; la promozione a default è
+registrata nell'aggiornamento finale 2026-08-12 più sotto:
 
 ```sh
 DS4_CUDA_QWEN_DECODE_Q8_1_R8=1 ./ds4-bench ...
@@ -1484,12 +1485,12 @@ python3 tools/perf_harness.py qwen-argmax-gate \
 ```
 
 Il test del harness è `python3 -m unittest tests.test_perf_harness` e passa
-21/21. Il probe CUDA completo è
+26/26. Il probe CUDA completo è
 `make qwen-numerics CUDA_ARCH=sm_86` e termina con `summary: PASS`.
 
 ## PATCH MANTENUTE E STATO GIT
 
-- `ds4_cuda.cu`: Q8_1-R8 opt-in, MMVQ Q4/Q5/Q6 con weight decode fuso e
+- `ds4_cuda.cu`: Q8_1-R8 predefinito, MMVQ Q4/Q5/Q6 con weight decode fuso e
   profiler opt-in `DS4_CUDA_QWEN_DECODE_Q8_1_R8_PROFILE=1`.
 - `tests/qwen_numerics_probe.c`: oracle CPU R8 e probe reali Q4/Q5/Q6.
 - `tools/perf_harness.py`, `tests/test_perf_harness.py` e
@@ -1501,11 +1502,11 @@ state inserite nello stage Git. Nessun commit è stato creato.
 
 ## COSA RIMANE DA FARE
 
-1. Eseguire la suite **slow** canonica con almeno cinque ripetizioni per F32 e
-   R8 fuso, includendo 2K/8K/16K e il gate semantic pertinente. I cinque run
-   attuali confermano soltanto la suite direction 128/2K.
-2. Non rendere R8 default prima della conferma slow e di una decisione esplicita
-   sul compromesso prestazionale long-context.
+1. Estendere la suite slow R8 già confermata con misure periodiche 2K/8K/16K;
+   il workflow `r8-long` rende questo controllo ripetibile senza cambiare la
+   baseline di produzione.
+2. R8 è ora default per decisione esplicita dell'utente; mantenere il rollback
+   `DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1` per bisect e regressioni.
 3. Colmare il gap `32,69→~40 tok/s`. Il quantizzatore non è il collo: nel Q6
    output head vale circa 0,005 ms contro 2,254 ms di MMVQ. Priorità a layout,
    mapping lane/load e riuso del decode nel MMVQ, mantenendo il gate completo.
@@ -1517,3 +1518,56 @@ state inserite nello stage Git. Nessun commit è stato creato.
    cambiare il formato Q4_K/Q5_K losslessly senza prima un simulatore/probe.
 6. Dopo ogni nuovo candidato: primitive probe → 8/8 e 512/512 → almeno tre
    run; promozione default soltanto dopo slow a cinque run e documentazione.
+
+## AGGIORNAMENTO 2026-08-12 — VISIBILITÀ DEL CLIENT E TRASFERIMENTO vLLM
+
+1. È stata verificata la sorgente vLLM/Marlin al commit pinned
+   `87668ab69b3e2c849a607ece36e8a43bde7c7ee5`. I principi applicabili a DS4
+   sono repack/preprocessing nel layout di consumo, metadata separati e pipeline
+   dei load; il formato GPTQ/AWQ non sostituisce direttamente GGUF Q4_K_S/R8.
+2. Due tentativi di precalcolare le somme Q8_1 consumate da Q4/Q5 sono stati
+   respinti pur con probe `PASS`: metadata inline (−0,58% medio, stride 36→44 B)
+   e sidecar (−1,50% medio). Entrambe le patch CUDA sono state annullate.
+3. È stata trovata la causa per cui l'utente non vedeva i guadagni R8: eseguiva
+   `./ds4` compilato l'11 agosto, mentre kernel e `ds4-bench` erano del 12 agosto.
+   Dopo il relink, lo smoke breve interattivo è passato da 17,97 a **32,09 t/s**,
+   coerente con 32,05 t/s del benchmark breve corrente.
+4. `tools/perf-qwen-r8.sh` automatizza ora relink congiunto di client/benchmark,
+   probe e A/B F32-vs-R8 (`build`, `direction`, `slow`). Il workflow è esposto
+   da `perf_harness.py`; la suite `r8-slow` usa cinque run residenti a 128/2K.
+5. `perf_harness.py doctor` segnala se `ds4` o `ds4-bench` sono più vecchi dei
+   rispettivi sorgenti/oggetti. La documentazione chiarisce inoltre che
+   `--ctx 32768` è capacità, non posizione corrente: CLI e harness vanno
+   confrontati a parità di fase, token e contesto effettivamente accumulato.
+6. Il workflow `r8-slow` ha prodotto R8 stabile a 31,75 t/s (CV 2,79%) a 128 e
+   14,19 t/s (CV 3,92%) a 2K, con gate `PASS` e +84,27%/+34,50% su F32. Il
+   verdetto globale resta `NEED_MORE_DATA` perché il baseline di questa singola
+   sessione è instabile (CV 5,94%/6,16%); non viene promosso artificiosamente a
+   `KEEP`.
+7. Il crollo sotto 10 t/s a 10.666 token è stato riprodotto forzando il percorso
+   full-attention seriale: 239,554 ms/token, con 202,409 ms nel core. Lo split-K
+   corrente misura 38,193/9,445 ms; un run sotto 10 appartiene quindi alla
+   configurazione/binario errati, non al decadimento normale del build corrente.
+8. Il riuso GQA di una riga K/V fra due query head è stato promosso a default
+   dello split-K: +8,08% medio a 8K/12K/16K, +4,67% nella conferma 8K da sette
+   run/64 token, 16/16 token identici e top-20 overlap 1,0 a tutte le frontiere.
+   Il core profilato a 10.666 scende 9,445→5,999 ms.
+9. Gruppi GQA 3 e 6 non sono mantenuti come default; il tentativo shared-memory
+   per evitare `expf` ridondanti è stato annullato dopo −2,83% medio.
+10. `doctor` e `tools/perf-qwen-r8.sh` coprono ora anche `ds4-server`; l'azione
+    `workflow --name r8-long --id ID` esegue build, probe e A/B GQA1/GQA2 con
+    finestre da 64 token a 8K/12K/16K.
+11. Prossimo collo misurato con R8/GQA2 a 10.666: FFN 14,486 ms, GDN attention
+    8,095 ms e full-attention totale 11,181 ms. Per superare stabilmente 30 t/s
+    a 10–12K va ridotto il matvec residuo senza riaprire il gate numerico.
+12. La baseline richiesta per locale e server è ora senza env: R8 fuso,
+    split-K32 automatico da 8K e GQA2. `doctor` mostra questi valori e verifica
+    che `ds4`, `ds4-bench` e `ds4-server` siano tutti rilinkati allo stesso
+    `ds4_cuda.o`.
+13. Il run no-env `r8-default-noenv-20260812` è bit-identico al precedente
+    artefatto R8 a 128/2K (logits, top-20 e 8/8 token). Le prestazioni direction
+    a due run sono solo diagnostiche perché il punto 2K è instabile; le mediane
+    canoniche restano quelle slow documentate nel ledger.
+14. Split-K64 dopo GQA2 è respinto: il direction +1,53% era instabile; nella
+    conferma 7×64 token a 10.666 K32 misura 29,014 t/s medi contro 28,713 di
+    K64 (−1,04%). Il limite resta 32 partizioni.

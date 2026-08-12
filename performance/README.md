@@ -6,7 +6,7 @@ Qwen esistenti: non introduce un secondo percorso di inferenza.
 ## Workflow eseguibili
 
 Le sequenze ripetute non vanno ricostruite dalla shell history. Sono mantenute
-in due script eseguibili e richiamate dal sottocomando `workflow`:
+in script eseguibili e richiamate dal sottocomando `workflow`:
 
     python3 tools/perf_harness.py workflow --name validate
 
@@ -19,19 +19,42 @@ in due script eseguibili e richiamate dal sottocomando `workflow`:
     python3 tools/perf_harness.py workflow \
       --name long-context-slow --id splitk-default-confirm-01
 
+    python3 tools/perf_harness.py workflow --name r8-build
+
+    python3 tools/perf_harness.py workflow \
+      --name r8-direction --id r8-default-check-01
+
+    python3 tools/perf_harness.py workflow \
+      --name r8-slow --id r8-confirm-01
+
+    python3 tools/perf_harness.py workflow \
+      --name r8-long --id r8-gqa-confirm-01
+
 `tools/perf-qwen-validate.sh` contiene build CUDA e gate numerici/unitari.
 `tools/perf-qwen-long-context.sh` contiene profile, A/B direction e conferma
-slow. `--dry-run` stampa il comando senza eseguirlo. Le suite canoniche
+slow. `tools/perf-qwen-r8.sh` rilinka sempre `ds4`, `ds4-bench` e `ds4-server`,
+esegue il probe numerico nei percorsi build/slow/long e confronta il rollback
+F32 con R8 predefinito
+oppure split-K scalare con il riuso GQA senza dover ricostruire a mano i
+comandi. Questo evita che un benchmark aggiornato conviva con un client o un
+server obsoleto. `--dry-run` stampa il comando senza
+eseguirlo. Le suite canoniche
 `long-context-direction` e `long-context-slow` sono definite in
 `performance/workloads.yaml`; la prima non può emettere KEEP.
 La conferma slow usa un solo sweep residente 8K/12K/16K per lato, con warm-up
-separato, 16 token per frontiera e cinque ripetizioni, evitando un nuovo
+separato, 64 token per frontiera e cinque ripetizioni, evitando un nuovo
 caricamento del modello per ogni frontiera.
 Il baseline forza il fallback riproducibile con
 `DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1`; il candidato verifica il dispatch di
 produzione, che usa split-K32 automaticamente da 8K. `--candidate-env` resta
 disponibile per esperimenti su partizioni e soglie, ma non serve nel run
 canonico.
+
+Con R8 predefinito, `r8-long` isola il secondo livello del dispatch: il baseline
+usa `DS4_CUDA_QWEN_NO_GQA_GROUP_ATTN=1`, mentre il candidato di produzione
+riusa ogni riga K/V per due query head del gruppo GQA. L'override diagnostico
+`DS4_CUDA_QWEN_GQA_GROUP_ATTN=1|2|3|6` resta disponibile, ma il default
+confermato è 2.
 
 Il registro unico di soluzioni mantenute e scartate è
 `docs/qwen36-performance-ledger.md`. I documenti datati restano fonti storiche,
@@ -190,15 +213,17 @@ Il gate semantico di una suite oracle completa non richiede piu script ad hoc:
 Il report conta separatamente sequenze greedy complete, argmax greedy e argmax
 teacher-forced; con otto casi da 32 step il gate atteso e `8/8` e `512/512`.
 
-Il candidato decode Q8_1-R8 a due stadi resta esplicitamente opt-in:
+Il decode Q8_1-R8 a due stadi è la baseline di produzione per Qwen3.6 CUDA:
 
-    DS4_CUDA_QWEN_DECODE_Q8_1_R8=1 ./ds4-bench \
+    ./ds4-bench \
       --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
       --prompt-file tests/long_context_story_prompt.txt \
       --ctx-start 128 --ctx-max 2048 --gen-tokens 8 --repetitions 3
 
 Il kernel finale decodifica ogni blocco peso una volta sola e alimenta i due
-accumulatori residui, evitando di duplicare unpack, scale e minimi.
+accumulatori residui, evitando di duplicare unpack, scale e minimi. Non serve
+più anteporre variabili a `./ds4` o `./ds4-server`; per un A/B diagnostico il
+solo rollback è `DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1`.
 
 Per un audit isolato del primo matvec Q4_K, Q5_K e Q6_K, aggiungere
 `DS4_CUDA_QWEN_DECODE_Q8_1_R8_PROFILE=1`: il runtime stampa separatamente
@@ -256,6 +281,22 @@ tempo atteso.
     python3 tools/perf_harness.py compare \
       performance-results/baseline/experiment.json \
       performance-results/candidate/experiment.json
+
+`doctor` controlla anche la freschezza di `ds4`, `ds4-bench` e `ds4-server`: se uno dei
+binari è più vecchio dei sorgenti o degli oggetti da cui dipende, espone gli
+input più recenti in `runtime_binaries.*.newer_inputs` e non dichiara pronto il
+relativo percorso. La correzione canonica è `workflow --name r8-build` oppure
+il workflow `validate`, non la sola build di `ds4-bench`.
+Lo stesso report espone `qwen_decode_defaults`: R8, split-K32 da 8K e GQA2,
+insieme ai tre flag di rollback. È quindi possibile verificare la baseline
+attiva senza dedurla dalla shell history.
+
+Nel client interattivo `--ctx 32768` riserva la capacità massima ma non significa
+che ogni token stia già elaborando 32K posizioni. Per confrontare un risultato
+con il harness occorre registrare posizione corrente, token di prompt e fase:
+`prefill` non è `generation`, il primo token non è la mediana steady e i turni
+successivi accumulano contesto. Un saluto breve con client rilinkato deve essere
+confrontato con la frontiera 128, non con il workload 8K/16K.
 
 Le suite slow/standard eseguono un processo di warm-up non cronometrato per
 workload; direction/quick lo omettono in modalità auto per ridurre il tempo di

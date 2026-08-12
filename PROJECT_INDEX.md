@@ -216,11 +216,16 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   suite ripetute di `ds4-bench`, confronti baseline/candidate in JSON, audit
   Q8_1 che separano i byte consumati da MMVQ dal metadata `ds.y` e confronti
   full-vocabulary di una riga fra run Qwen etichettati; il gate delle suite
-  oracle conta sequenze complete e argmax greedy/teacher-forced.
-- `tools/perf-qwen-validate.sh`, `tools/perf-qwen-long-context.sh` — workflow
-  eseguibili richiamati dall'harness per build/correctness e per il ciclo
-  profile, direction A/B e slow sui contesti 8K–16K.
+  oracle conta sequenze complete e argmax greedy/teacher-forced; `doctor`
+  segnala separatamente client, benchmark e server obsoleti.
+- `tools/perf-qwen-validate.sh`, `tools/perf-qwen-r8.sh`,
+  `tools/perf-qwen-long-context.sh` — workflow eseguibili richiamati
+  dall'harness per build/correctness, relink congiunto di `ds4`, `ds4-bench` e
+  `ds4-server`, A/B F32-vs-R8 e ciclo profile/direction/slow sui contesti
+  8K–16K, compreso il confronto GQA scalare/fuso. R8 fuso, split-K32 da 8K e
+  GQA2 sono la baseline Qwen3.6 CUDA comune a client e server.
 - `performance/workloads.yaml` — workload canonici direction/quick/standard/slow/exhaustive,
+  incluse la conferma R8 breve e quella long-context a finestre da 64 token,
   separati per fase, batch, context e prefill chunk.
 - `performance/README.md` — comandi brevi e confini verificati del harness.
 - `performance/references.md` — fonti primarie, implementazioni di confronto e
@@ -295,9 +300,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   custom, quantizzazione, attention, MoE, KV, batching e supporto multi-GPU;
   contiene inoltre embedding/matvec Q4_K/Q5_K/Q6_K, RoPE parziale, attention gated
   e aggiornamento ricorrente Qwen task 6, più i kernel multi-riga causali e i
-  GEMM di prefill Qwen. Il decode opt-in `DS4_CUDA_QWEN_DECODE_Q8_1_R8=1`
-  rappresenta l'attivazione con due residui Q8_1 e riusa MMVQ Q4/Q5/Q6,
-  decodificando una sola volta i pesi condivisi dai due accumulatori. Il
+  GEMM di prefill Qwen. Il decode Q8_1-R8 predefinito rappresenta l'attivazione
+  con due residui Q8_1 e riusa MMVQ Q4/Q5/Q6, decodificando una sola volta i
+  pesi condivisi dai due accumulatori; il rollback F32 è
+  `DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1`. Il
   percorso MTP Qwen aggiunge embedding/matvec Q4_0,
   range device distinti per target e sidecar, kernel warp-8 Q4_0 del drafter e
   Q4_K/Q5_K/Q6_K microbatch del verifier. I Qwen single-GPU che entrano in VRAM sono copiati per

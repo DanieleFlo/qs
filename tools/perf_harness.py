@@ -1070,19 +1070,99 @@ def cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def binary_freshness(binary: Path, inputs: list[Path]) -> dict[str, Any]:
+    existing_inputs = [path for path in inputs if path.exists()]
+    if not binary.exists():
+        return {
+            "exists": False, "fresh": False,
+            "newer_inputs": [str(path) for path in existing_inputs],
+        }
+    binary_mtime_ns = binary.stat().st_mtime_ns
+    newer_inputs = [
+        str(path) for path in existing_inputs
+        if path.stat().st_mtime_ns > binary_mtime_ns
+    ]
+    return {
+        "exists": True, "fresh": not newer_inputs,
+        "binary_mtime_ns": binary_mtime_ns,
+        "newer_inputs": newer_inputs,
+    }
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     profile = hardware_profile()
+    shared_inputs = [
+        ROOT / "ds4_cuda.cu", ROOT / "ds4_cuda.o",
+        ROOT / "ds4.c", ROOT / "ds4.o",
+        ROOT / "ds4_distributed.c", ROOT / "ds4_distributed.o",
+        ROOT / "ds4_tp.c", ROOT / "ds4_tp.o",
+        ROOT / "ds4_ssd.c", ROOT / "ds4_ssd.o",
+        ROOT / "ds4_layer_pack.c", ROOT / "ds4_layer_pack.o",
+        ROOT / "ds4_help.c", ROOT / "ds4_help.o",
+        ROOT / "ds4_gpu_args.c", ROOT / "ds4_gpu_args.o",
+    ]
+    client = binary_freshness(
+        ROOT / "ds4",
+        shared_inputs + [
+            ROOT / "ds4_cli.c", ROOT / "ds4_cli.o",
+            ROOT / "linenoise.c", ROOT / "linenoise.o",
+        ],
+    )
+    benchmark = binary_freshness(
+        ROOT / "ds4-bench",
+        shared_inputs + [ROOT / "ds4_bench.c", ROOT / "ds4_bench.o"],
+    )
+    server = binary_freshness(
+        ROOT / "ds4-server",
+        shared_inputs + [
+            ROOT / "ds4_server.c", ROOT / "ds4_server.o",
+            ROOT / "ds4_kvstore.c", ROOT / "ds4_kvstore.o",
+            ROOT / "rax.c", ROOT / "rax.o",
+        ],
+    )
     checks = {
-        "ds4_bench": (ROOT / "ds4-bench").exists(),
+        "ds4_client": client["exists"],
+        "ds4_client_fresh": client["fresh"],
+        "ds4_bench": benchmark["exists"],
+        "ds4_bench_fresh": benchmark["fresh"],
+        "ds4_server": server["exists"],
+        "ds4_server_fresh": server["fresh"],
         "nvidia_smi": profile["gpu"]["available"],
         "nsight_systems": profile["tools"]["nsys"]["available"],
         "nsight_compute": profile["tools"]["ncu"]["available"],
     }
+    ready_for_benchmark = (
+        checks["ds4_bench"] and checks["ds4_bench_fresh"] and
+        checks["nvidia_smi"]
+    )
     print(json.dumps({
-        "ready_for_benchmark": checks["ds4_bench"] and checks["nvidia_smi"],
-        "checks": checks, "hardware": profile,
+        "ready_for_benchmark": ready_for_benchmark,
+        "ready_for_interactive": (
+            checks["ds4_client"] and checks["ds4_client_fresh"] and
+            checks["nvidia_smi"]
+        ),
+        "ready_for_server": (
+            checks["ds4_server"] and checks["ds4_server_fresh"] and
+            checks["nvidia_smi"]
+        ),
+        "checks": checks,
+        "runtime_binaries": {
+            "ds4": client, "ds4-bench": benchmark, "ds4-server": server,
+        },
+        "qwen_decode_defaults": {
+            "q8_1_r8": True,
+            "split_k_partitions": 32,
+            "split_k_min_context": 8192,
+            "gqa_query_heads_per_cta": 2,
+            "rollback_environment": [
+                "DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1",
+                "DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1",
+                "DS4_CUDA_QWEN_NO_GQA_GROUP_ATTN=1",
+            ],
+        },
+        "hardware": profile,
     }, indent=2))
-    return 0 if checks["ds4_bench"] else 1
+    return 0 if checks["ds4_bench"] and checks["ds4_bench_fresh"] else 1
 
 
 def benchmark_model(args: argparse.Namespace) -> int:
@@ -1108,7 +1188,7 @@ def benchmark_model(args: argparse.Namespace) -> int:
         None if args.baseline_run else Path(args.baseline).resolve().parent / "logits"
     )
     try:
-        if args.suite in {"direction", "long-context-slow"}:
+        if args.suite in {"direction", "r8-slow", "long-context-slow"}:
             contexts = sorted(int(item["context"]) for item in workloads)
             common = ("generation_tokens", "prefill_chunk", "backend", "batch")
             if any(
@@ -1119,8 +1199,11 @@ def benchmark_model(args: argparse.Namespace) -> int:
                 raise HarnessError(
                     f"{args.suite} workloads must share generation/prefill/backend/batch"
                 )
-            if args.suite == "direction" and len(contexts) != 2:
-                raise HarnessError("direction suite must contain exactly two contexts")
+            if (args.suite in {"direction", "r8-slow"} and
+                    len(contexts) != 2):
+                raise HarnessError(
+                    f"{args.suite} suite must contain exactly two contexts"
+                )
             if len(contexts) < 2:
                 raise HarnessError(f"{args.suite} suite needs at least two contexts")
             step_incr = contexts[1] - contexts[0]
@@ -1697,6 +1780,23 @@ def workflow_command(args: argparse.Namespace) -> tuple[list[str], dict[str, str
     env["CUDA_ARCH"] = args.cuda_arch
     if args.name == "validate":
         return [str(ROOT / "tools" / "perf-qwen-validate.sh")], env
+    if args.name.startswith("r8-"):
+        action = args.name.removeprefix("r8-")
+        if action != "build" and not args.id:
+            raise HarnessError("R8 benchmark workflows require --id")
+        env["PERF_MODEL"] = str(Path(args.model))
+        env["PERF_PROMPT"] = str(Path(args.prompt))
+        env["PERF_RESULTS"] = str(Path(args.results))
+        command = [str(ROOT / "tools" / "perf-qwen-r8.sh"), action]
+        if args.id:
+            command.append(args.id)
+        for item in args.candidate_env:
+            if "=" not in item:
+                raise HarnessError(
+                    f"candidate environment must be NAME=VALUE: {item}"
+                )
+            command.extend(("--env", item))
+        return command, env
     if not args.id:
         raise HarnessError("long-context workflows require --id")
     env["PERF_MODEL"] = str(Path(args.model))
@@ -1754,7 +1854,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--binary", default=str(ROOT / "ds4-bench"))
     run.add_argument("--workloads", default=str(DEFAULT_WORKLOADS))
     run.add_argument("--suite", default="direction",
-                     choices=("direction", "long-context-direction", "quick",
+                     choices=("direction", "r8-slow",
+                              "long-context-direction", "quick",
                               "standard", "slow", "long-context-slow",
                               "exhaustive"))
     run.add_argument("--repetitions", type=int, default=2)
@@ -1860,7 +1961,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     workflow.add_argument(
         "--name", required=True,
-        choices=("validate", "long-context-profile",
+        choices=("validate", "r8-build", "r8-direction", "r8-slow", "r8-long",
+                 "long-context-profile",
                  "long-context-direction", "long-context-slow"),
     )
     workflow.add_argument("--id")

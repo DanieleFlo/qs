@@ -712,6 +712,7 @@ static int run_q4_k_probe(void) {
     if (!failed) {
         failed |= !ds4_gpu_set_model_map(weights, sizeof(weights));
         failed |= !ds4_gpu_tensor_write(x, 0, input, sizeof(input));
+        setenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8", "1", 1);
         failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
                                                 12u, INPUTS, ROWS, x, 1u);
         failed |= !ds4_gpu_synchronize();
@@ -722,6 +723,7 @@ static int run_q4_k_probe(void) {
         failed |= !ds4_gpu_synchronize();
         failed |= !ds4_gpu_tensor_read(out, 0, q8_1_gpu, sizeof(q8_1_gpu));
         unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
+        unsetenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8");
         setenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8", "1", 1);
         failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
                                                 12u, INPUTS, ROWS, x, 1u);
@@ -766,6 +768,7 @@ static int run_q4_k_probe(void) {
     if (x) ds4_gpu_tensor_free(x);
     unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
     unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8");
+    unsetenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8");
     return failed;
 }
 
@@ -803,6 +806,7 @@ static int run_q6_k_warp8_probe(void) {
     if (!failed) {
         failed |= !ds4_gpu_set_model_map(weights, sizeof(weights));
         failed |= !ds4_gpu_tensor_write(x, 0, input, sizeof(input));
+        setenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8", "1", 1);
         setenv("DS4_CUDA_QWEN_NO_DECODE_F32_WARP8", "1", 1);
         failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
                                                 14u, INPUTS, ROWS, x, 1u);
@@ -819,6 +823,7 @@ static int run_q6_k_warp8_probe(void) {
         failed |= !ds4_gpu_synchronize();
         failed |= !ds4_gpu_tensor_read(out, 0, q8_1_gpu, sizeof(q8_1_gpu));
         unsetenv("DS4_CUDA_QWEN_DECODE_Q6_Q8_1");
+        unsetenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8");
         setenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8", "1", 1);
         failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
                                                 14u, INPUTS, ROWS, x, 1u);
@@ -858,6 +863,7 @@ static int run_q6_k_warp8_probe(void) {
     unsetenv("DS4_CUDA_QWEN_NO_DECODE_F32_WARP8");
     unsetenv("DS4_CUDA_QWEN_DECODE_Q6_Q8_1");
     unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8");
+    unsetenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8");
     return failed;
 }
 
@@ -909,6 +915,7 @@ static int run_q5_k_warp8_probe(void) {
     if (!failed) {
         failed |= !ds4_gpu_set_model_map(weights, sizeof(weights));
         failed |= !ds4_gpu_tensor_write(x, 0, input, sizeof(input));
+        setenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8", "1", 1);
         setenv("DS4_CUDA_QWEN_NO_DECODE_F32_WARP8", "1", 1);
         failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
                                                 13u, INPUTS, ROWS, x, 1u);
@@ -931,6 +938,7 @@ static int run_q5_k_warp8_probe(void) {
         failed |= !ds4_gpu_synchronize();
         failed |= !ds4_gpu_tensor_read(out, 0, q8_1_gpu, sizeof(q8_1_gpu));
         unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
+        unsetenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8");
         setenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8", "1", 1);
         failed |= !ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0,
                                                 13u, INPUTS, ROWS, x, 1u);
@@ -983,6 +991,7 @@ static int run_q5_k_warp8_probe(void) {
     unsetenv("DS4_CUDA_QWEN_DECODE_Q4_Q8");
     unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1");
     unsetenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8");
+    unsetenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8");
     return failed;
 }
 

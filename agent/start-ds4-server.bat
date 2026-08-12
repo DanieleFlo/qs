@@ -14,8 +14,8 @@ if errorlevel 1 (
 )
 
 echo Starting ds4-server on http://127.0.0.1:8080 ...
-echo CUDA decode path: Q8_1-R8 enabled
+echo CUDA decode baseline: Q8_1-R8, split-K32 and GQA2
 rem WSL NAT forwards this guest listener to Windows localhost.
-wsl.exe --cd "%REPO_DIR%" env DS4_CUDA_QWEN_DECODE_Q8_1_R8=1 ./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf --ctx 32768 --host 0.0.0.0 --port 8080
+wsl.exe --cd "%REPO_DIR%" ./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf --ctx 32768 --host 0.0.0.0 --port 8080
 
 pause
