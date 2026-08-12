@@ -371,11 +371,28 @@ int ds4_sample_logits(const float *logits, int n_vocab, float temperature,
 int ds4_session_sample(ds4_session *s, float temperature, int top_k, float top_p, float min_p, uint64_t *rng);
 typedef bool (*ds4_token_filter_fn)(void *ud, int token,
                                     const char *piece, size_t piece_len);
+typedef struct {
+    double setup_ms;
+    double filter_ms;
+    double sample_ms;
+    uint64_t decoded_piece_bytes;
+    uint32_t vocab_tokens;
+    uint32_t filter_calls;
+    uint32_t accepted_tokens;
+    uint32_t finite_allowed_tokens;
+} ds4_filtered_sample_metrics;
 /* Sample after assigning zero probability to tokens rejected by filter.  The
  * callback sees decoded token bytes, not tokenizer-internal GPT-2 codepoints. */
 int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
                                 float top_p, float min_p, uint64_t *rng,
                                 ds4_token_filter_fn filter, void *filter_ud);
+/* Profiled variant used by opt-in server telemetry.  Passing NULL metrics has
+ * the same hot path as ds4_session_sample_filtered(), without clock reads. */
+int ds4_session_sample_filtered_profiled(
+        ds4_session *s, float temperature, int top_k,
+        float top_p, float min_p, uint64_t *rng,
+        ds4_token_filter_fn filter, void *filter_ud,
+        ds4_filtered_sample_metrics *metrics);
 /* Return a tokenizer token whose entire decoded piece is a deterministic
  * common prefix of every grammar-accepted continuation.  When
  * ignore_leading_ws is true, whitespace-leading alternatives are formatting

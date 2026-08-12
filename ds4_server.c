@@ -7645,6 +7645,12 @@ typedef struct {
     const char *raw;
     size_t raw_len;
     const dsml_decode_tracker *tracker;
+    buf scratch;
+    const char *scratch_raw;
+    size_t scratch_raw_len;
+    size_t scratch_history_base;
+    size_t scratch_prefix_len;
+    bool scratch_ready;
 } agentic_token_filter;
 
 static int tool_schema_order_find_prop(const tool_schema_order *o, const char *prop) {
@@ -8842,7 +8848,7 @@ static bool agentic_filter_token(void *ud, int token,
                                   const char *piece, size_t piece_len) {
     (void)token;
 
-    const agentic_token_filter *f = ud;
+    agentic_token_filter *f = ud;
     if (!f || !f->req || !piece) return false;
 
     dsml_decode_tracker reconstructed;
@@ -8894,9 +8900,24 @@ static bool agentic_filter_token(void *ud, int token,
         piece_len > SIZE_MAX - (f->raw_len - history_base)) return false;
     size_t history_len = f->raw_len - history_base;
     size_t combined_len = history_len + piece_len;
-    char *combined = xmalloc(combined_len ? combined_len : 1);
-    if (history_len) memcpy(combined, f->raw + history_base, history_len);
-    if (piece_len) memcpy(combined + history_len, piece, piece_len);
+    if (!f->scratch_ready || f->scratch_raw != f->raw ||
+        f->scratch_raw_len != f->raw_len ||
+        f->scratch_history_base != history_base) {
+        f->scratch.len = 0;
+        if (history_len) {
+            buf_append(&f->scratch, f->raw + history_base, history_len);
+        }
+        f->scratch_raw = f->raw;
+        f->scratch_raw_len = f->raw_len;
+        f->scratch_history_base = history_base;
+        f->scratch_prefix_len = history_len;
+        f->scratch_ready = true;
+    } else {
+        f->scratch.len = f->scratch_prefix_len;
+        if (f->scratch.ptr) f->scratch.ptr[f->scratch.len] = '\0';
+    }
+    if (piece_len) buf_append(&f->scratch, piece, piece_len);
+    const char *combined = f->scratch.ptr ? f->scratch.ptr : "";
     dsml_decode_tracker relative = *tracker;
     relative.pos = structural_ws_start != SIZE_MAX ?
         structural_ws_start - history_base :
@@ -8905,10 +8926,8 @@ static bool agentic_filter_token(void *ud, int token,
         relative.invoke_body_start -= history_base;
     if (relative.param_value_start >= history_base)
         relative.param_value_start -= history_base;
-    bool valid = agentic_simulate_candidate(
+    return agentic_simulate_candidate(
         f->req, &relative, combined, combined_len, history_len);
-    free(combined);
-    return valid;
 }
 
 typedef struct {
@@ -8916,6 +8935,10 @@ typedef struct {
     const char *raw;
     size_t raw_len;
     bool thinking_enabled;
+    buf scratch;
+    const char *scratch_raw;
+    size_t scratch_raw_len;
+    bool scratch_ready;
 } response_json_filter;
 
 static bool response_json_is_complete(const schema_json_value *schema,
@@ -8975,7 +8998,7 @@ static bool json_has_insignificant_whitespace(const char *raw, size_t len) {
 static bool response_json_filter_token(void *ud, int token,
                                        const char *piece, size_t piece_len) {
     (void)token;
-    const response_json_filter *f = ud;
+    response_json_filter *f = ud;
     if (!f || !f->schema || !piece || piece_len > SIZE_MAX - f->raw_len) return false;
     if (piece_len == 0) {
         return response_json_generation_complete(
@@ -8983,10 +9006,19 @@ static bool response_json_filter_token(void *ud, int token,
             f->thinking_enabled, true);
     }
     size_t len = f->raw_len + piece_len;
-    char *combined = xmalloc(len + 1);
-    if (f->raw_len) memcpy(combined, f->raw, f->raw_len);
-    if (piece_len) memcpy(combined + f->raw_len, piece, piece_len);
-    combined[len] = '\0';
+    if (!f->scratch_ready || f->scratch_raw != f->raw ||
+        f->scratch_raw_len != f->raw_len) {
+        f->scratch.len = 0;
+        if (f->raw_len) buf_append(&f->scratch, f->raw, f->raw_len);
+        f->scratch_raw = f->raw;
+        f->scratch_raw_len = f->raw_len;
+        f->scratch_ready = true;
+    } else {
+        f->scratch.len = f->raw_len;
+        if (f->scratch.ptr) f->scratch.ptr[f->scratch.len] = '\0';
+    }
+    if (piece_len) buf_append(&f->scratch, piece, piece_len);
+    const char *combined = f->scratch.ptr ? f->scratch.ptr : "";
     const char *surface = NULL;
     size_t surface_len = 0;
     bool has_surface = response_json_surface(
@@ -9013,7 +9045,6 @@ static bool response_json_filter_token(void *ud, int token,
                 f->schema, surface, surface_len, finalize_number);
         }
     }
-    free(combined);
     return valid;
 }
 
@@ -11235,6 +11266,32 @@ static double now_sec(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+typedef struct {
+    double forced_build_ms;
+    double forced_sync_ms;
+    double filter_setup_ms;
+    double filter_ms;
+    double filtered_sample_ms;
+    double plain_sample_ms;
+    double eval_ms;
+    uint64_t forced_build_calls;
+    uint64_t forced_sync_calls;
+    uint64_t forced_tokens;
+    uint64_t filtered_sample_calls;
+    uint64_t plain_sample_calls;
+    uint64_t eval_calls;
+    uint64_t vocab_tokens;
+    uint64_t filter_calls;
+    uint64_t accepted_tokens;
+    uint64_t finite_allowed_tokens;
+    uint64_t decoded_piece_bytes;
+} server_decode_phase_metrics;
+
+static bool server_phase_profile_enabled(void) {
+    const char *value = getenv("DS4_SERVER_PHASE_PROFILE");
+    return value && value[0] && strcmp(value, "0") != 0;
 }
 
 static pthread_mutex_t server_log_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -14095,6 +14152,8 @@ static int build_constrained_forced_tokens(
             response_constrained ? response_json_filter_token : agentic_filter_token,
             response_constrained ? (void *)&json_filter : (void *)&tool_filter,
             false, true);
+        buf_free(&json_filter.scratch);
+        buf_free(&tool_filter.scratch);
         if (token < 0 || ds4_token_is_stop_for_think_mode(
                 engine, token, r->think_mode)) break;
         size_t piece_len = 0;
@@ -15429,6 +15488,8 @@ decode_again:
     if (max_tokens > room) max_tokens = room;
     trace_event(s, trace_id, "prefill done; decode_max=%d ctx_room=%d", max_tokens, room);
     const double decode_t0 = now_sec();
+    const bool phase_profile = server_phase_profile_enabled();
+    server_decode_phase_metrics phase = {0};
     double last_decode_log_t = decode_t0;
     int last_decode_log_completion = 0;
     thinking_state thinking = thinking_state_from_prompt(&j->req);
@@ -15485,32 +15546,65 @@ decode_again:
             .thinking_enabled = j->req.think_mode != DS4_THINK_NONE,
         };
         int toks[129];
+        const double forced_build_t0 = phase_profile ? now_sec() : 0.0;
         int ntok = constrained_sample ? build_constrained_forced_tokens(
             s->engine, &j->req, text.ptr ? text.ptr : "", text.len,
             &thinking, &dsml_tracker, toks,
             (int)(sizeof(toks) / sizeof(toks[0])) < max_tokens - completion ?
                 (int)(sizeof(toks) / sizeof(toks[0])) : max_tokens - completion) : 0;
+        if (phase_profile && constrained_sample) {
+            phase.forced_build_ms += (now_sec() - forced_build_t0) * 1000.0;
+            phase.forced_build_calls++;
+        }
         int token = -1;
         if (ntok > 0) {
+            const double forced_sync_t0 = phase_profile ? now_sec() : 0.0;
             if (!append_exact_tokens_to_live_session(
                     s, slot, toks, ntok, err, sizeof(err))) {
                 finish = "error";
                 break;
             }
+            if (phase_profile) {
+                phase.forced_sync_ms += (now_sec() - forced_sync_t0) * 1000.0;
+                phase.forced_sync_calls++;
+                phase.forced_tokens += (uint64_t)ntok;
+            }
             j->req.constrained_prefill_tokens += ntok;
         } else {
+            ds4_filtered_sample_metrics filtered = {0};
             if (response_constrained_sample) {
-                token = ds4_session_sample_filtered(
+                token = ds4_session_sample_filtered_profiled(
                     slot->session, temperature, top_k, top_p, min_p, &rng,
-                    response_json_filter_token, &json_filter);
+                    response_json_filter_token, &json_filter,
+                    phase_profile ? &filtered : NULL);
             } else if (agentic_constrained_sample) {
-                token = ds4_session_sample_filtered(
+                token = ds4_session_sample_filtered_profiled(
                     slot->session, temperature, top_k, top_p, min_p, &rng,
-                    agentic_filter_token, &token_filter);
+                    agentic_filter_token, &token_filter,
+                    phase_profile ? &filtered : NULL);
             } else {
+                const double plain_sample_t0 = phase_profile ? now_sec() : 0.0;
                 token = ds4_session_sample(slot->session, temperature, top_k,
                                            top_p, min_p, &rng);
+                if (phase_profile) {
+                    phase.plain_sample_ms +=
+                        (now_sec() - plain_sample_t0) * 1000.0;
+                    phase.plain_sample_calls++;
+                }
             }
+            if (phase_profile && constrained_sample) {
+                phase.filter_setup_ms += filtered.setup_ms;
+                phase.filter_ms += filtered.filter_ms;
+                phase.filtered_sample_ms += filtered.sample_ms;
+                phase.filtered_sample_calls++;
+                phase.vocab_tokens += filtered.vocab_tokens;
+                phase.filter_calls += filtered.filter_calls;
+                phase.accepted_tokens += filtered.accepted_tokens;
+                phase.finite_allowed_tokens += filtered.finite_allowed_tokens;
+                phase.decoded_piece_bytes += filtered.decoded_piece_bytes;
+            }
+            buf_free(&token_filter.scratch);
+            buf_free(&json_filter.scratch);
             if (token < 0) {
                 finish = "error";
                 snprintf(err, sizeof(err), "%s constrained decoder has no valid token",
@@ -15529,6 +15623,7 @@ decode_again:
             ds4_engine_mtp_draft_tokens(s->engine) > 1 &&
             getenv("DS4_MTP_SPEC_DISABLE") == NULL)
         {
+            const double eval_t0 = phase_profile ? now_sec() : 0.0;
             ntok = ds4_session_eval_speculative_argmax(slot->session,
                                                        token,
                                                        max_tokens - completion,
@@ -15537,14 +15632,23 @@ decode_again:
                                                        (int)(sizeof(toks) / sizeof(toks[0])),
                                                        err,
                                                        sizeof(err));
+            if (phase_profile) {
+                phase.eval_ms += (now_sec() - eval_t0) * 1000.0;
+                phase.eval_calls++;
+            }
             if (ntok < 0) {
                 finish = "error";
                 break;
             }
         } else if (ntok == 0) {
+            const double eval_t0 = phase_profile ? now_sec() : 0.0;
             if (server_eval_token(s, slot, token, err, sizeof(err)) != 0) {
                 finish = "error";
                 break;
+            }
+            if (phase_profile) {
+                phase.eval_ms += (now_sec() - eval_t0) * 1000.0;
+                phase.eval_calls++;
             }
             toks[0] = token;
             ntok = 1;
@@ -15753,6 +15857,43 @@ decode_again:
         if (stop_decode) break;
     }
     server_generation_leave(s);
+
+    if (phase_profile) {
+        const double decode_wall_ms = (now_sec() - decode_t0) * 1000.0;
+        const double known_ms =
+            phase.forced_build_ms + phase.forced_sync_ms +
+            phase.filter_setup_ms + phase.filter_ms +
+            phase.filtered_sample_ms + phase.plain_sample_ms + phase.eval_ms;
+        const double residual_ms = decode_wall_ms > known_ms ?
+            decode_wall_ms - known_ms : 0.0;
+        server_log(
+            DS4_LOG_GENERATION,
+            "ds4-server: phase profile ctx=%s gen=%d wall=%.3fms "
+            "forced_build=%.3fms/%llu forced_sync=%.3fms/%llu/%llu_tok "
+            "filter_setup=%.3fms filter=%.3fms filtered_sample=%.3fms/%llu "
+            "plain_sample=%.3fms/%llu eval=%.3fms/%llu residual=%.3fms "
+            "vocab=%llu filter_calls=%llu accepted=%llu finite_allowed=%llu "
+            "piece_bytes=%llu",
+            ctx_span, completion, decode_wall_ms,
+            phase.forced_build_ms,
+            (unsigned long long)phase.forced_build_calls,
+            phase.forced_sync_ms,
+            (unsigned long long)phase.forced_sync_calls,
+            (unsigned long long)phase.forced_tokens,
+            phase.filter_setup_ms, phase.filter_ms,
+            phase.filtered_sample_ms,
+            (unsigned long long)phase.filtered_sample_calls,
+            phase.plain_sample_ms,
+            (unsigned long long)phase.plain_sample_calls,
+            phase.eval_ms,
+            (unsigned long long)phase.eval_calls,
+            residual_ms,
+            (unsigned long long)phase.vocab_tokens,
+            (unsigned long long)phase.filter_calls,
+            (unsigned long long)phase.accepted_tokens,
+            (unsigned long long)phase.finite_allowed_tokens,
+            (unsigned long long)phase.decoded_piece_bytes);
+    }
 
     if (g_stop_requested && strcmp(finish, "error") != 0) {
         finish = "error";

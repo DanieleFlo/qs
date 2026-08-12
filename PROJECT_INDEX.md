@@ -185,6 +185,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   SSD/GPU e copertura della suite HTTP agentica.
 - `docs/constrained-json-decoding-plan.md` — checklist e criteri di completamento
   per simulatore DSML, JSON Schema, masking dei logits e output strutturati.
+- `docs/todo-agentic-server-performance.md` — diario misurabile degli interventi
+  su sampling vincolato DSML/JSON, telemetria server e piccoli suffissi, senza
+  modifiche ai kernel CUDA.
 - `docs/agent_performance_contract.md` — gate operativo per gli esperimenti CUDA:
   baseline, ipotesi falsificabile, correttezza, statistica e verdetto.
 - `docs/todo-harness.md` — roadmap completa del GPU kernel engineering harness.

@@ -35930,6 +35930,10 @@ bool ds4_tokens_starts_with(const ds4_tokens *tokens, const ds4_tokens *prefix) 
 
 struct ds4_vocab {
     ds4_str *token;
+    char *decoded_piece_data;
+    size_t *decoded_piece_offset;
+    size_t decoded_piece_bytes;
+    size_t decoded_piece_max;
     int n_vocab;
     int bos_id;
     int eos_id;
@@ -36928,6 +36932,8 @@ static void vocab_load(ds4_vocab *vocab, const ds4_model *model) {
 
 static void vocab_free(ds4_vocab *vocab) {
     free(vocab->token);
+    free(vocab->decoded_piece_data);
+    free(vocab->decoded_piece_offset);
     table_free(&vocab->token_to_id);
     table_free(&vocab->merge_rank);
     memset(vocab, 0, sizeof(*vocab));
@@ -37335,8 +37341,8 @@ static bool vocab_token_is_literal_special(ds4_str s) {
     return false;
 }
 
-static size_t vocab_token_text_copy(const ds4_vocab *vocab, int token,
-                                    char *out, size_t cap) {
+static size_t vocab_token_text_decode_copy(const ds4_vocab *vocab, int token,
+                                           char *out, size_t cap) {
     if (!vocab || !out || cap == 0 || token < 0 || token >= vocab->n_vocab) {
         if (out && cap) out[0] = '\0';
         return 0;
@@ -37359,12 +37365,75 @@ static size_t vocab_token_text_copy(const ds4_vocab *vocab, int token,
     return n;
 }
 
+/* Constrained decoding visits token pieces vocabulary-wide. Decode the GPT-2
+ * codepoint representation once at engine startup instead of reconstructing
+ * every piece for every grammar state. Offsets make embedded NUL bytes safe. */
+static void vocab_decoded_piece_cache_init(ds4_vocab *vocab) {
+    if (!vocab || vocab->n_vocab <= 0 || vocab->decoded_piece_offset) return;
+    size_t raw_bytes = 0;
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        if (vocab->token[i].len > SIZE_MAX - raw_bytes) {
+            ds4_die("decoded vocabulary piece cache is too large");
+        }
+        raw_bytes += (size_t)vocab->token[i].len;
+    }
+    if (raw_bytes == SIZE_MAX) {
+        ds4_die("decoded vocabulary piece cache is too large");
+    }
+    vocab->decoded_piece_offset =
+        xcalloc((size_t)vocab->n_vocab + 1,
+                sizeof(vocab->decoded_piece_offset[0]));
+    vocab->decoded_piece_data = xmalloc(raw_bytes + 1);
+    size_t used = 0;
+    size_t max_piece = 0;
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        vocab->decoded_piece_offset[i] = used;
+        size_t n = vocab_token_text_decode_copy(
+            vocab, i, vocab->decoded_piece_data + used,
+            raw_bytes - used + 1);
+        if (n == SIZE_MAX || n > raw_bytes - used) {
+            ds4_die("failed to build decoded vocabulary piece cache");
+        }
+        used += n;
+        if (n > max_piece) max_piece = n;
+    }
+    vocab->decoded_piece_offset[vocab->n_vocab] = used;
+    vocab->decoded_piece_data[used] = '\0';
+    vocab->decoded_piece_bytes = used;
+    vocab->decoded_piece_max = max_piece;
+}
+
+static bool vocab_token_text_view(const ds4_vocab *vocab, int token,
+                                  const char **piece, size_t *piece_len) {
+    if (!vocab || !piece || !piece_len || !vocab->decoded_piece_offset ||
+        !vocab->decoded_piece_data || token < 0 || token >= vocab->n_vocab) {
+        return false;
+    }
+    size_t begin = vocab->decoded_piece_offset[token];
+    size_t end = vocab->decoded_piece_offset[token + 1];
+    if (end < begin || end > vocab->decoded_piece_bytes) return false;
+    *piece = vocab->decoded_piece_data + begin;
+    *piece_len = end - begin;
+    return true;
+}
+
 char *ds4_token_text(ds4_engine *e, int token, size_t *len) {
     ds4_vocab *vocab = &e->vocab;
     if (token < 0 || token >= vocab->n_vocab) {
         if (len) *len = 0;
         char *out = xmalloc(1);
         out[0] = '\0';
+        return out;
+    }
+
+    vocab_decoded_piece_cache_init(vocab);
+    const char *piece = NULL;
+    size_t piece_len = 0;
+    if (vocab_token_text_view(vocab, token, &piece, &piece_len)) {
+        char *out = xmalloc(piece_len + 1);
+        if (piece_len) memcpy(out, piece, piece_len);
+        out[piece_len] = '\0';
+        if (len) *len = piece_len;
         return out;
     }
 
@@ -48655,6 +48724,7 @@ struct ds4_session {
     token_vec greedy_splitkv_segment;
     float *logits;
     float *sample_probs;
+    float *sample_masked;
     float *mtp_logits;
     int greedy_splitkv_anchor_len;
 #ifndef DS4_NO_GPU
@@ -49505,14 +49575,16 @@ static void qwen_trace_tensor(
     free(values);
 }
 
-static bool qwen_graph_forward_token(
+static bool qwen_graph_forward_token_mode(
         ds4_qwen_gpu_graph *g,
         const ds4_model    *model,
         const ds4_weights  *weights,
         uint32_t            token,
         uint32_t            position,
-        float              *logits_out) {
-    if (!g || !model || !weights || !logits_out || position >= g->ctx_cap ||
+        float              *logits_out,
+        bool                emit_logits) {
+    if (!g || !model || !weights || (emit_logits && !logits_out) ||
+        position >= g->ctx_cap ||
         token >= DS4_N_VOCAB) return false;
     const char *profile_pos_env =
         getenv("DS4_CUDA_QWEN_DECODE_PROFILE_POS");
@@ -49743,16 +49815,18 @@ static bool qwen_graph_forward_token(
     }
     const double prof_output_t0 =
         profile ? now_sec() : 0.0;
-    if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
+    if (ok && emit_logits) ok = ds4_gpu_rms_norm_weight_tensor(
         g->output_norm, g->cur, model->map, model->size,
         weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok) qwen_trace_tensor("output_norm", DS4_N_LAYER - 1u, position,
-                              g->output_norm, DS4_N_EMBD);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok && emit_logits) qwen_trace_tensor(
+        "output_norm", DS4_N_LAYER - 1u, position,
+        g->output_norm, DS4_N_EMBD);
+    if (ok && emit_logits) ok = metal_graph_matmul_plain_tensor(
         g->logits, model, weights->output, DS4_N_EMBD, DS4_N_VOCAB,
         g->output_norm, 1);
-    if (ok) qwen_trace_tensor("logits", DS4_N_LAYER - 1u, position,
-                              g->logits, DS4_N_VOCAB);
+    if (ok && emit_logits) qwen_trace_tensor(
+        "logits", DS4_N_LAYER - 1u, position,
+        g->logits, DS4_N_VOCAB);
     if (ok) ok = ds4_gpu_end_commands() != 0;
     else (void)ds4_gpu_synchronize();
     if (profile && ok) {
@@ -49762,8 +49836,9 @@ static bool qwen_graph_forward_token(
 
     const double prof_read_t0 =
         profile ? now_sec() : 0.0;
-    if (ok) ok = ds4_gpu_tensor_read(g->logits, 0, logits_out,
-                                      (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
+    if (ok && emit_logits) ok = ds4_gpu_tensor_read(
+        g->logits, 0, logits_out,
+        (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
     if (profile) {
         prof_read_ms =
             (now_sec() - prof_read_t0) * 1000.0;
@@ -49791,6 +49866,17 @@ static bool qwen_graph_forward_token(
                 (now_sec() - prof_token_t0) * 1000.0);
     }
     return ok;
+}
+
+static bool qwen_graph_forward_token(
+        ds4_qwen_gpu_graph *g,
+        const ds4_model    *model,
+        const ds4_weights  *weights,
+        uint32_t            token,
+        uint32_t            position,
+        float              *logits_out) {
+    return qwen_graph_forward_token_mode(
+        g, model, weights, token, position, logits_out, true);
 }
 
 /* Qwen prefill is layer-major: every dense projection sees all rows in the
@@ -58184,6 +58270,7 @@ static int ds4_engine_open_internal(ds4_engine **out,
     } else if (!opt->inspect_only) {
         vocab_load(&e->vocab, &e->model);
     }
+    if (e->vocab.n_vocab > 0) vocab_decoded_piece_cache_init(&e->vocab);
     if (e->ssd_streaming && e->ssd_streaming_cache_bytes != 0) {
         const uint64_t requested_cache_bytes = e->ssd_streaming_cache_bytes;
         const uint64_t safe_cache_bytes =
@@ -59666,6 +59753,7 @@ void ds4_session_free(ds4_session *s) {
     token_vec_free(&s->greedy_splitkv_segment);
     free(s->logits);
     free(s->sample_probs);
+    free(s->sample_masked);
 #ifndef DS4_NO_GPU
     free(s->glm_mtp_hc);
     free(s->glm_mtp_logits0);
@@ -60800,15 +60888,17 @@ static int ds4_session_sync_internal(ds4_session *s, const ds4_tokens *prompt, c
                 return DS4_SESSION_SYNC_INTERRUPTED;
             }
             bool chunk_ok = true;
-            /* Below 512 rows the calibrated token path is fast enough and
-             * avoids small top-k reorderings from batched reduction order.
-             * Large chunks take the layer-major path that removes the real
-             * long-prompt bottleneck. */
-            if (trace_token_path || prompt->len < 512) {
+            /* Preserve the historically calibrated token-exact path for a
+             * complete prompt below 512 rows.  On a live long-context session,
+             * choose by the actual suffix span: row-wise Q4_K is faster below
+             * its measured 128-row GEMM crossover, while larger suffixes keep
+             * the existing layer-major path. */
+            if (trace_token_path || prompt->len < 512 || span < 128) {
                 for (int i = chunk_start; chunk_ok && i < chunk_end; i++) {
-                    chunk_ok = qwen_graph_forward_token(
+                    chunk_ok = qwen_graph_forward_token_mode(
                         &s->qwen_graph, &e->model, &e->weights,
-                        (uint32_t)prompt->v[i], (uint32_t)i, s->logits);
+                        (uint32_t)prompt->v[i], (uint32_t)i, s->logits,
+                        trace_token_path || i + 1 == chunk_end);
                     if (chunk_ok && s->qwen_graph.mtp_ready &&
                         e->support_kind == DS4_SUPPORT_QWEN35_MTP &&
                         !qwen_graph_mtp_catchup(
@@ -61693,33 +61783,63 @@ int ds4_session_sample(ds4_session *s, float temperature, int top_k, float top_p
                               top_p, min_p, rng, s->sample_probs);
 }
 
-int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
-                                float top_p, float min_p, uint64_t *rng,
-                                ds4_token_filter_fn filter, void *filter_ud) {
+int ds4_session_sample_filtered_profiled(
+        ds4_session *s, float temperature, int top_k,
+        float top_p, float min_p, uint64_t *rng,
+        ds4_token_filter_fn filter, void *filter_ud,
+        ds4_filtered_sample_metrics *metrics) {
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
     if (!s || !s->engine || !filter) {
         return ds4_session_sample(s, temperature, top_k, top_p, min_p, rng);
     }
     ds4_vocab *vocab = &s->engine->vocab;
-    size_t max_piece = 0;
-    for (int i = 0; i < vocab->n_vocab; i++) {
-        if (vocab->token[i].len > max_piece) max_piece = (size_t)vocab->token[i].len;
+    const double setup_t0 = metrics ? now_sec() : 0.0;
+    vocab_decoded_piece_cache_init(vocab);
+    if (!s->sample_masked) {
+        s->sample_masked =
+            xmalloc((size_t)vocab->n_vocab * sizeof(s->sample_masked[0]));
     }
-    char *piece = xmalloc(max_piece + 1);
-    float *masked = xmalloc((size_t)vocab->n_vocab * sizeof(masked[0]));
+    float *masked = s->sample_masked;
+    if (metrics) {
+        metrics->setup_ms = (now_sec() - setup_t0) * 1000.0;
+        metrics->vocab_tokens = (uint32_t)vocab->n_vocab;
+    }
     int allowed = 0;
+    const double filter_t0 = metrics ? now_sec() : 0.0;
     for (int i = 0; i < vocab->n_vocab; i++) {
-        size_t n = vocab_token_text_copy(vocab, i, piece, max_piece + 1);
-        bool keep = n != SIZE_MAX && filter(filter_ud, i, piece, n);
+        const char *piece = NULL;
+        size_t n = 0;
+        bool keep = false;
+        if (vocab_token_text_view(vocab, i, &piece, &n)) {
+            if (metrics) {
+                metrics->filter_calls++;
+                metrics->decoded_piece_bytes += n;
+            }
+            keep = filter(filter_ud, i, piece, n);
+        }
         masked[i] = keep ? s->logits[i] : DS4_NEG_INF;
+        if (metrics && keep) metrics->accepted_tokens++;
         if (keep && isfinite(masked[i])) allowed++;
     }
+    if (metrics) {
+        metrics->filter_ms = (now_sec() - filter_t0) * 1000.0;
+        metrics->finite_allowed_tokens = (uint32_t)allowed;
+    }
+    const double sample_t0 = metrics ? now_sec() : 0.0;
     int token = allowed ?
         sample_top_p_min_p(masked, (uint32_t)vocab->n_vocab,
                            temperature, top_k, top_p, min_p,
                            rng, s->sample_probs) : -1;
-    free(masked);
-    free(piece);
+    if (metrics) metrics->sample_ms = (now_sec() - sample_t0) * 1000.0;
     return token;
+}
+
+int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
+                                float top_p, float min_p, uint64_t *rng,
+                                ds4_token_filter_fn filter, void *filter_ud) {
+    return ds4_session_sample_filtered_profiled(
+        s, temperature, top_k, top_p, min_p, rng,
+        filter, filter_ud, NULL);
 }
 
 static bool forced_piece_is_complete_utf8(const char *s, size_t len) {
@@ -61751,11 +61871,8 @@ int ds4_engine_forced_prefix_token(ds4_engine *e,
                                    bool allow_common_prefix_on_conflict) {
     if (!e || !filter) return -1;
     ds4_vocab *vocab = &e->vocab;
-    size_t max_piece = 0;
-    for (int i = 0; i < vocab->n_vocab; i++) {
-        if (vocab->token[i].len > max_piece) max_piece = (size_t)vocab->token[i].len;
-    }
-    char *piece = xmalloc(max_piece + 1);
+    vocab_decoded_piece_cache_init(vocab);
+    size_t max_piece = vocab->decoded_piece_max;
     char *longest = xmalloc(max_piece + 1);
     char *common_prefix = xmalloc(max_piece + 1);
     size_t longest_len = 0;
@@ -61769,8 +61886,9 @@ int ds4_engine_forced_prefix_token(ds4_engine *e,
     int accepted_cap = 0;
 
     for (int i = 0; i < vocab->n_vocab; i++) {
-        size_t n = vocab_token_text_copy(vocab, i, piece, max_piece + 1);
-        if (!n || n == SIZE_MAX ||
+        const char *piece = NULL;
+        size_t n = 0;
+        if (!vocab_token_text_view(vocab, i, &piece, &n) || !n ||
             (ignore_leading_ws && isspace((unsigned char)piece[0])) ||
             !filter(filter_ud, i, piece, n)) continue;
         if (accepted_len == accepted_cap) {
@@ -61818,9 +61936,10 @@ int ds4_engine_forced_prefix_token(ds4_engine *e,
     if (conflict && common_len && allow_common_prefix_on_conflict) {
         size_t best_len = 0;
         for (int ai = 0; ai < accepted_len; ai++) {
-            size_t n = vocab_token_text_copy(
-                vocab, accepted[ai], piece, max_piece + 1);
-            if (n && n != SIZE_MAX && forced_piece_is_complete_utf8(piece, n) &&
+            const char *piece = NULL;
+            size_t n = 0;
+            if (vocab_token_text_view(vocab, accepted[ai], &piece, &n) && n &&
+                forced_piece_is_complete_utf8(piece, n) &&
                 n <= common_len && n > best_len &&
                 !memcmp(piece, common_prefix, n)) {
                 forced = accepted[ai];
@@ -61831,7 +61950,6 @@ int ds4_engine_forced_prefix_token(ds4_engine *e,
     free(accepted);
     free(common_prefix);
     free(longest);
-    free(piece);
     return forced;
 }
 
