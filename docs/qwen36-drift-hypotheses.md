@@ -68,6 +68,13 @@ non basta.
 | H12 | Instabilita' hardware, temperatura, overclock o errori memoria causano il drift | BASSA MA APERTA | Il drift osservato e' strutturato e riproducibile. Registrare clock/power/temperature durante tre run; eliminare overclock per il gate finale. La RTX 3090 GeForce non espone ECC in `nvidia-smi`. |
 | H13 | Tokenizer/chat template o token speciali causano la divergenza | RESPINTA PER IL CONFRONTO NUMERICO, APERTA PER LA QUALITA' SEMANTICA | I token sono congelati e identici. Tuttavia CPU produce solo sette token testuali poi cicla sui token chat, mentre CUDA/DS4 scelgono EOS: serve un oracle upstream per stabilire il comportamento atteso. |
 | H14 | Ollama CUDA costituisce un oracle indipendente da llama.cpp | RESPINTA DAL SORGENTE | Ollama fissa e costruisce llama.cpp su CUDA. MLX usa `/3` sui pesi upstream; llama CUDA usa `%16` sui pesi GGUF riordinati. Eseguire Ollama su NVIDIA non aggiungerebbe indipendenza. |
+| H15 | Il flip Q8_1 DS4 deriva da mapping/unpack/riduzione differenti dal MMVQ storico | RESPINTA | Con identici pesi e Q8_1 packed, Q4/Q5/Q6 DS4 e llama.cpp `1a064ab09` producono output bit-exact su 257×5.120. |
+| H16 | Rounding o quantizer Q8_1 differente causa il flip del vero step 3 | RESPINTA SUL CASO REALE | Sul vero `output_norm` F32: 160 scale, 5.120 `qs` e 160 `qsum` coincidono. Differisce solo `ds.y`, non consumato dal MMVQ auditato. |
+| H17 | Il cast FP16 della scala Q8_1 domina il flip dell'output head | RESPINTA | A hidden congelato, mantenere la scala F32 sposta il margine di appena +0,000124 e lascia argmax 728; il delta totale F32→Q8_1 è −0,022694. |
+| H18 | Una sola famiglia di peso causa tutta la sensibilità Q8_1 | RESPINTA | Q4-only e Q6-only sono ciascuno sufficienti a invertire il margine critico; Q5-only lo riduce ma conserva token 310. Le primitive restano bit-exact. |
+| H19 | Granularità più fine o activation MAE minore implicano Δmargin migliore | RESPINTA | Q8_32 ha activation MAE minore di Q8_1 ma Δmargin più negativo; Q8_128 conserva il top-1 con logit MAE 0,472 e grande compensazione differenziale. |
+| H20 | Un passo LSQ Q8_1-32 corregge il margine critico | RESPINTA | Activation RMSE migliora 0,94%, ma sul frozen output head il logit MAE sale 0,009979→0,010206 e il margine peggiora −0,009998→−0,016533. |
+| H21 | Il residuo diffuso richiede due stadi Q8_1-R8 per conservare il gate | CONFERMATA | Sul tensore critico R8 riduce activation MAE a 3,24e-5; il kernel reale passa i probe Q4/Q5/Q6, 8/8 sequenze e 512/512 argmax. Con weight decode fuso il direction benchmark è 17,41→32,69 tok/s a 128 e 10,71→14,93 a 2K. |
 
 ## Evidenze consolidate
 

@@ -213,7 +213,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   ripete gli sweep mantenendo il modello residente e usa snapshot o replay fuori
   dalle finestre cronometrate.
 - `tools/perf_harness.py` — CLI senza dipendenze che orchestra probe hardware,
-  suite ripetute di `ds4-bench` e confronti baseline/candidate in JSON.
+  suite ripetute di `ds4-bench`, confronti baseline/candidate in JSON, audit
+  Q8_1 che separano i byte consumati da MMVQ dal metadata `ds.y` e confronti
+  full-vocabulary di una riga fra run Qwen etichettati; il gate delle suite
+  oracle conta sequenze complete e argmax greedy/teacher-forced.
 - `tools/perf-qwen-validate.sh`, `tools/perf-qwen-long-context.sh` — workflow
   eseguibili richiamati dall'harness per build/correctness e per il ciclo
   profile, direction A/B e slow sui contesti 8K–16K.
@@ -292,7 +295,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   custom, quantizzazione, attention, MoE, KV, batching e supporto multi-GPU;
   contiene inoltre embedding/matvec Q4_K/Q5_K/Q6_K, RoPE parziale, attention gated
   e aggiornamento ricorrente Qwen task 6, più i kernel multi-riga causali e i
-  GEMM di prefill Qwen. Il percorso MTP Qwen aggiunge embedding/matvec Q4_0,
+  GEMM di prefill Qwen. Il decode opt-in `DS4_CUDA_QWEN_DECODE_Q8_1_R8=1`
+  rappresenta l'attivazione con due residui Q8_1 e riusa MMVQ Q4/Q5/Q6,
+  decodificando una sola volta i pesi condivisi dai due accumulatori. Il
+  percorso MTP Qwen aggiunge embedding/matvec Q4_0,
   range device distinti per target e sidecar, kernel warp-8 Q4_0 del drafter e
   Q4_K/Q5_K/Q6_K microbatch del verifier. I Qwen single-GPU che entrano in VRAM sono copiati per
   default sul device; `DS4_CUDA_NO_MODEL_COPY=1` conserva il percorso host-map
@@ -454,8 +460,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   `tests/test_qwen36_numerics.py` — schema, staging, checksum, metriche/gate e
   classificazione sintetica dell'inviluppo numerico Qwen3.6.
 - `tests/qwen_numerics_probe.c` — oracle CPU indipendente per GDN, full
-  attention Qwen e matvec Q4_K/Q5_K/Q6_K contro i kernel CUDA DS4, eseguibile
-  con `make qwen-numerics CUDA_ARCH=sm_86`.
+  attention Qwen e matvec Q4_K/Q5_K/Q6_K contro i kernel CUDA DS4, incluse le
+  politiche Q8_1 e Q8_1-R8; eseguibile con `make qwen-numerics CUDA_ARCH=sm_86`.
 - `tests/test_sampling.c` — comportamento deterministico e filtri del sampling.
 - `tests/test_gpu_args.c`, `tests/test_gpu_args_cli.sh` — parsing e propagazione
   della configurazione GPU.

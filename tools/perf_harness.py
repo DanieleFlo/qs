@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import array
 import csv
 import hashlib
 import importlib.util
@@ -15,6 +16,7 @@ import re
 import shlex
 import shutil
 import statistics
+import struct
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -566,6 +568,268 @@ def decode_result_drift(baseline_path: Path, candidate_path: Path,
         },
     })
     return report
+
+
+def q8_1_parity(left_path: Path, right_path: Path) -> dict[str, Any]:
+    """Compare packed Q8_1 data, separating MMVQ inputs from ds.y metadata."""
+    try:
+        left = left_path.read_bytes()
+        right = right_path.read_bytes()
+    except OSError as exc:
+        raise HarnessError(f"cannot read Q8_1 input: {exc}") from exc
+    if len(left) != len(right):
+        raise HarnessError("Q8_1 inputs have different sizes")
+    if not left or len(left) % 36:
+        raise HarnessError("Q8_1 inputs must contain complete 36-byte blocks")
+
+    scale_differences = 0
+    metadata_differences = 0
+    quant_differences = 0
+    blocks_with_quant_differences = 0
+    qsum_differences = 0
+    first_quant_difference = None
+    for block in range(len(left) // 36):
+        offset = block * 36
+        left_block = left[offset:offset + 36]
+        right_block = right[offset:offset + 36]
+        scale_differences += left_block[:2] != right_block[:2]
+        metadata_differences += left_block[2:4] != right_block[2:4]
+        left_qs = struct.unpack("<32b", left_block[4:])
+        right_qs = struct.unpack("<32b", right_block[4:])
+        block_differences = sum(a != b for a, b in zip(left_qs, right_qs))
+        if block_differences:
+            blocks_with_quant_differences += 1
+            quant_differences += block_differences
+            if first_quant_difference is None:
+                index = next(i for i, (a, b) in enumerate(zip(left_qs, right_qs))
+                             if a != b)
+                first_quant_difference = {
+                    "block": block, "index": index,
+                    "left": left_qs[index], "right": right_qs[index],
+                }
+        qsum_differences += sum(left_qs) != sum(right_qs)
+
+    consumed_equal = scale_differences == 0 and quant_differences == 0
+    return {
+        "format": "ds4-q8-1-parity-v1",
+        "status": "PASS" if consumed_equal else "FAIL",
+        "left": str(left_path), "right": str(right_path),
+        "bytes": len(left), "blocks": len(left) // 36,
+        "sha256": {
+            "left": hashlib.sha256(left).hexdigest(),
+            "right": hashlib.sha256(right).hexdigest(),
+        },
+        "mmvq_consumed_fields": {
+            "equal": consumed_equal,
+            "scale_ds_x_differing_blocks": scale_differences,
+            "qs_differing_blocks": blocks_with_quant_differences,
+            "qs_differing_bytes": quant_differences,
+            "qsum_differing_blocks": qsum_differences,
+            "first_qs_difference": first_quant_difference,
+        },
+        "metadata_ds_y": {
+            "equal": metadata_differences == 0,
+            "differing_blocks": metadata_differences,
+            "used_by_decode_mmvq": False,
+        },
+    }
+
+
+def read_f32_row(path: Path, row: int, width: int) -> list[float]:
+    if row < 0 or width <= 0:
+        raise HarnessError("row must be non-negative and width must be positive")
+    expected_row_bytes = width * 4
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise HarnessError(f"cannot inspect logits file {path}: {exc}") from exc
+    if size % expected_row_bytes:
+        raise HarnessError(f"logits file is not a multiple of {width} F32 values: {path}")
+    if row >= size // expected_row_bytes:
+        raise HarnessError(f"row {row} is outside {path}")
+    values = array.array("f")
+    try:
+        with path.open("rb") as file:
+            file.seek(row * expected_row_bytes)
+            values.fromfile(file, width)
+    except (OSError, EOFError) as exc:
+        raise HarnessError(f"cannot read logits row from {path}: {exc}") from exc
+    if sys.byteorder != "little":
+        values.byteswap()
+    result = values.tolist()
+    if any(not math.isfinite(value) for value in result):
+        raise HarnessError(f"non-finite value in logits row {row}: {path}")
+    return result
+
+
+def centered_pair_metrics(left: list[float], right: list[float],
+                          top_k: int) -> dict[str, Any]:
+    if len(left) != len(right) or not left:
+        raise HarnessError("logits rows have different widths")
+    left_max, right_max = max(left), max(right)
+    errors = [(a - left_max) - (b - right_max) for a, b in zip(left, right)]
+    left_centered = [value - left_max for value in left]
+    right_centered = [value - right_max for value in right]
+    norm_left = math.sqrt(sum(value * value for value in left_centered))
+    norm_right = math.sqrt(sum(value * value for value in right_centered))
+    count = min(top_k, len(left))
+    top_left = sorted(range(len(left)), key=left.__getitem__, reverse=True)[:count]
+    top_right = sorted(range(len(right)), key=right.__getitem__, reverse=True)[:count]
+    return {
+        "centered_mae": statistics.fmean(abs(value) for value in errors),
+        "centered_rmse": math.sqrt(statistics.fmean(value * value for value in errors)),
+        "centered_max_error": max(abs(value) for value in errors),
+        "cosine_similarity": (
+            sum(a * b for a, b in zip(left_centered, right_centered)) /
+            (norm_left * norm_right) if norm_left and norm_right else 0.0
+        ),
+        "argmax_equal": top_left[0] == top_right[0],
+        "top_k": count,
+        "top_k_overlap": len(set(top_left) & set(top_right)) / count,
+    }
+
+
+def qwen_logits_row_report(runs: list[tuple[str, Path]], case: str,
+                           stream: str, row: int, vocab: int,
+                           top_k: int, focus_tokens: list[int]) -> dict[str, Any]:
+    if len(runs) < 2:
+        raise HarnessError("at least two labeled Qwen runs are required")
+    if len({label for label, _ in runs}) != len(runs):
+        raise HarnessError("Qwen run labels must be unique")
+    if any(token < 0 or token >= vocab for token in focus_tokens):
+        raise HarnessError("focus token is outside the vocabulary")
+    rows: dict[str, list[float]] = {}
+    summaries = []
+    for label, run in runs:
+        path = run / "logits" / f"{case}.{stream}.f32"
+        values = read_f32_row(path, row, vocab)
+        rows[label] = values
+        order = sorted(range(vocab), key=values.__getitem__, reverse=True)[:top_k]
+        focus = {str(token): values[token] for token in focus_tokens}
+        summary = {
+            "label": label, "run": str(run), "logits": str(path),
+            "argmax": order[0],
+            "top": [{"token": token, "logit": values[token]} for token in order],
+            "focus_logits": focus,
+        }
+        if len(focus_tokens) == 2:
+            summary["focus_margin"] = values[focus_tokens[0]] - values[focus_tokens[1]]
+        summaries.append(summary)
+    reference = runs[0][0]
+    comparisons = [
+        {"reference": reference, "candidate": label,
+         **centered_pair_metrics(rows[reference], rows[label], top_k)}
+        for label, _ in runs[1:]
+    ]
+    return {
+        "format": "ds4-qwen-logits-row-v1",
+        "case": case, "stream": stream, "row": row, "vocab": vocab,
+        "focus_tokens": focus_tokens,
+        "runs": summaries, "comparisons": comparisons,
+    }
+
+
+def qwen_oracle_cases(root: Path, label: str) -> list[tuple[str, dict[str, Any]]]:
+    """Load response objects in the stable case order recorded by an oracle run."""
+    index = read_json(root / "index.json", f"{label} Qwen oracle index")
+    cases = index.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise HarnessError(f"{label} Qwen oracle index has no cases: {root}")
+    result = []
+    seen = set()
+    for case in cases:
+        if not isinstance(case, dict):
+            raise HarnessError(f"{label} Qwen oracle index has a malformed case")
+        case_id, response_file = case.get("id"), case.get("response_file")
+        if not isinstance(case_id, str) or not isinstance(response_file, str):
+            raise HarnessError(f"{label} Qwen oracle case lacks id/response_file")
+        if case_id in seen:
+            raise HarnessError(f"{label} Qwen oracle repeats case {case_id!r}")
+        seen.add(case_id)
+        response = read_json(root / response_file,
+                             f"{label} Qwen response for {case_id}")
+        result.append((case_id, response))
+    return result
+
+
+def qwen_token_stream(response: dict[str, Any], stream: str,
+                      label: str) -> list[int]:
+    values = response.get("greedy_token_ids" if stream == "greedy"
+                          else "teacher_forced")
+    if not isinstance(values, list):
+        raise HarnessError(f"{label} response lacks {stream} token rows")
+    if stream == "teacher":
+        if any(not isinstance(row, dict) or not isinstance(row.get("token_id"), int)
+               for row in values):
+            raise HarnessError(f"{label} response has malformed teacher token rows")
+        return [row["token_id"] for row in values]
+    if any(not isinstance(token, int) for token in values):
+        raise HarnessError(f"{label} response has malformed greedy token rows")
+    return values
+
+
+def qwen_argmax_gate(reference_root: Path, candidate_root: Path) -> dict[str, Any]:
+    """Check full-suite greedy sequences and greedy/teacher argmax token IDs."""
+    reference = qwen_oracle_cases(reference_root, "reference")
+    candidate = qwen_oracle_cases(candidate_root, "candidate")
+    if [case for case, _ in reference] != [case for case, _ in candidate]:
+        raise HarnessError("reference and candidate Qwen oracle case orders differ")
+
+    case_reports = []
+    greedy_equal = teacher_equal = greedy_total = teacher_total = 0
+    sequences_equal = 0
+    for (case_id, left), (_, right) in zip(reference, candidate):
+        if left.get("canonical_prompt_token_ids") != right.get("canonical_prompt_token_ids"):
+            raise HarnessError(f"canonical prompt tokens differ for case {case_id}")
+        if left.get("teacher_forced_source") != right.get("teacher_forced_source"):
+            raise HarnessError(f"teacher-forced sources differ for case {case_id}")
+        left_greedy = qwen_token_stream(left, "greedy", f"reference {case_id}")
+        right_greedy = qwen_token_stream(right, "greedy", f"candidate {case_id}")
+        left_teacher = qwen_token_stream(left, "teacher", f"reference {case_id}")
+        right_teacher = qwen_token_stream(right, "teacher", f"candidate {case_id}")
+        if len(left_greedy) != len(right_greedy):
+            raise HarnessError(f"greedy row counts differ for case {case_id}")
+        if len(left_teacher) != len(right_teacher):
+            raise HarnessError(f"teacher row counts differ for case {case_id}")
+
+        greedy_matches = [a == b for a, b in zip(left_greedy, right_greedy)]
+        teacher_matches = [a == b for a, b in zip(left_teacher, right_teacher)]
+        sequence_equal = all(greedy_matches)
+        sequences_equal += sequence_equal
+        greedy_equal += sum(greedy_matches)
+        teacher_equal += sum(teacher_matches)
+        greedy_total += len(greedy_matches)
+        teacher_total += len(teacher_matches)
+        case_reports.append({
+            "id": case_id,
+            "sequence_equal": sequence_equal,
+            "greedy_argmax_equal": sum(greedy_matches),
+            "greedy_argmax_total": len(greedy_matches),
+            "teacher_argmax_equal": sum(teacher_matches),
+            "teacher_argmax_total": len(teacher_matches),
+            "first_greedy_difference": next(
+                (index for index, equal in enumerate(greedy_matches) if not equal), None
+            ),
+            "first_teacher_difference": next(
+                (index for index, equal in enumerate(teacher_matches) if not equal), None
+            ),
+        })
+
+    argmax_equal = greedy_equal + teacher_equal
+    argmax_total = greedy_total + teacher_total
+    passed = sequences_equal == len(reference) and argmax_equal == argmax_total
+    return {
+        "format": "ds4-qwen-argmax-gate-v1",
+        "status": "PASS" if passed else "FAIL",
+        "reference": str(reference_root), "candidate": str(candidate_root),
+        "sequences": {"equal": sequences_equal, "total": len(reference)},
+        "argmax": {
+            "equal": argmax_equal, "total": argmax_total,
+            "greedy_equal": greedy_equal, "greedy_total": greedy_total,
+            "teacher_equal": teacher_equal, "teacher_total": teacher_total,
+        },
+        "cases": case_reports,
+    }
 
 
 def correctness_artifacts(context: int, generation_tokens: int) -> list[tuple[str, str]]:
@@ -1307,6 +1571,75 @@ def cmd_drift(args: argparse.Namespace) -> int:
     return 0 if report["status"] == "PASS" else 1
 
 
+def cmd_q8_1_parity(args: argparse.Namespace) -> int:
+    report = q8_1_parity(Path(args.left), Path(args.right))
+    consumed = report["mmvq_consumed_fields"]
+    metadata = report["metadata_ds_y"]
+    print(
+        f"{report['status']}: blocks={report['blocks']} "
+        f"ds.x_diff={consumed['scale_ds_x_differing_blocks']} "
+        f"qs_diff={consumed['qs_differing_bytes']} "
+        f"qsum_diff={consumed['qsum_differing_blocks']} "
+        f"ds.y_diff={metadata['differing_blocks']} (not consumed by decode MMVQ)"
+    )
+    if args.output:
+        Path(args.output).write_text(json.dumps(report, indent=2) + "\n",
+                                     encoding="utf-8")
+    return 0 if report["status"] == "PASS" else 1
+
+
+def cmd_qwen_logits_row(args: argparse.Namespace) -> int:
+    runs = []
+    for item in args.run:
+        if "=" not in item:
+            raise HarnessError(f"Qwen run must be LABEL=PATH: {item}")
+        label, path = item.split("=", 1)
+        if not label or not path:
+            raise HarnessError(f"Qwen run must be LABEL=PATH: {item}")
+        runs.append((label, Path(path)))
+    report = qwen_logits_row_report(
+        runs, args.case, args.stream, args.row, args.vocab,
+        args.top_k, args.focus_token,
+    )
+    for run in report["runs"]:
+        suffix = (f" margin={run['focus_margin']:+.9g}"
+                  if "focus_margin" in run else "")
+        print(f"{run['label']}: argmax={run['argmax']}{suffix}")
+    for pair in report["comparisons"]:
+        print(
+            f"  {pair['reference']} vs {pair['candidate']}: "
+            f"mae={pair['centered_mae']:.6g} "
+            f"cosine={pair['cosine_similarity']:.9f} "
+            f"top{pair['top_k']}={pair['top_k_overlap']:.3f}"
+        )
+    if args.output:
+        Path(args.output).write_text(json.dumps(report, indent=2) + "\n",
+                                     encoding="utf-8")
+    return 0
+
+
+def cmd_qwen_argmax_gate(args: argparse.Namespace) -> int:
+    report = qwen_argmax_gate(Path(args.reference), Path(args.candidate))
+    sequences, argmax = report["sequences"], report["argmax"]
+    print(
+        f"{report['status']}: sequences={sequences['equal']}/{sequences['total']} "
+        f"argmax={argmax['equal']}/{argmax['total']} "
+        f"(greedy={argmax['greedy_equal']}/{argmax['greedy_total']}, "
+        f"teacher={argmax['teacher_equal']}/{argmax['teacher_total']})"
+    )
+    for case in report["cases"]:
+        if not case["sequence_equal"] or (
+                case["teacher_argmax_equal"] != case["teacher_argmax_total"]):
+            print(
+                f"  {case['id']}: greedy_first={case['first_greedy_difference']} "
+                f"teacher_first={case['first_teacher_difference']}"
+            )
+    if args.output:
+        Path(args.output).write_text(json.dumps(report, indent=2) + "\n",
+                                     encoding="utf-8")
+    return 0 if report["status"] == "PASS" else 1
+
+
 def cmd_model_cost(args: argparse.Namespace) -> int:
     snapshot = (
         inspect_model_snapshot(Path(args.model))
@@ -1474,6 +1807,38 @@ def build_parser() -> argparse.ArgumentParser:
     drift.add_argument("--top-k", type=int, default=20)
     drift.add_argument("--output")
     drift.set_defaults(func=cmd_drift)
+    q8_parity = commands.add_parser(
+        "q8-1-parity",
+        help="compare packed Q8_1 MMVQ fields while auditing ds.y separately",
+    )
+    q8_parity.add_argument("left")
+    q8_parity.add_argument("right")
+    q8_parity.add_argument("--output")
+    q8_parity.set_defaults(func=cmd_q8_1_parity)
+    qwen_row = commands.add_parser(
+        "qwen-logits-row",
+        help="compare one full-vocabulary row from labeled Qwen oracle runs",
+    )
+    qwen_row.add_argument("--run", action="append", required=True,
+                          metavar="LABEL=PATH")
+    qwen_row.add_argument("--case", required=True)
+    qwen_row.add_argument("--stream", choices=("greedy", "teacher"),
+                          default="greedy")
+    qwen_row.add_argument("--row", type=int, required=True)
+    qwen_row.add_argument("--vocab", type=int, default=248320)
+    qwen_row.add_argument("--top-k", type=int, default=20)
+    qwen_row.add_argument("--focus-token", action="append", type=int,
+                          default=[])
+    qwen_row.add_argument("--output")
+    qwen_row.set_defaults(func=cmd_qwen_logits_row)
+    qwen_gate = commands.add_parser(
+        "qwen-argmax-gate",
+        help="gate Qwen oracle suites on sequences and greedy/teacher argmax",
+    )
+    qwen_gate.add_argument("reference")
+    qwen_gate.add_argument("candidate")
+    qwen_gate.add_argument("--output")
+    qwen_gate.set_defaults(func=cmd_qwen_argmax_gate)
     cost = commands.add_parser(
         "model-cost", help="estimate Qwen FLOP, bytes, state and roofline floors"
     )

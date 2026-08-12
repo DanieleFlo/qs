@@ -27500,6 +27500,52 @@ __global__ static void qwen35_q8_1_quantize_kernel(
     }
 }
 
+__global__ static void qwen35_q8_1_r8_quantize_kernel(
+        qwen35_block_q8_1 *out0,
+        qwen35_block_q8_1 *out1,
+        const float *x,
+        uint32_t blocks_qk) {
+    const uint32_t lane = threadIdx.x & 31u;
+    const uint32_t group = blockIdx.x * 8u + (threadIdx.x >> 5u);
+    if (blockIdx.x >= blocks_qk) return;
+    const float value = x[(uint64_t)group * 32u + lane];
+    float maximum = fabsf(value);
+#pragma unroll
+    for (uint32_t stride = 16u; stride != 0u; stride >>= 1u)
+        maximum = fmaxf(maximum,
+                        __shfl_down_sync(0xffffffffu, maximum, stride));
+    maximum = __shfl_sync(0xffffffffu, maximum, 0);
+    const float d0 = maximum > 0.0f ? maximum / 127.0f : 0.0f;
+    int q0 = d0 > 0.0f ? __float2int_rn(value / d0) : 0;
+    q0 = max(-127, min(127, q0));
+    out0[group].qs[lane] = (int8_t)q0;
+
+    const float d0_stored = __half2float(__float2half_rn(d0));
+    const float residual = value - d0_stored * (float)q0;
+    maximum = fabsf(residual);
+#pragma unroll
+    for (uint32_t stride = 16u; stride != 0u; stride >>= 1u)
+        maximum = fmaxf(maximum,
+                        __shfl_down_sync(0xffffffffu, maximum, stride));
+    maximum = __shfl_sync(0xffffffffu, maximum, 0);
+    const float d1 = maximum > 0.0f ? maximum / 127.0f : 0.0f;
+    int q1 = d1 > 0.0f ? __float2int_rn(residual / d1) : 0;
+    q1 = max(-127, min(127, q1));
+    out1[group].qs[lane] = (int8_t)q1;
+
+    int qsum0 = q0;
+    int qsum1 = q1;
+#pragma unroll
+    for (uint32_t stride = 16u; stride != 0u; stride >>= 1u) {
+        qsum0 += __shfl_down_sync(0xffffffffu, qsum0, stride);
+        qsum1 += __shfl_down_sync(0xffffffffu, qsum1, stride);
+    }
+    if (lane == 0u) {
+        out0[group].ds = __floats2half2_rn(d0, d0 * (float)qsum0);
+        out1[group].ds = __floats2half2_rn(d1, d1 * (float)qsum1);
+    }
+}
+
 __device__ __forceinline__ static float qwen35_dot_q4_k_q8_1_mmvq(
         const cuda_block_q4_K *wb,
         const qwen35_block_q8_1 *xq,
@@ -27596,6 +27642,122 @@ __device__ __forceinline__ static float qwen35_dot_q5_k_q8_1_mmvq(
            dev_f16_to_f32(wb->dmin) * sum_m;
 }
 
+__device__ __forceinline__ static float2 qwen35_dot_q4_k_q8_1_r8_mmvq(
+        const cuda_block_q4_K *wb,
+        const qwen35_block_q8_1 *xq0,
+        const qwen35_block_q8_1 *xq1,
+        uint32_t iqs) {
+    const uint32_t bq8_offset = 2u * ((iqs / 2u) / 4u);
+    const uint32_t qword = (iqs / 2u) & 3u;
+    const int *q4 = (const int *)(wb->qs + 16u * bq8_offset + 4u * qword);
+    const int v0 = q4[0];
+    const int v1 = q4[4];
+    const uint16_t *scales = (const uint16_t *)wb->scales;
+    uint16_t aux[2];
+    const uint32_t j = bq8_offset / 2u;
+    if (j < 2u) {
+        aux[0] = scales[j + 0u] & 0x3f3fu;
+        aux[1] = scales[j + 2u] & 0x3f3fu;
+    } else {
+        aux[0] = (uint16_t)(((scales[j + 2u] >> 0u) & 0x0f0fu) |
+                            ((scales[j - 2u] & 0xc0c0u) >> 2u));
+        aux[1] = (uint16_t)(((scales[j + 2u] >> 4u) & 0x0f0fu) |
+                            ((scales[j - 0u] & 0xc0c0u) >> 2u));
+    }
+    const uint8_t *sc = (const uint8_t *)aux;
+    const uint8_t *mn = sc + 2;
+    float sum_d0 = 0.0f, sum_m0 = 0.0f;
+    float sum_d1 = 0.0f, sum_m1 = 0.0f;
+#pragma unroll
+    for (uint32_t i = 0; i < 2u; i++) {
+        const qwen35_block_q8_1 *xb0 = xq0 + bq8_offset + i;
+        const qwen35_block_q8_1 *xb1 = xq1 + bq8_offset + i;
+        const int *q80 = (const int *)xb0->qs + qword;
+        const int *q81 = (const int *)xb1->qs + qword;
+        const int u00 = q80[0], u01 = q80[4];
+        const int u10 = q81[0], u11 = q81[4];
+        const int n0 = (v0 >> (4u * i)) & 0x0f0f0f0f;
+        const int n1 = (v1 >> (4u * i)) & 0x0f0f0f0f;
+        const int dot0 = __dp4a(n1, u01, __dp4a(n0, u00, 0));
+        const int dot1 = __dp4a(n1, u11, __dp4a(n0, u10, 0));
+        const int qsum0 = __dp4a(0x01010101, u01,
+                                 __dp4a(0x01010101, u00, 0));
+        const int qsum1 = __dp4a(0x01010101, u11,
+                                 __dp4a(0x01010101, u10, 0));
+        const float d80 = __half2float(__low2half(xb0->ds));
+        const float d81 = __half2float(__low2half(xb1->ds));
+        sum_d0 += d80 * (float)((int)sc[i] * dot0);
+        sum_m0 += d80 * (float)((int)mn[i] * qsum0);
+        sum_d1 += d81 * (float)((int)sc[i] * dot1);
+        sum_m1 += d81 * (float)((int)mn[i] * qsum1);
+    }
+    const float d = dev_f16_to_f32(wb->d);
+    const float dmin = dev_f16_to_f32(wb->dmin);
+    return make_float2(d * sum_d0 - dmin * sum_m0,
+                       d * sum_d1 - dmin * sum_m1);
+}
+
+__device__ __forceinline__ static float2 qwen35_dot_q5_k_q8_1_r8_mmvq(
+        const cuda_block_q5_K *wb,
+        const qwen35_block_q8_1 *xq0,
+        const qwen35_block_q8_1 *xq1,
+        uint32_t iqs) {
+    const uint32_t bq8_offset = 2u * ((iqs / 2u) / 4u);
+    const uint32_t qword = (iqs / 2u) & 3u;
+    const int *ql = (const int *)(wb->qs + 16u * bq8_offset + 4u * qword);
+    const int *qh = (const int *)(wb->qh + 4u * qword);
+    const int vl0 = ql[0], vl1 = ql[4];
+    const int vh0 = qh[0] >> bq8_offset;
+    const int vh1 = qh[4] >> bq8_offset;
+    const uint16_t *scales = (const uint16_t *)wb->scales;
+    uint16_t aux[2];
+    const uint32_t j = bq8_offset / 2u;
+    if (j < 2u) {
+        aux[0] = scales[j + 0u] & 0x3f3fu;
+        aux[1] = scales[j + 2u] & 0x3f3fu;
+    } else {
+        aux[0] = (uint16_t)(((scales[j + 2u] >> 0u) & 0x0f0fu) |
+                            ((scales[j - 2u] & 0xc0c0u) >> 2u));
+        aux[1] = (uint16_t)(((scales[j + 2u] >> 4u) & 0x0f0fu) |
+                            ((scales[j - 0u] & 0xc0c0u) >> 2u));
+    }
+    const uint8_t *sc = (const uint8_t *)aux;
+    const uint8_t *mn = sc + 2;
+    float sum_d0 = 0.0f, sum_m0 = 0.0f;
+    float sum_d1 = 0.0f, sum_m1 = 0.0f;
+#pragma unroll
+    for (uint32_t i = 0; i < 2u; i++) {
+        const qwen35_block_q8_1 *xb0 = xq0 + bq8_offset + i;
+        const qwen35_block_q8_1 *xb1 = xq1 + bq8_offset + i;
+        const int *q80 = (const int *)xb0->qs + qword;
+        const int *q81 = (const int *)xb1->qs + qword;
+        const int u00 = q80[0], u01 = q80[4];
+        const int u10 = q81[0], u11 = q81[4];
+        const int low0 = (vl0 >> (4u * i)) & 0x0f0f0f0f;
+        const int low1 = (vl1 >> (4u * i)) & 0x0f0f0f0f;
+        const int high0 = ((vh0 >> i) << 4) & 0x10101010;
+        const int high1 = ((vh1 >> i) << 4) & 0x10101010;
+        const int q50 = low0 | high0;
+        const int q51 = low1 | high1;
+        const int dot0 = __dp4a(q50, u00, __dp4a(q51, u01, 0));
+        const int dot1 = __dp4a(q50, u10, __dp4a(q51, u11, 0));
+        const int qsum0 = __dp4a(0x01010101, u00,
+                                 __dp4a(0x01010101, u01, 0));
+        const int qsum1 = __dp4a(0x01010101, u10,
+                                 __dp4a(0x01010101, u11, 0));
+        const float d80 = __half2float(__low2half(xb0->ds));
+        const float d81 = __half2float(__low2half(xb1->ds));
+        sum_d0 += d80 * (float)((int)sc[i] * dot0);
+        sum_m0 += d80 * (float)((int)mn[i] * qsum0);
+        sum_d1 += d81 * (float)((int)sc[i] * dot1);
+        sum_m1 += d81 * (float)((int)mn[i] * qsum1);
+    }
+    const float d = dev_f16_to_f32(wb->d);
+    const float dmin = dev_f16_to_f32(wb->dmin);
+    return make_float2(d * sum_d0 - dmin * sum_m0,
+                       d * sum_d1 - dmin * sum_m1);
+}
+
 template <typename Block, bool Q5>
 __global__ static void qwen35_qk_q8_1_mmvq_kernel(
         float *out,
@@ -27628,6 +27790,50 @@ __global__ static void qwen35_qk_q8_1_mmvq_kernel(
     for (uint32_t i = 0; i < 3u; i++) acc += other_warps[i][lane];
     acc = warp_sum_f32(acc);
     if (lane == 0u) out[row] = acc;
+}
+
+template <typename Block, bool Q5>
+__global__ static void qwen35_qk_q8_1_r8_mmvq_kernel(
+        float *out,
+        const Block *w,
+        const qwen35_block_q8_1 *xq0,
+        const qwen35_block_q8_1 *xq1,
+        uint32_t n_blocks,
+        uint32_t out_dim) {
+    const uint32_t tid = threadIdx.x;
+    const uint32_t lane = tid & 31u;
+    const uint32_t warp = tid >> 5u;
+    const uint32_t row = blockIdx.x;
+    if (row >= out_dim) return;
+    const Block *wr = w + (uint64_t)row * n_blocks;
+    const uint32_t iqs = 2u * (tid & 15u);
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t b = tid / 16u; b < n_blocks; b += 8u) {
+        const float2 dot = Q5 ? qwen35_dot_q5_k_q8_1_r8_mmvq(
+                (const cuda_block_q5_K *)(wr + b), xq0 + b * 8u,
+                xq1 + b * 8u, iqs) : qwen35_dot_q4_k_q8_1_r8_mmvq(
+                (const cuda_block_q4_K *)(wr + b), xq0 + b * 8u,
+                xq1 + b * 8u, iqs);
+        acc0 += dot.x;
+        acc1 += dot.y;
+    }
+    __shared__ float other_warps0[3][32];
+    __shared__ float other_warps1[3][32];
+    if (warp != 0u) {
+        other_warps0[warp - 1u][lane] = acc0;
+        other_warps1[warp - 1u][lane] = acc1;
+    }
+    __syncthreads();
+    if (warp != 0u) return;
+#pragma unroll
+    for (uint32_t i = 0; i < 3u; i++) {
+        acc0 += other_warps0[i][lane];
+        acc1 += other_warps1[i][lane];
+    }
+    acc0 = warp_sum_f32(acc0);
+    acc1 = warp_sum_f32(acc1);
+    if (lane == 0u) out[row] = acc0 + acc1;
 }
 
 __device__ __forceinline__ static int qwen35_get_int_b2(
@@ -27663,6 +27869,39 @@ __device__ __forceinline__ static float qwen35_dot_q6_k_q8_1_mmvq(
     return dev_f16_to_f32(wb->d) * sum;
 }
 
+__device__ __forceinline__ static float2 qwen35_dot_q6_k_q8_1_r8_mmvq(
+        const cuda_block_q6_K *wb,
+        const qwen35_block_q8_1 *xq0,
+        const qwen35_block_q8_1 *xq1,
+        uint32_t iqs) {
+    const uint32_t bq8_offset =
+        4u * (iqs / 16u) + ((iqs % 16u) / 8u);
+    const uint32_t scale_offset =
+        8u * (iqs / 16u) + ((iqs % 16u) / 4u);
+    const uint32_t vh_shift = 2u * ((iqs % 16u) / 8u);
+    const int vl = qwen35_get_int_b2(wb->ql, iqs);
+    const int vh = qwen35_get_int_b2(
+        wb->qh, 8u * (iqs / 16u) + iqs % 8u) >> vh_shift;
+    float sum0 = 0.0f, sum1 = 0.0f;
+#pragma unroll
+    for (uint32_t i = 0; i < 2u; i++) {
+        const qwen35_block_q8_1 *xb0 = xq0 + bq8_offset + 2u * i;
+        const qwen35_block_q8_1 *xb1 = xq1 + bq8_offset + 2u * i;
+        const int u0 = ((const int *)xb0->qs)[iqs % 8u];
+        const int u1 = ((const int *)xb1->qs)[iqs % 8u];
+        const int low = (vl >> (4u * i)) & 0x0f0f0f0f;
+        const int high = ((vh >> (4u * i)) << 4) & 0x30303030;
+        const int q6 = __vsubss4(low | high, 0x20202020);
+        const int scale = (int)wb->scales[scale_offset + 4u * i];
+        const float d80 = __half2float(__low2half(xb0->ds));
+        const float d81 = __half2float(__low2half(xb1->ds));
+        sum0 += d80 * (float)(__dp4a(q6, u0, 0) * scale);
+        sum1 += d81 * (float)(__dp4a(q6, u1, 0) * scale);
+    }
+    const float d = dev_f16_to_f32(wb->d);
+    return make_float2(d * sum0, d * sum1);
+}
+
 __global__ static void qwen35_q6_k_q8_1_mmvq_kernel(
         float *out,
         const cuda_block_q6_K *w,
@@ -27687,6 +27926,46 @@ __global__ static void qwen35_q6_k_q8_1_mmvq_kernel(
     for (uint32_t i = 0; i < 3u; i++) acc += other_warps[i][lane];
     acc = warp_sum_f32(acc);
     if (lane == 0u) out[row] = acc;
+}
+
+__global__ static void qwen35_q6_k_q8_1_r8_mmvq_kernel(
+        float *out,
+        const cuda_block_q6_K *w,
+        const qwen35_block_q8_1 *xq0,
+        const qwen35_block_q8_1 *xq1,
+        uint32_t n_blocks,
+        uint32_t out_dim) {
+    const uint32_t tid = threadIdx.x;
+    const uint32_t lane = tid & 31u;
+    const uint32_t warp = tid >> 5u;
+    const uint32_t row = blockIdx.x;
+    if (row >= out_dim) return;
+    const cuda_block_q6_K *wr = w + (uint64_t)row * n_blocks;
+    const uint32_t iqs = tid & 31u;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t b = tid / 32u; b < n_blocks; b += 4u) {
+        const float2 dot = qwen35_dot_q6_k_q8_1_r8_mmvq(
+            wr + b, xq0 + b * 8u, xq1 + b * 8u, iqs);
+        acc0 += dot.x;
+        acc1 += dot.y;
+    }
+    __shared__ float other_warps0[3][32];
+    __shared__ float other_warps1[3][32];
+    if (warp != 0u) {
+        other_warps0[warp - 1u][lane] = acc0;
+        other_warps1[warp - 1u][lane] = acc1;
+    }
+    __syncthreads();
+    if (warp != 0u) return;
+#pragma unroll
+    for (uint32_t i = 0; i < 3u; i++) {
+        acc0 += other_warps0[i][lane];
+        acc1 += other_warps1[i][lane];
+    }
+    acc0 = warp_sum_f32(acc0);
+    acc1 = warp_sum_f32(acc1);
+    if (lane == 0u) out[row] = acc0 + acc1;
 }
 
 __device__ __forceinline__ static int dev_dot_q5_high_32(
@@ -28126,6 +28405,61 @@ __global__ static void qwen35_q4_k_q8_k_cpu_diag_kernel(
     out[tok * out_dim + row] = sumf;
 }
 
+typedef struct {
+    cudaEvent_t start;
+    cudaEvent_t quantized;
+    cudaEvent_t done;
+    int active;
+    uint32_t weight_type;
+} qwen35_q8_1_r8_profile;
+
+static void qwen35_q8_1_r8_profile_end(qwen35_q8_1_r8_profile *profile,
+                                       uint64_t in_dim,
+                                       uint64_t out_dim,
+                                       int report) {
+    if (!profile->active) return;
+    if (report && cudaEventRecord(profile->done, 0) == cudaSuccess &&
+        cudaEventSynchronize(profile->done) == cudaSuccess) {
+        float quant_ms = 0.0f, mmvq_ms = 0.0f;
+        (void)cudaEventElapsedTime(&quant_ms, profile->start,
+                                   profile->quantized);
+        (void)cudaEventElapsedTime(&mmvq_ms, profile->quantized,
+                                   profile->done);
+        fprintf(stderr,
+                "QWEN_Q8_1_R8_PROFILE weight=Q%u_K in=%llu out=%llu "
+                "quant=%.6fms mmvq=%.6fms total=%.6fms\n",
+                profile->weight_type - 8u,
+                (unsigned long long)in_dim, (unsigned long long)out_dim,
+                quant_ms, mmvq_ms, quant_ms + mmvq_ms);
+    }
+    (void)cudaEventDestroy(profile->start);
+    (void)cudaEventDestroy(profile->quantized);
+    (void)cudaEventDestroy(profile->done);
+    profile->active = 0;
+}
+
+static qwen35_q8_1_r8_profile qwen35_q8_1_r8_profile_begin(
+        uint32_t weight_type) {
+    qwen35_q8_1_r8_profile result = {NULL, NULL, NULL, 0, weight_type};
+    static int profiled[3] = {0, 0, 0};
+    const uint32_t slot = weight_type - 12u;
+    if (slot >= 3u || profiled[slot] ||
+        getenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8_PROFILE") == NULL) return result;
+    if (cudaEventCreate(&result.start) != cudaSuccess ||
+        cudaEventCreate(&result.quantized) != cudaSuccess ||
+        cudaEventCreate(&result.done) != cudaSuccess ||
+        cudaEventRecord(result.start, 0) != cudaSuccess) {
+        if (result.start) (void)cudaEventDestroy(result.start);
+        if (result.quantized) (void)cudaEventDestroy(result.quantized);
+        if (result.done) (void)cudaEventDestroy(result.done);
+        result.start = result.quantized = result.done = NULL;
+        return result;
+    }
+    profiled[slot] = 1;
+    result.active = 1;
+    return result;
+}
+
 static uint32_t g_cuda_qwen35_decode_layer = 0u;
 
 extern "C" void ds4_gpu_qwen35_set_decode_layer(uint32_t layer) {
@@ -28214,18 +28548,46 @@ static int qwen35_quant_k_matmul(
         return cuda_ok(cudaGetLastError(), "qwen35 Q4/Q5_K Q8_K decode matvec");
     }
 
+    const bool q8_1_r8 =
+        getenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8") != NULL;
     if ((weight_type == 12u || weight_type == 13u) && n_tok == 1u &&
-        getenv("DS4_CUDA_QWEN_DECODE_Q8_1") != NULL) {
+        (getenv("DS4_CUDA_QWEN_DECODE_Q8_1") != NULL || q8_1_r8)) {
         const uint32_t blocks = (uint32_t)(in_dim / CUDA_QK_K);
+        const uint64_t xq_bytes =
+            (uint64_t)blocks * 8u * sizeof(qwen35_block_q8_1);
         qwen35_block_q8_1 *xq = (qwen35_block_q8_1 *)cuda_tmp_alloc_on(
-            cuda_current_tier(), (uint64_t)blocks * 8u * sizeof(*xq),
+            cuda_current_tier(), xq_bytes * (q8_1_r8 ? 2u : 1u),
             "qwen35 decode Q8_1 activation");
         if (!xq) return 0;
-        qwen35_q8_1_quantize_kernel<<<blocks, 256>>>(
-            xq, (const float *)x->ptr, blocks);
+        qwen35_block_q8_1 *xq1 = q8_1_r8 ?
+            (qwen35_block_q8_1 *)((char *)xq + xq_bytes) : NULL;
+        qwen35_q8_1_r8_profile r8_profile = {NULL, NULL, NULL, 0, weight_type};
+        if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type);
+        if (q8_1_r8) {
+            qwen35_q8_1_r8_quantize_kernel<<<blocks, 256>>>(
+                xq, xq1, (const float *)x->ptr, blocks);
+        } else {
+            qwen35_q8_1_quantize_kernel<<<blocks, 256>>>(
+                xq, (const float *)x->ptr, blocks);
+        }
         if (!cuda_ok(cudaGetLastError(),
-                     "qwen35 decode Q8_1 activation quantize")) return 0;
-        if (weight_type == 12u) {
+                     "qwen35 decode Q8_1 activation quantize")) {
+            qwen35_q8_1_r8_profile_end(&r8_profile, in_dim, out_dim, 0);
+            return 0;
+        }
+        if (r8_profile.active)
+            (void)cudaEventRecord(r8_profile.quantized, 0);
+        if (q8_1_r8 && weight_type == 12u) {
+            qwen35_qk_q8_1_r8_mmvq_kernel<cuda_block_q4_K, false>
+                <<<(uint32_t)out_dim, 128>>>(
+                    (float *)out->ptr, (const cuda_block_q4_K *)w, xq, xq1,
+                    blocks, (uint32_t)out_dim);
+        } else if (q8_1_r8 && weight_type == 13u) {
+            qwen35_qk_q8_1_r8_mmvq_kernel<cuda_block_q5_K, true>
+                <<<(uint32_t)out_dim, 128>>>(
+                    (float *)out->ptr, (const cuda_block_q5_K *)w, xq, xq1,
+                    blocks, (uint32_t)out_dim);
+        } else if (weight_type == 12u) {
             qwen35_qk_q8_1_mmvq_kernel<cuda_block_q4_K, false>
                 <<<(uint32_t)out_dim, 128>>>(
                     (float *)out->ptr, (const cuda_block_q4_K *)w, xq,
@@ -28236,7 +28598,10 @@ static int qwen35_quant_k_matmul(
                     (float *)out->ptr, (const cuda_block_q5_K *)w, xq,
                     blocks, (uint32_t)out_dim);
         }
-        return cuda_ok(cudaGetLastError(), "qwen35 Q4/Q5_K Q8_1 MMVQ decode");
+        const int ok = cuda_ok(cudaGetLastError(),
+                               "qwen35 Q4/Q5_K Q8_1 MMVQ decode");
+        qwen35_q8_1_r8_profile_end(&r8_profile, in_dim, out_dim, ok);
+        return ok;
     }
 
     if (weight_type == 12u && n_tok == 1u &&
@@ -28298,20 +28663,45 @@ static int qwen35_quant_k_matmul(
     }
 
     if (weight_type == 14u && n_tok == 1u &&
-        getenv("DS4_CUDA_QWEN_DECODE_Q6_Q8_1") != NULL) {
+        (getenv("DS4_CUDA_QWEN_DECODE_Q6_Q8_1") != NULL || q8_1_r8)) {
         const uint32_t blocks = (uint32_t)(in_dim / CUDA_QK_K);
+        const uint64_t xq_bytes =
+            (uint64_t)blocks * 8u * sizeof(qwen35_block_q8_1);
         qwen35_block_q8_1 *xq = (qwen35_block_q8_1 *)cuda_tmp_alloc_on(
-            cuda_current_tier(), (uint64_t)blocks * 8u * sizeof(*xq),
+            cuda_current_tier(), xq_bytes * (q8_1_r8 ? 2u : 1u),
             "qwen35 output Q8_1 activation");
         if (!xq) return 0;
-        qwen35_q8_1_quantize_kernel<<<blocks, 256>>>(
-            xq, (const float *)x->ptr, blocks);
+        qwen35_block_q8_1 *xq1 = q8_1_r8 ?
+            (qwen35_block_q8_1 *)((char *)xq + xq_bytes) : NULL;
+        qwen35_q8_1_r8_profile r8_profile = {NULL, NULL, NULL, 0, weight_type};
+        if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type);
+        if (q8_1_r8) {
+            qwen35_q8_1_r8_quantize_kernel<<<blocks, 256>>>(
+                xq, xq1, (const float *)x->ptr, blocks);
+        } else {
+            qwen35_q8_1_quantize_kernel<<<blocks, 256>>>(
+                xq, (const float *)x->ptr, blocks);
+        }
         if (!cuda_ok(cudaGetLastError(),
-                     "qwen35 output Q8_1 activation quantize")) return 0;
-        qwen35_q6_k_q8_1_mmvq_kernel<<<(uint32_t)out_dim, 128>>>(
-            (float *)out->ptr, (const cuda_block_q6_K *)w, xq,
-            blocks, (uint32_t)out_dim);
-        return cuda_ok(cudaGetLastError(), "qwen35 Q6_K Q8_1 output MMVQ");
+                     "qwen35 output Q8_1 activation quantize")) {
+            qwen35_q8_1_r8_profile_end(&r8_profile, in_dim, out_dim, 0);
+            return 0;
+        }
+        if (r8_profile.active)
+            (void)cudaEventRecord(r8_profile.quantized, 0);
+        if (q8_1_r8) {
+            qwen35_q6_k_q8_1_r8_mmvq_kernel<<<(uint32_t)out_dim, 128>>>(
+                (float *)out->ptr, (const cuda_block_q6_K *)w, xq, xq1,
+                blocks, (uint32_t)out_dim);
+        } else {
+            qwen35_q6_k_q8_1_mmvq_kernel<<<(uint32_t)out_dim, 128>>>(
+                (float *)out->ptr, (const cuda_block_q6_K *)w, xq,
+                blocks, (uint32_t)out_dim);
+        }
+        const int ok = cuda_ok(cudaGetLastError(),
+                               "qwen35 Q6_K Q8_1 output MMVQ");
+        qwen35_q8_1_r8_profile_end(&r8_profile, in_dim, out_dim, ok);
+        return ok;
     }
 
     if (weight_type == 14u && n_tok == 1u &&

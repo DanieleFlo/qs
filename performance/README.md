@@ -158,6 +158,53 @@ massimo dei logits centrati e cosine similarity. Gli artefatti
 confronto dei logits dopo l'ultimo token; una divergenza della sequenza è FAIL
 anche quando il frontier prefill è identico.
 
+Per la parity del quantizzatore Q8_1, il confronto dei dump packed distingue
+`ds.x` e i 32 `qs` realmente consumati dal decode MMVQ dal metadata `ds.y`:
+
+    python3 tools/perf_harness.py q8-1-parity \
+      performance-results/ds4-q8_1.bin \
+      performance-results/llama-q8_1.bin \
+      --output performance-results/q8-1-parity.json
+
+Il comando fallisce se scala, `qs` o `qsum` differiscono. Una differenza nel
+solo `ds.y` resta visibile nel report, ma non viene promossa a causa del dot
+MMVQ finché quel campo non entra nel dataflow del kernel osservato.
+
+Per evitare script ad hoc quando si ripete la triangolazione A/B/C, una riga
+full-vocabulary di più run Qwen si confronta con etichette e token sentinella:
+
+    python3 tools/perf_harness.py qwen-logits-row \
+      --run A=performance-results/qwen-a \
+      --run B=performance-results/qwen-b \
+      --run C=performance-results/qwen-c \
+      --case multi_turn_preserve_thinking --stream greedy --row 3 \
+      --focus-token 310 --focus-token 728 --output performance-results/abc.json
+
+Il gate semantico di una suite oracle completa non richiede piu script ad hoc:
+
+    python3 tools/perf_harness.py qwen-argmax-gate \
+      gguf-tools/quality-testing/staging/oracles/ds4-q4ks-f32-point1-002 \
+      gguf-tools/quality-testing/staging/oracles/candidate \
+      --output performance-results/qwen-argmax-gate.json
+
+Il report conta separatamente sequenze greedy complete, argmax greedy e argmax
+teacher-forced; con otto casi da 32 step il gate atteso e `8/8` e `512/512`.
+
+Il candidato decode Q8_1-R8 a due stadi resta esplicitamente opt-in:
+
+    DS4_CUDA_QWEN_DECODE_Q8_1_R8=1 ./ds4-bench \
+      --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
+      --prompt-file tests/long_context_story_prompt.txt \
+      --ctx-start 128 --ctx-max 2048 --gen-tokens 8 --repetitions 3
+
+Il kernel finale decodifica ogni blocco peso una volta sola e alimenta i due
+accumulatori residui, evitando di duplicare unpack, scale e minimi.
+
+Per un audit isolato del primo matvec Q4_K, Q5_K e Q6_K, aggiungere
+`DS4_CUDA_QWEN_DECODE_Q8_1_R8_PROFILE=1`: il runtime stampa separatamente
+durata del quantizzatore e del MMVQ, shape e tipo del peso. Il profiling crea
+eventi e sincronizza soltanto con questo flag; non va usato per il benchmark.
+
 ## Cost model e margine teorico
 
 Il comando legge soltanto header, metadata e directory tensor del GGUF; non

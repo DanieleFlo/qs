@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import array
 import json
 import tempfile
 import unittest
@@ -155,6 +156,99 @@ class PerfHarnessTests(unittest.TestCase):
             self.assertEqual(report["status"], "FAIL")
             self.assertFalse(report["generated_tokens"]["equal"])
             self.assertEqual(report["generated_tokens"]["first_difference"], 1)
+
+    def test_q8_1_parity_ignores_unconsumed_ds_y_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            qs = bytes((index * 17) % 255 for index in range(32))
+            left = b"\x00\x24\x01\x02" + qs
+            right = b"\x00\x24\xfe\xfd" + qs
+            left_path, right_path = root / "left.bin", root / "right.bin"
+            left_path.write_bytes(left)
+            right_path.write_bytes(right)
+            report = HARNESS.q8_1_parity(left_path, right_path)
+            self.assertEqual(report["status"], "PASS")
+            self.assertTrue(report["mmvq_consumed_fields"]["equal"])
+            self.assertEqual(report["metadata_ds_y"]["differing_blocks"], 1)
+
+    def test_q8_1_parity_rejects_quant_byte_difference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            left = bytearray(36)
+            right = bytearray(left)
+            right[19] = 1
+            left_path, right_path = root / "left.bin", root / "right.bin"
+            left_path.write_bytes(left)
+            right_path.write_bytes(right)
+            report = HARNESS.q8_1_parity(left_path, right_path)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertEqual(report["mmvq_consumed_fields"]["qs_differing_bytes"], 1)
+
+    def test_qwen_logits_row_compares_labeled_binary_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for label, last in (("A", 4.0), ("B", 5.0)):
+                run = root / label / "logits"
+                run.mkdir(parents=True)
+                values = array.array("f", [0.0, 1.0, 2.0, 3.0,
+                                            0.0, 1.0, 2.0, last])
+                with (run / "case.greedy.f32").open("wb") as file:
+                    values.tofile(file)
+                runs.append((label, root / label))
+            report = HARNESS.qwen_logits_row_report(
+                runs, "case", "greedy", row=1, vocab=4,
+                top_k=2, focus_tokens=[3, 2],
+            )
+            self.assertEqual(report["runs"][0]["argmax"], 3)
+            self.assertAlmostEqual(report["runs"][1]["focus_margin"], 3.0)
+            self.assertTrue(report["comparisons"][0]["argmax_equal"])
+
+    def test_qwen_argmax_gate_counts_greedy_and_teacher_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for label, greedy, teacher in (
+                    ("reference", [1, 2], [3, 4]),
+                    ("candidate", [1, 2], [3, 4])):
+                run = root / label
+                (run / "responses").mkdir(parents=True)
+                (run / "index.json").write_text(json.dumps({
+                    "cases": [{"id": "case", "response_file": "responses/case.json"}],
+                }), encoding="utf-8")
+                (run / "responses" / "case.json").write_text(json.dumps({
+                    "canonical_prompt_token_ids": [10, 11],
+                    "teacher_forced_source": "continuation",
+                    "greedy_token_ids": greedy,
+                    "teacher_forced": [
+                        {"token_id": token, "logprob": -0.1} for token in teacher
+                    ],
+                }), encoding="utf-8")
+            report = HARNESS.qwen_argmax_gate(root / "reference", root / "candidate")
+            self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["sequences"], {"equal": 1, "total": 1})
+            self.assertEqual(report["argmax"]["equal"], 4)
+            self.assertEqual(report["argmax"]["total"], 4)
+
+    def test_qwen_argmax_gate_reports_teacher_only_divergence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for label, teacher in (("reference", 3), ("candidate", 9)):
+                run = root / label
+                (run / "responses").mkdir(parents=True)
+                (run / "index.json").write_text(json.dumps({
+                    "cases": [{"id": "case", "response_file": "responses/case.json"}],
+                }), encoding="utf-8")
+                (run / "responses" / "case.json").write_text(json.dumps({
+                    "canonical_prompt_token_ids": [10],
+                    "teacher_forced_source": "continuation",
+                    "greedy_token_ids": [1],
+                    "teacher_forced": [{"token_id": teacher, "logprob": -0.1}],
+                }), encoding="utf-8")
+            report = HARNESS.qwen_argmax_gate(root / "reference", root / "candidate")
+            self.assertEqual(report["status"], "FAIL")
+            self.assertEqual(report["sequences"]["equal"], 1)
+            self.assertEqual(report["argmax"]["equal"], 1)
+            self.assertEqual(report["cases"][0]["first_teacher_difference"], 0)
 
     def test_model_cost_separates_memory_decode_and_compute_prefill(self) -> None:
         metadata = {
