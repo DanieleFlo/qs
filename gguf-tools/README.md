@@ -136,7 +136,7 @@ The manifest reads only `model.safetensors.index.json`; it does not require the
 large shard files to be present.  The final summary should report three DSpark
 stages and zero unknown DSpark tensors before attempting a full conversion.
 
-To build the support GGUF used by `ds4 --mtp`, run the DSpark support mode.  This
+To build the support GGUF used by `ds4 --mtp-model FILE`, run the DSpark support mode.  This
 mode writes standalone DSpark metadata plus the packed `mtp.*` tensor payloads;
 it does not require a base-model GGUF template:
 

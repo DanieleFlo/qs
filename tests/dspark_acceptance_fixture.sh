@@ -96,7 +96,7 @@ print_metadata() {
         "$PROPOSAL_QUALITY_GUARD_ACTIVE" "$C_ADD_MIN_ACCEPTED"
     printf '# baseline_command=%s -m %s --tokens %s --temp 0 --nothink -p <fixture-prompt>\n' \
         "$DS4_BIN" "$MODEL" "$TOKENS"
-    printf '# dspark_command=DS4_DSPARK_STATS=1 %s --dspark%s -m %s --mtp %s --tokens %s --temp 0 --nothink -p <fixture-prompt>\n' \
+    printf '# dspark_command=DS4_DSPARK_STATS=1 %s --dspark%s -m %s --mtp-model %s --tokens %s --temp 0 --nothink -p <fixture-prompt>\n' \
         "$DS4_BIN" "${CONFIDENCE:+ --dspark-confidence $CONFIDENCE}" \
         "$MODEL" "$SUPPORT" "$TOKENS"
 }
@@ -132,12 +132,12 @@ run_case() {
     if [ -n "$CONFIDENCE" ]; then
         DS4_DSPARK_STATS=1 \
         "$DS4_BIN" --dspark --dspark-confidence "$CONFIDENCE" \
-            -m "$MODEL" --mtp "$SUPPORT" \
+            -m "$MODEL" --mtp-model "$SUPPORT" \
             --tokens "$TOKENS" --temp 0 --nothink -p "$prompt" \
             >"$dspark_out" 2>"$dspark_err"
     else
         DS4_DSPARK_STATS=1 \
-        "$DS4_BIN" --dspark -m "$MODEL" --mtp "$SUPPORT" \
+        "$DS4_BIN" --dspark -m "$MODEL" --mtp-model "$SUPPORT" \
             --tokens "$TOKENS" --temp 0 --nothink -p "$prompt" \
             >"$dspark_out" 2>"$dspark_err"
     fi

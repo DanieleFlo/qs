@@ -88,8 +88,9 @@ next sections.
 
 ## Model Weights
 
-This implementation only works with the DeepSeek V4 and GLM 5.2 GGUFs listed
-below. It is not a general GGUF loader, and arbitrary GGUF files will not have
+This implementation only works with the audited DeepSeek V4, Qwen3.6 27B, and
+GLM 5.2 GGUFs listed below. It is not a general GGUF loader, and arbitrary GGUF
+files will not have
 the tensor layout, quantization mix, metadata, or optional MTP state expected by
 the engine. The 2 bit quantizations provided here are verified to be actually
 high quality: they behave well, work under coding agents, call tools in a reliable way.
@@ -132,9 +133,21 @@ native tooling can be added later.
 
 `./download_model.sh mtp` fetches the optional speculative decoding support
 GGUF for Flash. It can be used with q2-imatrix, q2-q4-imatrix, and q4-imatrix,
-but must be enabled explicitly with `--mtp`. The current MTP/speculative
+and is selected explicitly with `--mtp-model FILE`. The current MTP/speculative
 decoding path is still experimental: it is correctness-gated and currently
 provides at most a slight speedup, not a meaningful generation-speed win.
+
+Qwen3.6 27B supports both audited quantizations below. Use the GGUF basename as
+the model name in clients connected to `ds4-server`:
+
+```sh
+./ds4 -m gguf/Qwen3.6-27B-Q4_K_S.gguf
+./ds4 -m gguf/Qwen3.6-27B-Q4_K_M.gguf
+```
+
+Qwen MTP is off unless `--mtp` is present. That flag automatically loads
+`gguf/mtp-Qwen3.6-27B-Q4_0.gguf`; `--mtp-model FILE` overrides the support
+GGUF when an explicit path is needed.
 
 GLM 5.2 support is limited to the GGUF files tested by this branch:
 
@@ -168,7 +181,7 @@ and timing counters:
 
 GLM inference uses the Metal, CUDA, or ROCm graph backend. Directional steering,
 `--power` below 100, an explicit `--prefill-chunk`, and the external `--mtp`
-file are not supported for GLM yet.
+or `--mtp-model` support model are not supported for GLM yet.
 
 Then build:
 
@@ -181,7 +194,8 @@ make cpu              # CPU-only diagnostics build
 ```
 
 `./ds4flash.gguf` is the default model path used by both binaries. Pass `-m` to
-select another supported GGUF from `./gguf/`. Run `./ds4 --help` and
+select another supported GGUF from `./gguf/`. The Qwen variants are exposed as
+`Qwen3.6-27B-Q4_K_S.gguf` and `Qwen3.6-27B-Q4_K_M.gguf`. Run `./ds4 --help` and
 `./ds4-server --help` for the full flag list.
 
 ## DSpark Speculative Decoding
@@ -217,11 +231,11 @@ Run it with greedy decoding:
 
 ```sh
 ./ds4 -m ds4flash.gguf \
-  --mtp gguf/DeepSeek-V4-Flash-DSpark-support.gguf \
+  --mtp-model gguf/DeepSeek-V4-Flash-DSpark-support.gguf \
   --dspark --temp 0
 ```
 
-`--mtp` supplies the support GGUF, while `--dspark` selects the DSpark runtime.
+`--mtp-model` supplies the support GGUF, while `--dspark` selects the DSpark runtime.
 The default confidence threshold is `0.9`; it prunes suffixes that are unlikely
 to repay their verification cost. `--dspark-confidence 0` forces fixed
 five-token blocks and is intended for diagnostics. Sampled decoding does not
@@ -955,8 +969,9 @@ conversation. Useful commands are `/help`, `/think`, `/think-max`, `/nothink`,
 and returns to `ds4>`.
 
 The CLI defaults to thinking mode. Use `/nothink` or `--nothink` for direct
-answers. `--mtp MTP.gguf --mtp-draft 2` enables the optional MTP speculative
-path; it is useful only for greedy decoding, currently uses a confidence gate
+answers. For Qwen, `--mtp --mtp-draft 2` enables the optional MTP speculative
+path and loads the known sidecar automatically. It is useful only for greedy
+decoding, currently uses a confidence gate
 (`--mtp-margin`) to avoid slow partial accepts, and should be treated as an
 experimental slight-speedup path.
 
@@ -965,8 +980,11 @@ experimental slight-speedup path.
 Start a local OpenAI/Anthropic-compatible server:
 
 ```sh
-./ds4-server --ctx 100000 --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192
+./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
+  --ctx 100000 --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192
 ```
+
+Add `--mtp` to enable Qwen MTP; omit it for target-only decoding.
 
 Use `--chdir /path/to/ds4` when launching `ds4-server` from another directory,
 so relative runtime files such as `metal/*.metal` resolve from the project tree.
@@ -1005,6 +1023,8 @@ Supported endpoints:
 - `GET /v1/models`
 - `GET /v1/models/deepseek-v4-flash`
 - `GET /v1/models/deepseek-v4-pro`
+- `GET /v1/models/Qwen3.6-27B-Q4_K_S.gguf`
+- `GET /v1/models/Qwen3.6-27B-Q4_K_M.gguf`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/completions`
@@ -1012,7 +1032,8 @@ Supported endpoints:
 
 The Flash and PRO model endpoints are compatibility aliases. They both report
 the model currently loaded from the GGUF passed with `-m`; the endpoint name does
-not select a different model.
+not select a different model. For Qwen, `/v1/models` reports only the loaded
+quantization and uses its exact GGUF basename as both `id` and `name`.
 
 `/v1/chat/completions` accepts the usual OpenAI-style `messages`,
 `max_tokens`/`max_completion_tokens`, `temperature`, `top_p`, `top_k`, `min_p`,
@@ -1138,7 +1159,7 @@ Minimal OpenAI example:
 curl http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"deepseek-v4-flash",
+    "model":"Qwen3.6-27B-Q4_K_S.gguf",
     "messages":[{"role":"user","content":"List three Redis design principles."}],
     "stream":true
   }'

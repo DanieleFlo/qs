@@ -93,11 +93,11 @@ Targets:
 
   mtp  Optional speculative decoding component, about 3.5 GB on disk.
        It is useful with q2-imatrix, q2-q4-imatrix, and q4-imatrix, but must be
-       enabled explicitly with --mtp when running ds4 or ds4-server.
+       enabled explicitly with --mtp-model FILE when running ds4 or ds4-server.
 
   dspark-support
        Optional DSpark speculative decoding support GGUF, about 6 GB. Enable it
-       with --dspark and --mtp when running ds4 or ds4-server.
+       with --dspark and --mtp-model FILE when running ds4 or ds4-server.
 
   glm-unsloth-q4
        GLM 5.2 Unsloth UD-Q4_K_XL quant from unsloth/GLM-5.2-GGUF.
@@ -123,7 +123,8 @@ Targets:
        about 15.9 GB on disk. Recommended for a 24 GB RTX 3090.
 
   qwen36-mtp
-       Optional Qwen3.6 27B MTP Q4_0 GGUF, about 1.7 GB on disk.
+       Optional Qwen3.6 27B MTP Q4_0 GGUF, about 1.7 GB on disk. Enable it
+       with --mtp; no path argument is required for the default ./gguf layout.
 
   qwen36-q4-mtp
        Downloads both Qwen3.6 files, verifies their SHA-256 checksums, and
@@ -145,10 +146,10 @@ Then the default commands work:
   ./ds4-server --ctx 100000
 
 After downloading mtp, enable it explicitly, for example:
-  ./ds4 --mtp <download directory>/$MTP_FILE --mtp-draft 2
+  ./ds4 --mtp-model <download directory>/$MTP_FILE --mtp-draft 2
 
 After downloading DSpark support, enable it explicitly in greedy mode:
-  ./ds4 --dspark --mtp <download directory>/$DSPARK_SUPPORT_FILE --temp 0
+  ./ds4 --dspark --mtp-model <download directory>/$DSPARK_SUPPORT_FILE --temp 0
 
 PRO and GLM files are downloaded with the official Hugging Face downloader
 because they are too large, sharded, or nested for the curl path used by the
@@ -441,14 +442,15 @@ if [ "$MODEL" = "mtp" ]; then
     echo
     echo "MTP is an optional component for q2-imatrix, q2-q4-imatrix, and q4-imatrix."
     echo "Enable it explicitly, for example:"
-    echo "  ./ds4 --mtp $OUT_DIR/$MTP_FILE --mtp-draft 2"
+    echo "  ./ds4 --mtp-model $OUT_DIR/$MTP_FILE --mtp-draft 2"
 elif [ "$MODEL" = "dspark-support" ]; then
     echo
     echo "DSpark support downloaded. Enable it explicitly in greedy mode:"
-    echo "  ./ds4 --dspark -m ./ds4flash.gguf --mtp $OUT_DIR/$DSPARK_SUPPORT_FILE --temp 0"
+    echo "  ./ds4 --dspark -m ./ds4flash.gguf --mtp-model $OUT_DIR/$DSPARK_SUPPORT_FILE --temp 0"
 elif [ "$MODEL" = "qwen36-mtp" ]; then
     echo
     echo "Qwen3.6 MTP downloaded to $OUT_DIR/$QWEN36_MTP_FILE."
+    echo "Enable it with ./ds4 --mtp or ./ds4-server --mtp."
 elif [ "$MODEL" = "pro-q4-layers00-30" ] || [ "$MODEL" = "pro-q4-layers31-output" ] || [ "$MODEL" = "pro-q4-split" ]; then
     echo
     echo "Downloaded PRO Q4 distributed split file(s). Use them with --layers,"

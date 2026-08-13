@@ -64,7 +64,8 @@ def response_payload(
     if skill_call_id is not None:
         agentic["skill_call_id"] = skill_call_id
     return {
-        "model": os.environ.get("DS4_AGENTIC_MODEL", "deepseek-v4-flash"),
+        "model": os.environ.get("DS4_AGENTIC_MODEL",
+                                "Qwen3.6-27B-Q4_K_S.gguf"),
         "input": input_items,
         "tools": REGISTRY,
         "tool_choice": "auto",

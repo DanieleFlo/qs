@@ -217,7 +217,7 @@ def main() -> None:
     args = parser.parse_args()
 
     client = Client.agentic_openai(
-        model="deepseek-v4-flash",
+        model="Qwen3.6-27B-Q4_K_S.gguf",
         api_key="ds4-live-test",
         base_url=args.base_url,
         timeout=180.0,

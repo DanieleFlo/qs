@@ -1838,6 +1838,8 @@ static cli_config parse_options(int argc, char **argv) {
         } else if (!strcmp(arg, "-m") || !strcmp(arg, "--model")) {
             c.engine.model_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--mtp")) {
+            c.engine.mtp_path = DS4_QWEN36_DEFAULT_MTP_PATH;
+        } else if (!strcmp(arg, "--mtp-model")) {
             c.engine.mtp_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--mtp-draft")) {
             c.engine.mtp_draft_tokens = parse_int(need_arg(&i, argc, argv, arg), arg);
@@ -2117,6 +2119,7 @@ int main(int argc, char **argv) {
         free(cfg.prompt_owned);
         return 1;
     }
+    fprintf(stderr, "ds4: loaded model %s\n", ds4_engine_model_name(engine));
     cli_apply_model_sampling_defaults(engine, &cfg.gen);
     if (cfg.engine.tp.role == DS4_TP_WORKER) {
         int rc = ds4_tp_worker_run(engine, &cfg.engine.tp);

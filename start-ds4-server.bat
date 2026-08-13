@@ -14,6 +14,6 @@ if errorlevel 1 (
 )
 
 echo CUDA decode baseline: Q8_1-R8, split-K32 and GQA2
-wsl --cd "%ABS_ROOT_DIR%" ./ds4-server --ctx 100000 --kv-disk-dir ~/.ds4/server-kv --kv-disk-space-mb 8192
+wsl --cd "%ABS_ROOT_DIR%" ./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf --ctx 100000 --kv-disk-dir ~/.ds4/server-kv --kv-disk-space-mb 8192 %*
 
 pause

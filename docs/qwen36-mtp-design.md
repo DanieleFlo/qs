@@ -301,6 +301,15 @@ Loading a structurally valid Qwen NextN sidecar therefore defaults to ceiling
 two when the caller leaves the legacy value at one; omitting `--mtp` remains
 the unambiguous way to request target-only decoding.
 
+For `ds4` and `ds4-server`, `--mtp` takes no value and loads
+`gguf/mtp-Qwen3.6-27B-Q4_0.gguf`. Use `--mtp-model FILE` only to override that
+known sidecar path. For example:
+
+```sh
+./ds4 -m gguf/Qwen3.6-27B-Q4_K_S.gguf --mtp --temp 0
+./ds4-server -m gguf/Qwen3.6-27B-Q4_K_M.gguf --mtp --ctx 32768
+```
+
 ## Implemented fast path and measured gates (2026-08-07)
 
 The loader and baseline remain in `ds4.c`, with simultaneous target/support

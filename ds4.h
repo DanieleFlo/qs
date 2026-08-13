@@ -124,6 +124,11 @@ typedef struct {
     int debug_hash;             /* cross-check hidden state every N tokens */
 } ds4_tp_options;
 
+/* Frontends use this known sidecar when --mtp is enabled without an explicit
+ * support-model override.  The relative path intentionally follows the
+ * repository's normal ./gguf layout. */
+#define DS4_QWEN36_DEFAULT_MTP_PATH "gguf/mtp-Qwen3.6-27B-Q4_0.gguf"
+
 typedef struct {
     const char *model_path;
     const char *mtp_path;

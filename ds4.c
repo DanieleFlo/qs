@@ -58948,7 +58948,14 @@ int ds4_engine_set_power(ds4_engine *e, int power_percent) {
 }
 
 const char *ds4_engine_model_name(ds4_engine *e) {
-    (void)e;
+    if (e && DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_QWEN35) {
+        if (g_qwen36_file_type == DS4_QWEN36_FTYPE_Q4_K_S) {
+            return "Qwen3.6-27B-Q4_K_S.gguf";
+        }
+        if (g_qwen36_file_type == DS4_QWEN36_FTYPE_Q4_K_M) {
+            return "Qwen3.6-27B-Q4_K_M.gguf";
+        }
+    }
     return DS4_MODEL_SHAPE_NAME;
 }
 

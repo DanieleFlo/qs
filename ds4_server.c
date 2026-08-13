@@ -2273,15 +2273,23 @@ static server_model_syntax server_model_syntax_for_engine(ds4_engine *engine) {
            SERVER_MODEL_SYNTAX_GLM : SERVER_MODEL_SYNTAX_DEEPSEEK;
 }
 
+static bool server_qwen_model_id_known(const char *id) {
+    return id &&
+           (!strcmp(id, "Qwen3.6-27B-Q4_K_S.gguf") ||
+            !strcmp(id, "Qwen3.6-27B-Q4_K_M.gguf"));
+}
+
 static const char *server_model_id_from_engine(ds4_engine *engine) {
     if (ds4_engine_is_glm_dsa(engine)) return "glm-5.2";
+    const char *name = ds4_engine_model_name(engine);
+    if (server_qwen_model_id_known(name)) return name;
     return ds4_engine_model_id(engine) == 1 ?
            "deepseek-v4-pro" : "deepseek-v4-flash";
 }
 
 static bool server_model_alias_known(const char *id) {
-    return id &&
-           (!strcmp(id, "deepseek-v4-flash") ||
+    return server_qwen_model_id_known(id) ||
+           (id && (!strcmp(id, "deepseek-v4-flash") ||
             !strcmp(id, "deepseek-v4-pro") ||
             !strcmp(id, "glm-5.2") ||
             !strcmp(id, "glm-5.2-chat") ||
@@ -2290,7 +2298,7 @@ static bool server_model_alias_known(const char *id) {
             !strcmp(id, "glm-5.2-reasoner") ||
             !strcmp(id, "zai/glm-5.2") ||
             !strcmp(id, "zai/glm-5.2-chat") ||
-            !strcmp(id, "zai/glm-5.2-reasoner"));
+            !strcmp(id, "zai/glm-5.2-reasoner")));
 }
 
 static void stop_list_clear(stop_list *stops) {
@@ -16688,7 +16696,10 @@ static bool send_model(server *s, int fd, const char *id) {
 static bool send_models(server *s, int fd) {
     buf b = {0};
     buf_puts(&b, "{\"object\":\"list\",\"data\":[");
-    if (ds4_engine_is_glm_dsa(s->engine)) {
+    const char *loaded_id = server_model_id_from_engine(s->engine);
+    if (server_qwen_model_id_known(loaded_id)) {
+        append_model_json(&b, s, loaded_id);
+    } else if (ds4_engine_is_glm_dsa(s->engine)) {
         append_model_json(&b, s, "glm-5.2");
         buf_putc(&b, ',');
         append_model_json(&b, s, "glm-5.2-chat");
@@ -17060,6 +17071,8 @@ static server_config parse_options(int argc, char **argv) {
         if (!strcmp(arg, "-m") || !strcmp(arg, "--model")) {
             c.engine.model_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--mtp")) {
+            c.engine.mtp_path = DS4_QWEN36_DEFAULT_MTP_PATH;
+        } else if (!strcmp(arg, "--mtp-model")) {
             c.engine.mtp_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--mtp-draft")) {
             c.engine.mtp_draft_tokens = parse_int_arg(need_arg(&i, argc, argv, arg), arg);
@@ -17291,6 +17304,8 @@ int main(int argc, char **argv) {
     } else if (ds4_engine_open(&engine, &cfg.engine) != 0) {
         return 1;
     }
+    server_log(DS4_LOG_DEFAULT, "ds4-server: loaded model %s",
+               ds4_engine_model_name(engine));
 
     char *automatic_kv_dir = NULL;
     const bool qwen_session_cache = ds4_engine_is_qwen36_q4_k_s(engine);
@@ -18912,6 +18927,9 @@ static void test_model_alias_thinking_controls(void) {
     TEST_ASSERT(model_alias_enables_thinking("zai/glm-5.2-reasoner"));
     TEST_ASSERT(server_model_alias_known("glm-5.2-chat"));
     TEST_ASSERT(server_model_alias_known("glm-5.2-reasoner"));
+    TEST_ASSERT(server_model_alias_known("Qwen3.6-27B-Q4_K_S.gguf"));
+    TEST_ASSERT(server_model_alias_known("Qwen3.6-27B-Q4_K_M.gguf"));
+    TEST_ASSERT(!server_model_alias_known("Qwen3.6-27B-Q4_K_X.gguf"));
 }
 
 static void test_api_thinking_controls_parse(void) {
@@ -20825,6 +20843,17 @@ static void test_model_metadata_clamps_completion_to_context(void) {
     TEST_ASSERT(strstr(b.ptr, "\"name\":\"DeepSeek V4 Pro\"") != NULL);
     TEST_ASSERT(strstr(b.ptr, "\"context_length\":100000") != NULL);
     TEST_ASSERT(strstr(b.ptr, "\"max_completion_tokens\":4096") != NULL);
+    buf_free(&b);
+
+    append_model_json_values(&b,
+                             "Qwen3.6-27B-Q4_K_S.gguf",
+                             "Qwen3.6-27B-Q4_K_S.gguf",
+                             32768, 393216);
+    TEST_ASSERT(strstr(b.ptr,
+                       "\"id\":\"Qwen3.6-27B-Q4_K_S.gguf\"") != NULL);
+    TEST_ASSERT(strstr(b.ptr,
+                       "\"name\":\"Qwen3.6-27B-Q4_K_S.gguf\"") != NULL);
+    TEST_ASSERT(strstr(b.ptr, "\"max_completion_tokens\":32768") != NULL);
     buf_free(&b);
 }
 
