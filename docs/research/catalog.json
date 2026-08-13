@@ -8064,6 +8064,186 @@
           ]
         },
         {
+          "path": "docs/research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md",
+          "sections": [
+            {
+              "title": "Qwen3.6 MTP: workflow llama.cpp, confronto DS4 e audit CUDA",
+              "level": 1,
+              "start": 1,
+              "end": 305,
+              "summary": "Questa scheda descrive il percorso MTP realmente eseguito per Qwen3.6, dal"
+            },
+            {
+              "title": "Ruolo e perimetro",
+              "level": 2,
+              "start": 3,
+              "end": 14,
+              "summary": "Questa scheda descrive il percorso MTP realmente eseguito per Qwen3.6, dal"
+            },
+            {
+              "title": "Fonti primarie",
+              "level": 2,
+              "start": 15,
+              "end": 33,
+              "summary": "integrazione MTP, context target/draft separati, hidden NextN e rollback"
+            },
+            {
+              "title": "Semantica NextN",
+              "level": 2,
+              "start": 34,
+              "end": 51,
+              "summary": "Il trunk target espone `h_nextn` dopo `output_norm`."
+            },
+            {
+              "title": "Workflow llama.cpp",
+              "level": 2,
+              "start": 52,
+              "end": 103,
+              "summary": "Il context target conserva logits, KV e memoria ricorrente."
+            },
+            {
+              "title": "Prefill e frontiera",
+              "level": 3,
+              "start": 54,
+              "end": 60,
+              "summary": "Il context target conserva logits, KV e memoria ricorrente."
+            },
+            {
+              "title": "Draft",
+              "level": 3,
+              "start": 61,
+              "end": 66,
+              "summary": "Il token appena campionato non e' ancora nel target state."
+            },
+            {
+              "title": "Verifica target",
+              "level": 3,
+              "start": 67,
+              "end": 79,
+              "summary": "Il server costruisce un unico batch:"
+            },
+            {
+              "title": "Accept e rollback",
+              "level": 3,
+              "start": 80,
+              "end": 88,
+              "summary": "`process()` conserva tutti gli hidden target in `verify_h`."
+            },
+            {
+              "title": "Pseudocodice",
+              "level": 3,
+              "start": 89,
+              "end": 103,
+              "summary": "sampled = argmax(target_logits)"
+            },
+            {
+              "title": "DS4 prima dell'audit",
+              "level": 2,
+              "start": 104,
+              "end": 115,
+              "summary": "Il vecchio ciclo eseguiva `target_seed(1)` e poi `verify(drafts)`."
+            },
+            {
+              "title": "DS4 finale",
+              "level": 2,
+              "start": 116,
+              "end": 136,
+              "summary": "Con `--mtp`, il percorso predefinito e':"
+            },
+            {
+              "title": "Problemi trovati e ritorno a llama.cpp",
+              "level": 2,
+              "start": 137,
+              "end": 154,
+              "summary": "Il bug lane 1 e' il caso piu' importante."
+            },
+            {
+              "title": "Audit dei kernel MTP",
+              "level": 2,
+              "start": 155,
+              "end": 190,
+              "summary": "Il verifier usa attivazioni Q8_1 piu' un secondo residuo Q8_1."
+            },
+            {
+              "title": "Target Q4_K/Q5_K/Q6_K",
+              "level": 3,
+              "start": 157,
+              "end": 176,
+              "summary": "Il verifier usa attivazioni Q8_1 piu' un secondo residuo Q8_1."
+            },
+            {
+              "title": "Sidecar Q4_0",
+              "level": 3,
+              "start": 177,
+              "end": 183,
+              "summary": "Il shared head usa Q4_0 x Q8_1+R8 con DP4A e otto output rows per CTA."
+            },
+            {
+              "title": "Rollback GDN",
+              "level": 3,
+              "start": 184,
+              "end": 190,
+              "summary": "Le 48 convolution state e recurrent state vengono snapshotate direttamente"
+            },
+            {
+              "title": "Esperimenti scartati",
+              "level": 2,
+              "start": 191,
+              "end": 201,
+              "summary": "qualita' fallita; non presente nel percorso finale."
+            },
+            {
+              "title": "Validazione finale",
+              "level": 2,
+              "start": 202,
+              "end": 289,
+              "summary": "Comando:"
+            },
+            {
+              "title": "Suite model-backed",
+              "level": 3,
+              "start": 204,
+              "end": 229,
+              "summary": "Comando:"
+            },
+            {
+              "title": "CLI Q4_K_S",
+              "level": 3,
+              "start": 230,
+              "end": 242,
+              "summary": "Context 768, prefill chunk 16, 128 token, greedy:"
+            },
+            {
+              "title": "Confronto locale llama.cpp",
+              "level": 3,
+              "start": 243,
+              "end": 267,
+              "summary": "Il binario CUDA upstream al commit auditato e' stato eseguito sulla stessa RTX"
+            },
+            {
+              "title": "Server reale",
+              "level": 3,
+              "start": 268,
+              "end": 289,
+              "summary": "Quattro richieste `/v1/chat/completions`, una warm-up e tre misurate, 180 token"
+            },
+            {
+              "title": "Nota vLLM",
+              "level": 2,
+              "start": 290,
+              "end": 297,
+              "summary": "L'assunzione che vLLM non implementi Qwen MTP non e' piu' valida."
+            },
+            {
+              "title": "Limiti dell'evidenza",
+              "level": 2,
+              "start": 298,
+              "end": 305,
+              "summary": "Il workflow e l'audit CUDA llama.cpp sono fissati al commit indicato."
+            }
+          ]
+        },
+        {
           "path": "docs/research/guides/rtx3090-transfer-checklist.md",
           "sections": [
             {

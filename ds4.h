@@ -444,6 +444,18 @@ int ds4_session_eval_speculative_argmax(ds4_session *s, int first_token,
                                         int max_tokens, int eos_token,
                                         int *accepted, int accepted_cap,
                                         char *err, size_t errlen);
+/* Sample-aware speculative decode. The caller samples first_token from the
+ * current session logits, then this function verifies MTP drafts with the same
+ * target sampler. rng and next_token are required for stochastic speculation;
+ * otherwise the call safely falls back to one target step. A target sample
+ * beyond the committed prefix is returned through next_token for the caller's
+ * next cycle; it has not been evaluated or added to the checkpoint yet. */
+int ds4_session_eval_speculative_sample(
+        ds4_session *s, int first_token,
+        float temperature, int top_k, float top_p, float min_p, uint64_t *rng,
+        int max_tokens, int eos_token,
+        int *accepted, int accepted_cap, int *next_token,
+        char *err, size_t errlen);
 /* TP worker side of a mirrored speculative-verify block: run its half of the
  * batch verify for KV side effects, then obey the leader's commit frame
  * (keep, or roll back and replay). Only called from ds4_tp_worker_run. */

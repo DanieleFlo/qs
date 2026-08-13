@@ -356,3 +356,66 @@ sono non verificati.
 Su Windows il binario ds4-bench del repository è ELF: i comandi model-backed
 vanno eseguiti nella stessa distribuzione WSL/Linux usata per compilare DS4.
 Probe e test puramente Python funzionano anche dall'host.
+
+## Gate MTP Qwen3.6 depth 2
+
+I prompt canonici sono `mtp-copy-simple-prompt.txt` (copia ripetitiva ad alta
+acceptance) e `mtp-copy-prompt.txt` (testo naturale a acceptance piu' bassa).
+Il confronto greedy va eseguito sullo stesso binario e senza flag di tuning:
+
+    ./ds4 --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
+      --ctx 768 --prefill-chunk 16 --raw-prompt \
+      --prompt-file performance/mtp-copy-simple-prompt.txt -n 128 --temp 0
+
+    DS4_MTP_STATS=1 ./ds4 --cuda \
+      -m gguf/Qwen3.6-27B-Q4_K_S.gguf --mtp \
+      --ctx 768 --prefill-chunk 16 --raw-prompt \
+      --prompt-file performance/mtp-copy-simple-prompt.txt -n 128 --temp 0
+
+La gate sampled usa lo stesso seed e gli stessi filtri nei due processi:
+
+    ./ds4 --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
+      --ctx 768 --prefill-chunk 16 --raw-prompt --seed 123 \
+      --prompt-file performance/mtp-copy-simple-prompt.txt -n 128 \
+      --temp 1 --top-p 1 --min-p 0.05
+
+    DS4_MTP_STATS=1 ./ds4 --cuda \
+      -m gguf/Qwen3.6-27B-Q4_K_S.gguf --mtp \
+      --ctx 768 --prefill-chunk 16 --raw-prompt --seed 123 \
+      --prompt-file performance/mtp-copy-simple-prompt.txt -n 128 \
+      --temp 1 --top-p 1 --min-p 0.05
+
+La gate model-backed di correttezza e':
+
+    DS4_TEST_MODEL=gguf/Qwen3.6-27B-Q4_K_S.gguf \
+    DS4_TEST_MTP=gguf/mtp-Qwen3.6-27B-Q4_0.gguf \
+    DS4_TEST_MTP_CTX=768 DS4_TEST_MTP_PREFILL_CHUNK=16 \
+    DS4_TEST_QWEN_MTP_PATHS=1 DS4_MTP_STATS=1 \
+    ./ds4_test --mtp-verify-depth
+
+La baseline RTX 3090 del 2026-08-13 misura 30.48 -> 46.39 token/s nel CLI
+(1.52x) e mediana server 31.47 -> 51.07 token/s (1.62x) sul prompt semplice.
+Il prompt naturale misura soltanto 1.12x perche' accetta 70/111 draft; non deve
+essere nascosto o sostituito dalla sola gate favorevole. Ogni regressione deve
+conservare gap argmax 0.000, replay 0 nei percorsi partial/reject coperti e zero
+fallback. L'audit completo e' in
+`docs/research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md`.
+
+La gate sampled RTX 3090 misura 31.64 -> 48.74 token/s nel CLI (1.54x),
+output byte-identico e 84/87 draft accettati. Nel server lo stesso profilo di
+sampling misura 34.55 -> 50.15 token/s di decode (1.45x) e 4.526 -> 3.391 s
+server-internal end-to-end (1.34x). La suite model-backed confronta inoltre 128
+token sampled target-only/MTP con seed fisso e richiede uguaglianza esatta e un
+chunk speculativo maggiore di uno.
+
+Temperature, top-k, top-p e min-p filtrano una sola volta i logits target di
+ogni riga verifier. Filtrare anche i logits MTP non sostituisce il sampler
+target e duplicherebbe lavoro. I mask stateful per tool e response schema
+richiedono invece avanzamento token-per-token; il percorso MTP stocastico li
+esclude finche' lo stato del filtro non puo' essere checkpointato nel batch.
+
+Come riferimento esterno locale, llama.cpp commit `1a064ab09` sullo stesso
+hardware, modelli, file sorgente, 128 token greedy e depth 2 misura 40.9 ->
+72.8 token/s (1.78x); gli output on/off differiscono solo nella riga dei tempi.
+Il valore assoluto e' direzionale, perche' il frontend llama.cpp applica la
+propria conversazione mentre il gate DS4 sopra usa `--raw-prompt`.

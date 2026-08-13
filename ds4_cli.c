@@ -27,37 +27,6 @@
 #include <time.h>
 #include <unistd.h>
 
-static bool cli_env_flag_enabled(const char *name, bool defval) {
-    const char *v = getenv(name);
-    if (!v || !v[0]) return defval;
-    return strcmp(v, "0") != 0;
-}
-
-static bool cli_splitkv_spec_requested(void) {
-    if (cli_env_flag_enabled("DS4_CUDA_NO_SPLITKV_SPEC", false)) return false;
-    return cli_env_flag_enabled("DS4_CUDA_SPLITKV_SPEC", false);
-}
-
-static bool cli_greedy_fast_attention_requested(void) {
-    if (!cli_env_flag_enabled("DS4_CUDA_NO_GREEDY_SPLITKV", false) &&
-        cli_env_flag_enabled("DS4_CUDA_GREEDY_SPLITKV", false))
-    {
-        return true;
-    }
-    if (!cli_env_flag_enabled("DS4_CUDA_NO_GREEDY_VEC4", false) &&
-        cli_env_flag_enabled("DS4_CUDA_GREEDY_VEC4", false))
-    {
-        return true;
-    }
-    return false;
-}
-
-static bool cli_greedy_argmax_requested(bool speculative_requested) {
-    if (cli_greedy_fast_attention_requested()) return true;
-    if (speculative_requested) return false;
-    return cli_env_flag_enabled("DS4_CUDA_GREEDY_TOP1", true);
-}
-
 typedef struct {
     const char *prompt;
     const char *system;
@@ -575,20 +544,17 @@ static int run_sampled_generation(ds4_engine *engine, const cli_config *cfg, con
     uint64_t rng = cfg->gen.seed ? cfg->gen.seed :
         ((uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32) ^ (uint64_t)clock());
     int generated = 0;
-    const bool speculative_argmax = cfg->gen.temperature <= 0.0f &&
-        ((ds4_engine_mtp_draft_tokens(engine) > 1 &&
-          getenv("DS4_MTP_SPEC_DISABLE") == NULL) ||
-         cli_splitkv_spec_requested());
-    const bool greedy_argmax = cfg->gen.temperature <= 0.0f &&
-        cli_greedy_argmax_requested(speculative_argmax);
-    bool have_greedy_next = false;
-    int greedy_next = -1;
+    const bool mtp_speculative =
+        ds4_engine_mtp_draft_tokens(engine) > 1 &&
+        getenv("DS4_MTP_SPEC_DISABLE") == NULL;
+    bool have_speculative_next = false;
+    int speculative_next = -1;
     const double t_decode0 = cli_now_sec();
     while (generated < max_tokens && !cli_interrupt_requested()) {
         int token;
-        if (greedy_argmax && have_greedy_next) {
-            token = greedy_next;
-            have_greedy_next = false;
+        if (have_speculative_next) {
+            token = speculative_next;
+            have_speculative_next = false;
         } else {
             token = ds4_session_sample(session, cfg->gen.temperature, 0,
                                        cfg->gen.top_p, cfg->gen.min_p, &rng);
@@ -597,22 +563,24 @@ static int run_sampled_generation(ds4_engine *engine, const cli_config *cfg, con
 
         int toks[17];
         int ntok = 0;
-        if (cfg->gen.temperature <= 0.0f && ds4_engine_mtp_draft_tokens(engine) > 1 &&
-            getenv("DS4_MTP_SPEC_DISABLE") == NULL) {
+        if (mtp_speculative) {
+            int next_token = -1;
             cli_dist_busy_set(cfg, true);
-            ntok = ds4_session_eval_speculative_argmax(session,
-                                                       token,
-                                                       max_tokens - generated,
-                                                       ds4_token_eos(engine),
-                                                       toks,
-                                                       (int)(sizeof(toks) / sizeof(toks[0])),
-                                                       err,
-                                                       sizeof(err));
+            ntok = ds4_session_eval_speculative_sample(
+                session, token, cfg->gen.temperature, 0,
+                cfg->gen.top_p, cfg->gen.min_p, &rng,
+                max_tokens - generated, ds4_token_eos(engine),
+                toks, (int)(sizeof(toks) / sizeof(toks[0])), &next_token,
+                err, sizeof(err));
             cli_dist_busy_set(cfg, false);
             if (ntok < 0) {
                 fprintf(stderr, "ds4: decode failed: %s\n", err);
                 ds4_session_free(session);
                 return 1;
+            }
+            if (next_token >= 0) {
+                speculative_next = next_token;
+                have_speculative_next = true;
             }
         } else {
             size_t piece_len = 0;
@@ -1479,20 +1447,17 @@ static int run_chat_turn(ds4_engine *engine, cli_config *cfg, repl_chat *chat, c
     uint64_t rng = cfg->gen.seed ? cfg->gen.seed :
         ((uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32) ^ (uint64_t)clock());
     int generated = 0;
-    const bool speculative_argmax = cfg->gen.temperature <= 0.0f &&
-        ((ds4_engine_mtp_draft_tokens(engine) > 1 &&
-          getenv("DS4_MTP_SPEC_DISABLE") == NULL) ||
-         cli_splitkv_spec_requested());
-    const bool greedy_argmax = cfg->gen.temperature <= 0.0f &&
-        cli_greedy_argmax_requested(speculative_argmax);
-    bool have_greedy_next = false;
-    int greedy_next = -1;
+    const bool mtp_speculative =
+        ds4_engine_mtp_draft_tokens(engine) > 1 &&
+        getenv("DS4_MTP_SPEC_DISABLE") == NULL;
+    bool have_speculative_next = false;
+    int speculative_next = -1;
     const double t_decode0 = cli_now_sec();
     while (generated < max_tokens && !cli_interrupt_requested()) {
         int token;
-        if (greedy_argmax && have_greedy_next) {
-            token = greedy_next;
-            have_greedy_next = false;
+        if (have_speculative_next) {
+            token = speculative_next;
+            have_speculative_next = false;
         } else {
             token = ds4_session_sample(chat->session,
                                        cfg->gen.temperature,
@@ -1505,21 +1470,23 @@ static int run_chat_turn(ds4_engine *engine, cli_config *cfg, repl_chat *chat, c
 
         int toks[17];
         int ntok = 0;
-        if (cfg->gen.temperature <= 0.0f && ds4_engine_mtp_draft_tokens(engine) > 1 &&
-            getenv("DS4_MTP_SPEC_DISABLE") == NULL) {
+        if (mtp_speculative) {
+            int next_token = -1;
             cli_dist_busy_set(cfg, true);
-            ntok = ds4_session_eval_speculative_argmax(chat->session,
-                                                       token,
-                                                       max_tokens - generated,
-                                                       ds4_token_eos(engine),
-                                                       toks,
-                                                       (int)(sizeof(toks) / sizeof(toks[0])),
-                                                       err,
-                                                       sizeof(err));
+            ntok = ds4_session_eval_speculative_sample(
+                chat->session, token, cfg->gen.temperature, 0,
+                cfg->gen.top_p, cfg->gen.min_p, &rng,
+                max_tokens - generated, ds4_token_eos(engine),
+                toks, (int)(sizeof(toks) / sizeof(toks[0])), &next_token,
+                err, sizeof(err));
             cli_dist_busy_set(cfg, false);
             if (ntok < 0) {
                 fprintf(stderr, "ds4: decode failed: %s\n", err);
                 return 1;
+            }
+            if (next_token >= 0) {
+                speculative_next = next_token;
+                have_speculative_next = true;
             }
         } else {
             size_t piece_len = 0;

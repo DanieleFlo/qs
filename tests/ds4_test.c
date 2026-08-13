@@ -3,6 +3,7 @@
 #include "../ds4_server.c"
 #ifndef DS4_NO_GPU
 #include "../ds4_gpu.h"
+#include <inttypes.h>
 #include <math.h>
 
 bool ds4_test_dspark_cache_window_crop(void);
@@ -90,7 +91,7 @@ static void test_restore_canonical_streaming_prefill(
 static ds4_engine *test_open_engine(bool quality) {
     ds4_engine *engine = NULL;
     /* DS4_TEST_MTP loads the MTP head on the fast engine so the speculative
-     * verify regression can reuse it; draft=4 hits the multi-row verify path. */
+     * verify regression can reuse it; depth two is the production fast path. */
     const char *mtp = getenv("DS4_TEST_MTP");
     ds4_engine_options opt = {
         .model_path = test_model_path(),
@@ -110,7 +111,7 @@ static ds4_engine *test_open_engine(bool quality) {
             test_env_u32("DS4_TEST_SSD_STREAMING_PRELOAD_EXPERTS"),
         .prefill_chunk = test_env_u32("DS4_TEST_MTP_PREFILL_CHUNK"),
         .mtp_path = (mtp && mtp[0] && !quality) ? mtp : NULL,
-        .mtp_draft_tokens = (mtp && mtp[0] && !quality) ? 4 : 0,
+        .mtp_draft_tokens = (mtp && mtp[0] && !quality) ? 2 : 0,
     };
     TEST_ASSERT(ds4_engine_open(&engine, &opt) == 0);
     return engine;
@@ -6506,6 +6507,73 @@ static bool test_mtp_capture_speculative(ds4_engine *engine, const ds4_tokens *p
     return ok;
 }
 
+/* llama.cpp-style stochastic verification: sample each target verifier row
+ * with the production sampler, accept matching MTP drafts, and carry the
+ * mismatch/bonus sample into the next target batch. With a fixed seed the
+ * emitted stream must match ordinary target-only sampling exactly. */
+static bool test_mtp_capture_sampled(ds4_engine *engine,
+                                     const ds4_tokens *prompt,
+                                     int max_tokens,
+                                     bool speculative,
+                                     uint64_t seed,
+                                     int *out,
+                                     int *out_len,
+                                     int *max_chunk) {
+    *out_len = 0;
+    *max_chunk = 0;
+    ds4_session *session = NULL;
+    uint32_t ctx = test_env_u32("DS4_TEST_MTP_CTX");
+    if (ctx == 0) ctx = 32768;
+    TEST_ASSERT(ds4_session_create(&session, engine, (int)ctx) == 0);
+    if (!session) return false;
+
+    char err[160];
+    bool ok = ds4_session_sync(session, prompt, err, sizeof(err)) == 0;
+    TEST_ASSERT(ok);
+
+    const int eos = ds4_token_eos(engine);
+    int pending = -1;
+    int n = 0;
+    bool stop = false;
+    while (ok && !stop && n < max_tokens) {
+        const int token = pending >= 0 ? pending :
+            ds4_session_sample(session, 1.0f, 0, 1.0f, 0.05f, &seed);
+        pending = -1;
+        if (token == eos) break;
+
+        int toks[17];
+        int ntok = 1;
+        toks[0] = token;
+        if (speculative) {
+            ntok = ds4_session_eval_speculative_sample(
+                session, token, 1.0f, 0, 1.0f, 0.05f, &seed,
+                max_tokens - n, eos, toks,
+                (int)(sizeof(toks) / sizeof(toks[0])), &pending,
+                err, sizeof(err));
+        } else if (ds4_session_eval(session, token, err, sizeof(err)) != 0) {
+            ntok = -1;
+        }
+        if (ntok < 0) {
+            ok = false;
+            TEST_ASSERT(false);
+            break;
+        }
+        if (ntok > *max_chunk) *max_chunk = ntok;
+        for (int i = 0; i < ntok && n < max_tokens; i++) {
+            if (toks[i] == eos) {
+                pending = -1;
+                stop = true;
+                break;
+            }
+            out[n++] = toks[i];
+        }
+    }
+
+    *out_len = n;
+    ds4_session_free(session);
+    return ok;
+}
+
 /* Replay toks[] through plain decode and return the largest gap between a
  * position's argmax logit and the committed token's logit.  Correct speculation
  * commits (near-)argmax tokens (gap ~0); a mis-committed token gives a big gap. */
@@ -6570,6 +6638,22 @@ static const char *test_mtp_copy_prompt(void) {
         "```\n";
 }
 
+/* Raw copy regression which exposed a rows-per-CTA verifier bug: DS4's
+ * shfl-down reduction was publishing the second output row from lane 1 even
+ * though only lane 0 held the complete sum. */
+static const char *test_mtp_raw_copy_prompt(void) {
+    return
+        "Copy the text between square brackets exactly. Output only the copied "
+        "text.\n\n[The copper clock counted seven quiet seconds. A blue lantern "
+        "crossed the old stone bridge while rain traced silver lines on the "
+        "river. Every window reflected the same patient light, and every "
+        "footstep returned as a soft echo. The archivist wrote each word "
+        "carefully, preserving commas, spaces, and periods exactly as they "
+        "appeared. The copper clock counted seven quiet seconds. A blue lantern "
+        "crossed the old stone bridge while rain traced silver lines on the "
+        "river. Every window reflected the same patient light.]";
+}
+
 #define TEST_MTP_MAXGEN 256
 #define TEST_DSPARK_MAXGEN 128
 
@@ -6602,8 +6686,8 @@ static ds4_engine *test_open_dspark_engine(const char *support_path) {
     return rc == 0 ? engine : NULL;
 }
 
-/* Regression for the swapped top-k arguments in metal_graph_verify_suffix_tops
- * at draft depth > 2.  Replays the committed speculative tokens through plain
+/* Regression for speculative verification at the production depth of two.
+ * Replays the committed speculative tokens through plain
  * decode and requires each to be a (near-)argmax: that is the verify invariant,
  * and unlike comparing token streams it tolerates the near-greedy tie
  * divergences.  Needs an MTP head, so it self-skips without DS4_TEST_MTP. */
@@ -6613,7 +6697,7 @@ static void test_mtp_verify_depth(void) {
         fprintf(stderr, "ds4-test: mtp-verify-depth skipped (set DS4_TEST_MTP to an MTP GGUF)\n");
         return;
     }
-    TEST_ASSERT(ds4_engine_mtp_draft_tokens(engine) > 2);
+    TEST_ASSERT(ds4_engine_mtp_draft_tokens(engine) == 2);
 
     ds4_tokens prompt = {0};
     ds4_chat_begin(engine, &prompt);
@@ -6691,6 +6775,61 @@ static void test_mtp_verify_depth(void) {
                         "worst_argmax_gap=%.3f at=%d\n",
                         cases[ci].label, path_n, path_chunk,
                         path_gap, path_at);
+            }
+
+            ds4_tokens raw_prompt = {0};
+            ds4_tokenize_text(engine, test_mtp_raw_copy_prompt(), &raw_prompt);
+            TEST_ASSERT(raw_prompt.len > 0);
+            int raw_n = 0, raw_chunk = 0;
+            const bool raw_ok = raw_prompt.len > 0 &&
+                test_mtp_capture_speculative(engine, &raw_prompt, 64,
+                                             spec, &raw_n, &raw_chunk);
+            TEST_ASSERT(raw_ok);
+            TEST_ASSERT(raw_n == 64);
+            TEST_ASSERT(raw_chunk > 1);
+            float raw_gap = 0.0f;
+            int raw_at = -1;
+            const bool raw_replay_ok = raw_ok &&
+                test_mtp_worst_argmax_gap(engine, &raw_prompt, spec, raw_n,
+                                           &raw_gap, &raw_at);
+            TEST_ASSERT(raw_replay_ok);
+            TEST_ASSERT(raw_gap <= 0.01f);
+            fprintf(stderr,
+                    "ds4-test: qwen-mtp-raw-copy tokens=%d max_chunk=%d "
+                    "worst_argmax_gap=%.3f at=%d\n",
+                    raw_n, raw_chunk, raw_gap, raw_at);
+            ds4_tokens_free(&raw_prompt);
+
+            int *sample_ref =
+                malloc((size_t)TEST_MTP_MAXGEN * sizeof(*sample_ref));
+            TEST_ASSERT(sample_ref != NULL);
+            if (sample_ref) {
+                int ref_n = 0, ref_chunk = 0;
+                int sample_n = 0, sample_chunk = 0;
+                const uint64_t sample_seed = UINT64_C(0x123456789abcdef0);
+                const bool ref_ok = test_mtp_capture_sampled(
+                    engine, &prompt, 128, false, sample_seed,
+                    sample_ref, &ref_n, &ref_chunk);
+                const bool sample_ok = test_mtp_capture_sampled(
+                    engine, &prompt, 128, true, sample_seed,
+                    spec, &sample_n, &sample_chunk);
+                TEST_ASSERT(ref_ok);
+                TEST_ASSERT(sample_ok);
+                TEST_ASSERT(ref_n == sample_n);
+                TEST_ASSERT(ref_n == 128);
+                TEST_ASSERT(sample_chunk > 1);
+                TEST_ASSERT(ref_n == sample_n &&
+                            memcmp(sample_ref, spec,
+                                   (size_t)ref_n * sizeof(spec[0])) == 0);
+                fprintf(stderr,
+                        "ds4-test: qwen-mtp-sampling temp=1 seed=%" PRIu64
+                        " tokens=%d max_chunk=%d target_match=%s\n",
+                        sample_seed, sample_n, sample_chunk,
+                        ref_n == sample_n &&
+                        memcmp(sample_ref, spec,
+                               (size_t)ref_n * sizeof(spec[0])) == 0 ?
+                            "yes" : "no");
+                free(sample_ref);
             }
         }
     }
@@ -6835,7 +6974,7 @@ static const ds4_test_entry test_entries[] = {
     {"--metal-kernels", "metal-kernels", "isolated Metal kernel numeric regressions", test_metal_kernel_group},
     {"--metal-tensor-equivalence", "metal-tensor-equivalence", "fast/quality Metal prompt-logit and greedy equivalence", test_metal_mpp_equivalence},
     {"--streaming-decode-prefill-correctness", "streaming-decode-prefill-correctness", "streaming decode-style cold prefill drift and repeatability", test_streaming_decode_prefill_correctness},
-    {"--mtp-verify-depth", "mtp-verify-depth", "MTP speculative verify commits autoregressive-identical tokens at draft depth > 2", test_mtp_verify_depth},
+    {"--mtp-verify-depth", "mtp-verify-depth", "MTP speculative verify commits autoregressive-identical tokens at production depth two", test_mtp_verify_depth},
     {"--dspark-verify-depth", "dspark-verify-depth", "DSpark speculative verify commits autoregressive-identical tokens at draft depth > 2", test_dspark_verify_depth},
 #endif
     {"--qwen35-layer-pattern", "qwen35-layer-pattern", "Qwen hybrid recurrent/full-attention layer pattern", test_qwen35_layer_pattern},

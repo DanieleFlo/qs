@@ -1,0 +1,3 @@
+Copy the text between square brackets exactly. Output only the copied text.
+
+[The copper clock counted seven quiet seconds. A blue lantern crossed the old stone bridge while rain traced silver lines on the river. Every window reflected the same patient light, and every footstep returned as a soft echo. The archivist wrote each word carefully, preserving commas, spaces, and periods exactly as they appeared. The copper clock counted seven quiet seconds. A blue lantern crossed the old stone bridge while rain traced silver lines on the river. Every window reflected the same patient light, and every footstep returned as a soft echo. The archivist wrote each word carefully, preserving commas, spaces, and periods exactly as they appeared.]

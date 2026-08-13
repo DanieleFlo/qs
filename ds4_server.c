@@ -15509,6 +15509,8 @@ decode_again:
         getenv("DS4_SERVER_DISABLE_THINK_TOOL_RECOVERY") == NULL;
     dsml_decode_tracker dsml_tracker;
     dsml_decode_tracker_init(&dsml_tracker, &j->req);
+    bool have_speculative_next = false;
+    int speculative_next = -1;
 
     server_generation_enter(s);
     while (!g_stop_requested && completion < max_tokens &&
@@ -15580,7 +15582,10 @@ decode_again:
             j->req.constrained_prefill_tokens += ntok;
         } else {
             ds4_filtered_sample_metrics filtered = {0};
-            if (response_constrained_sample) {
+            if (!constrained_sample && have_speculative_next) {
+                token = speculative_next;
+                have_speculative_next = false;
+            } else if (response_constrained_sample) {
                 token = ds4_session_sample_filtered_profiled(
                     slot->session, temperature, top_k, top_p, min_p, &rng,
                     response_json_filter_token, &json_filter,
@@ -15627,19 +15632,21 @@ decode_again:
             }
         }
 
-        if (ntok == 0 && !constrained_sample && !s->batched_mode && temperature <= 0.0f &&
+        const bool stochastic_mtp_safe =
+            temperature <= 0.0f ||
+            (j->req.response_schema == NULL && !j->req.has_tools);
+        if (ntok == 0 && !constrained_sample && !s->batched_mode &&
+            stochastic_mtp_safe &&
             ds4_engine_mtp_draft_tokens(s->engine) > 1 &&
             getenv("DS4_MTP_SPEC_DISABLE") == NULL)
         {
             const double eval_t0 = phase_profile ? now_sec() : 0.0;
-            ntok = ds4_session_eval_speculative_argmax(slot->session,
-                                                       token,
-                                                       max_tokens - completion,
-                                                       ds4_token_eos(s->engine),
-                                                       toks,
-                                                       (int)(sizeof(toks) / sizeof(toks[0])),
-                                                       err,
-                                                       sizeof(err));
+            int next_token = -1;
+            ntok = ds4_session_eval_speculative_sample(
+                slot->session, token, temperature, top_k, top_p, min_p, &rng,
+                max_tokens - completion, ds4_token_eos(s->engine),
+                toks, (int)(sizeof(toks) / sizeof(toks[0])), &next_token,
+                err, sizeof(err));
             if (phase_profile) {
                 phase.eval_ms += (now_sec() - eval_t0) * 1000.0;
                 phase.eval_calls++;
@@ -15647,6 +15654,10 @@ decode_again:
             if (ntok < 0) {
                 finish = "error";
                 break;
+            }
+            if (next_token >= 0) {
+                speculative_next = next_token;
+                have_speculative_next = true;
             }
         } else if (ntok == 0) {
             const double eval_t0 = phase_profile ? now_sec() : 0.0;

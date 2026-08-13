@@ -147,7 +147,14 @@ the model name in clients connected to `ds4-server`:
 
 Qwen MTP is off unless `--mtp` is present. That flag automatically loads
 `gguf/mtp-Qwen3.6-27B-Q4_0.gguf`; `--mtp-model FILE` overrides the support
-GGUF when an explicit path is needed.
+GGUF when an explicit path is needed. Qwen defaults to draft depth two and is
+hard-capped at depth four. On the RTX 3090 Q4_K_S validation, a simple repeated
+copy measured 1.52x in the CLI and 1.62x generation throughput through the
+server. With the normal sampled defaults (`temperature=1`, `top_p=1`,
+`min_p=0.05`), a fixed-seed CLI run measured 1.54x and remained token-identical
+to target-only sampling; lower draft acceptance gives a smaller gain. See the
+[MTP design](docs/qwen36-mtp-design.md) and the
+[llama.cpp control-flow/kernel audit](docs/research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md).
 
 GLM 5.2 support is limited to the GGUF files tested by this branch:
 
@@ -969,11 +976,15 @@ conversation. Useful commands are `/help`, `/think`, `/think-max`, `/nothink`,
 and returns to `ds4>`.
 
 The CLI defaults to thinking mode. Use `/nothink` or `--nothink` for direct
-answers. For Qwen, `--mtp --mtp-draft 2` enables the optional MTP speculative
-path and loads the known sidecar automatically. It is useful only for greedy
-decoding, currently uses a confidence gate
-(`--mtp-margin`) to avoid slow partial accepts, and should be treated as an
-experimental slight-speedup path.
+answers. For Qwen, `--mtp` enables the optional MTP speculative path, loads the
+known sidecar automatically, and defaults to depth two. `--mtp-draft N` can
+override the depth up to the hard limit of four. The fused verifier and direct
+recurrent rollback are enabled by the flag without tuning environment
+variables. Greedy copy workloads with high draft acceptance are the primary
+validated speedup case. Sampled Qwen generation is also speculative: DS4 samples
+each target verifier row with the request sampler, accepts only matching MTP
+proposals, and carries the first mismatch or final bonus sample into the next
+cycle. The target model therefore remains the only sampling authority.
 
 ## Server
 
@@ -984,7 +995,10 @@ Start a local OpenAI/Anthropic-compatible server:
   --ctx 100000 --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192
 ```
 
-Add `--mtp` to enable Qwen MTP; omit it for target-only decoding.
+Add `--mtp` to enable Qwen MTP for greedy and ordinary sampled decoding; omit it
+for target-only decoding. Stochastic MTP is conservatively disabled for tool and
+response-schema requests because their token masks change after each accepted
+token. Greedy constrained phases retain the existing MTP path.
 
 Use `--chdir /path/to/ds4` when launching `ds4-server` from another directory,
 so relative runtime files such as `metal/*.metal` resolve from the project tree.

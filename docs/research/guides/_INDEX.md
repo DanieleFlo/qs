@@ -26,6 +26,35 @@ Leggere Marlin, QUICK e Atom; poi confrontare llama.cpp MMVQ/vec-dot, ik_llama M
 - righe 31–34: **Speculative e MTP** — Leggere i due paper speculative, Medusa e multi-token prediction.
 - righe 35–37: **Offload e memoria insufficiente** — Leggere FlexGen e le ricette consumer, ma non confondere throughput batch con latenza batch 1.
 
+## [Qwen3.6 MTP: workflow llama.cpp, confronto DS4 e audit CUDA](qwen36-mtp-llamacpp-ds4-control-flow.md)
+
+Questa scheda descrive il percorso MTP realmente eseguito per Qwen3.6, dal
+
+- righe 3–14: **Ruolo e perimetro** — Questa scheda descrive il percorso MTP realmente eseguito per Qwen3.6, dal
+- righe 15–33: **Fonti primarie** — integrazione MTP, context target/draft separati, hidden NextN e rollback
+- righe 34–51: **Semantica NextN** — Il trunk target espone `h_nextn` dopo `output_norm`.
+- righe 52–103: **Workflow llama.cpp** — Il context target conserva logits, KV e memoria ricorrente.
+  - righe 54–60: **Prefill e frontiera** — Il context target conserva logits, KV e memoria ricorrente.
+  - righe 61–66: **Draft** — Il token appena campionato non e' ancora nel target state.
+  - righe 67–79: **Verifica target** — Il server costruisce un unico batch:
+  - righe 80–88: **Accept e rollback** — `process()` conserva tutti gli hidden target in `verify_h`.
+  - righe 89–103: **Pseudocodice** — sampled = argmax(target_logits)
+- righe 104–115: **DS4 prima dell'audit** — Il vecchio ciclo eseguiva `target_seed(1)` e poi `verify(drafts)`.
+- righe 116–136: **DS4 finale** — Con `--mtp`, il percorso predefinito e':
+- righe 137–154: **Problemi trovati e ritorno a llama.cpp** — Il bug lane 1 e' il caso piu' importante.
+- righe 155–190: **Audit dei kernel MTP** — Il verifier usa attivazioni Q8_1 piu' un secondo residuo Q8_1.
+  - righe 157–176: **Target Q4_K/Q5_K/Q6_K** — Il verifier usa attivazioni Q8_1 piu' un secondo residuo Q8_1.
+  - righe 177–183: **Sidecar Q4_0** — Il shared head usa Q4_0 x Q8_1+R8 con DP4A e otto output rows per CTA.
+  - righe 184–190: **Rollback GDN** — Le 48 convolution state e recurrent state vengono snapshotate direttamente
+- righe 191–201: **Esperimenti scartati** — qualita' fallita; non presente nel percorso finale.
+- righe 202–289: **Validazione finale** — Comando:
+  - righe 204–229: **Suite model-backed** — Comando:
+  - righe 230–242: **CLI Q4_K_S** — Context 768, prefill chunk 16, 128 token, greedy:
+  - righe 243–267: **Confronto locale llama.cpp** — Il binario CUDA upstream al commit auditato e' stato eseguito sulla stessa RTX
+  - righe 268–289: **Server reale** — Quattro richieste `/v1/chat/completions`, una warm-up e tre misurate, 180 token
+- righe 290–297: **Nota vLLM** — L'assunzione che vLLM non implementi Qwen MTP non e' piu' valida.
+- righe 298–305: **Limiti dell'evidenza** — Il workflow e l'audit CUDA llama.cpp sono fissati al commit indicato.
+
 ## [Checklist di trasferimento RTX 3090](rtx3090-transfer-checklist.md)
 
 Confermare percorso sm_86, niente FP8 nativo, shared memory opt-in entro 99 KiB, registri e massimo 1.536 thread/SM.
