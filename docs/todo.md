@@ -1561,7 +1561,7 @@ state inserite nello stage Git. Nessun commit è stato creato.
     8,095 ms e full-attention totale 11,181 ms. Per superare stabilmente 30 t/s
     a 10–12K va ridotto il matvec residuo senza riaprire il gate numerico.
 12. La baseline richiesta per locale e server è ora senza env: R8 fuso,
-    split-K32 automatico da 8K e GQA2. `doctor` mostra questi valori e verifica
+    split-K32 automatico da 2K e GQA2. `doctor` mostra questi valori e verifica
     che `ds4`, `ds4-bench` e `ds4-server` siano tutti rilinkati allo stesso
     `ds4_cuda.o`.
 13. Il run no-env `r8-default-noenv-20260812` è bit-identico al precedente

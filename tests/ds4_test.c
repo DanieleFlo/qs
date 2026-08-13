@@ -5087,6 +5087,7 @@ static void test_long_prefill_progress(void *ud, const char *event, int current,
 }
 
 static void test_long_story_fact_recall(void) {
+    const int context_limit = 32768;
     const char *prompt_path = getenv("DS4_TEST_LONG_PROMPT");
     if (!prompt_path || !prompt_path[0]) {
         prompt_path = "tests/long_context_story_prompt.txt";
@@ -5104,9 +5105,15 @@ static void test_long_story_fact_recall(void) {
     ds4_tokens prompt = {0};
     ds4_tokenize_rendered_chat(engine, prompt_text, &prompt);
     TEST_ASSERT(prompt.len > 30000);
+    TEST_ASSERT(prompt.len < context_limit);
+    if (prompt.len >= context_limit) {
+        ds4_tokens_free(&prompt);
+        free(prompt_text);
+        return;
+    }
 
     ds4_session *session = NULL;
-    TEST_ASSERT(ds4_session_create(&session, engine, 100000) == 0);
+    TEST_ASSERT(ds4_session_create(&session, engine, context_limit) == 0);
     if (!session) {
         ds4_tokens_free(&prompt);
         free(prompt_text);
@@ -5121,8 +5128,10 @@ static void test_long_story_fact_recall(void) {
     buf out = {0};
     uint64_t rng = 12345;
     int generated = 0;
+    int generation_limit = context_limit - prompt.len;
+    if (generation_limit > 350) generation_limit = 350;
     bool decode_ok = true;
-    for (; generated < 350; generated++) {
+    for (; generated < generation_limit; generated++) {
         int token = ds4_session_sample(session, 0.0f, 0, 1.0f, 0.0f, &rng);
         if (token == ds4_token_eos(engine)) break;
 

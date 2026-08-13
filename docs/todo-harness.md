@@ -48,7 +48,12 @@ condizione di completamento.
   8K/12K/16K. Le
   decisioni Qwen mantenute e respinte confluiscono nel ledger canonico
   `docs/qwen36-performance-ledger.md`.
-- Split-K32 è KEEP e default automatico da 8K. Nello slow residente (cinque
+- Split-K32 è KEEP e default automatico da 2K. La matrice completa residente
+  2K–30K usa due run/punto, richiede almeno 20 tok/s a ogni frontiera e
+  controlla che non esistano recuperi materiali dopo una valle. Nel confronto
+  isolato la curva passa da 14,25/9,05/6,51 tok/s a 2K/4K/6K a
+  33,61/32,33/31,20, poi scende fino a 20,91 a 30K, con 30/30 artefatti
+  frontier/decode PASS. Nello slow residente storico (cinque
   run/punto) porta 4,56 → 15,49 tok/s a 8K, 3,31 → 14,70 a 12K e
   2,60 → 13,94 a 16K; tutti i 16 token greedy coincidono in ogni frontiera,
   top-20 è 1,0 e il coseno resta sopra 0,9999999999991. Uno smoke successivo

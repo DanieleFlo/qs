@@ -46,7 +46,7 @@ separato, 64 token per frontiera e cinque ripetizioni, evitando un nuovo
 caricamento del modello per ogni frontiera.
 Il baseline forza il fallback riproducibile con
 `DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1`; il candidato verifica il dispatch di
-produzione, che usa split-K32 automaticamente da 8K. `--candidate-env` resta
+produzione, che usa split-K32 automaticamente da 2K. `--candidate-env` resta
 disponibile per esperimenti su partizioni e soglie, ma non serve nel run
 canonico.
 
@@ -59,6 +59,39 @@ confermato è 2.
 Il registro unico di soluzioni mantenute e scartate è
 `docs/qwen36-performance-ledger.md`. I documenti datati restano fonti storiche,
 ma una decisione nuova va sempre memorizzata anche nel ledger.
+
+## Curva completa di contesto 2K-30K
+
+La suite non rapida `context-curve-full` misura 15 frontiere, da 2048 a 30720
+token con passo 2048, 64 token di decode e due ripetizioni. Un unico sweep
+mantiene modello e sessione residenti. Il record include un gate autonomo che
+richiede almeno 20 tok/s a ogni frontiera e rifiuta una risalita adiacente
+maggiore di `max(1.5 tok/s, 8%)`; i punti sopra 30 tok/s sono solo annotati e
+non vengono rallentati o penalizzati.
+
+    python3 tools/perf_harness.py run \
+      --id context-curve-default-01 \
+      --model gguf/Qwen3.6-27B-Q4_K_S.gguf \
+      --prompt tests/long_context_story_prompt.txt \
+      --suite context-curve-full --repetitions 2 --warmup always \
+      --hypothesis "default decode stays above 20 tok/s from 2K to 30K" \
+      --metric gen_steady_tps \
+      --baseline performance-results/context-curve-baseline/experiment.json
+
+`server-curve` avvia un `ds4-server` isolato su una porta locale libera e usa
+lo stesso elenco di frontiere. Calibra il filler contro `usage.prompt_tokens`,
+verifica che ogni richiesta abbia esattamente il contesto richiesto, richiede
+almeno 32 token generati e usa l'`avg t/s` di decode emesso dal server, non il
+tempo HTTP comprensivo del prefill. Le due risposte per frontiera devono inoltre
+avere lo stesso hash; un candidato confrontato a un baseline deve conservare
+anche gli hash del baseline.
+
+    python3 tools/perf_harness.py server-curve \
+      --id server-context-curve-default-01 \
+      --model gguf/Qwen3.6-27B-Q4_K_S.gguf \
+      --repetitions 2 \
+      --hypothesis "server decode stays above 20 tok/s from 2K to 30K" \
+      --baseline-run
 
 ## Ciclo di sviluppo rapido
 
@@ -287,7 +320,7 @@ binari è più vecchio dei sorgenti o degli oggetti da cui dipende, espone gli
 input più recenti in `runtime_binaries.*.newer_inputs` e non dichiara pronto il
 relativo percorso. La correzione canonica è `workflow --name r8-build` oppure
 il workflow `validate`, non la sola build di `ds4-bench`.
-Lo stesso report espone `qwen_decode_defaults`: R8, split-K32 da 8K e GQA2,
+Lo stesso report espone `qwen_decode_defaults`: R8, split-K32 da 2K e GQA2,
 insieme ai tre flag di rollback. È quindi possibile verificare la baseline
 attiva senza dedurla dalla shell history.
 

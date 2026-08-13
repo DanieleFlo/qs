@@ -15,10 +15,14 @@ import platform
 import re
 import shlex
 import shutil
+import socket
 import statistics
 import struct
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +32,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKLOADS = ROOT / "performance" / "workloads.yaml"
 DEFAULT_RESULTS = ROOT / "performance-results"
 SCHEMA_VERSION = 1
+CONTEXT_CURVE_SUITE = "context-curve-full"
+CONTEXT_CURVE_MIN_TPS = 20.0
+CONTEXT_CURVE_TARGET_CEILING_TPS = 30.0
+CONTEXT_CURVE_RECOVERY_TOLERANCE_TPS = 1.5
+CONTEXT_CURVE_RECOVERY_TOLERANCE_FRACTION = 0.08
 QUANT_BYTES = {
     "F32": (4, 1), "F16": (2, 1),
     "Q4_K": (144, 256), "Q5_K": (176, 256), "Q6_K": (210, 256),
@@ -73,6 +82,11 @@ DECODE_PROFILE_RE = re.compile(
     r"output=(?P<output>[0-9.]+)ms "
     r"read=(?P<read>[0-9.]+)ms "
     r"total=(?P<total>[0-9.]+)ms"
+)
+SERVER_PROGRESS_RE = re.compile(
+    r"ds4-server: (?P<kind>chat|completion) ctx=(?P<context>\S+) "
+    r"gen=(?P<generation>\d+)[^\r\n]*?decoding chunk="
+    r"(?P<chunk_tps>[0-9.]+) t/s avg=(?P<avg_tps>[0-9.]+) t/s"
 )
 
 
@@ -380,6 +394,104 @@ def aggregate_runs(runs: list[list[dict[str, Any]]]) -> dict[str, Any]:
         if values:
             metrics[name] = summary(values)
     return {"metrics": metrics, "raw_rows": rows}
+
+
+def analyze_context_curve(
+        workloads: list[dict[str, Any]], *,
+        minimum_tps: float = CONTEXT_CURVE_MIN_TPS,
+        target_ceiling_tps: float = CONTEXT_CURVE_TARGET_CEILING_TPS,
+        recovery_tolerance_tps: float = CONTEXT_CURVE_RECOVERY_TOLERANCE_TPS,
+        recovery_tolerance_fraction: float = CONTEXT_CURVE_RECOVERY_TOLERANCE_FRACTION,
+) -> dict[str, Any]:
+    """Gate a decode curve without penalizing throughput above its target band."""
+    points = []
+    missing = []
+    for workload in workloads:
+        if workload.get("status") != "measured":
+            missing.append(workload.get("id", "unknown"))
+            continue
+        context = workload.get("definition", {}).get("context")
+        tps = metric_median(workload, "gen_steady_tps")
+        if context is None or tps is None:
+            missing.append(workload.get("id", "unknown"))
+            continue
+        points.append({
+            "workload": workload["id"], "context": int(context), "tps": tps,
+        })
+    points.sort(key=lambda point: point["context"])
+    below_floor = [point for point in points if point["tps"] < minimum_tps]
+    above_target_ceiling = [
+        point for point in points if point["tps"] > target_ceiling_tps
+    ]
+    material_recoveries = []
+    for left, right in zip(points, points[1:]):
+        increase = right["tps"] - left["tps"]
+        tolerance = max(
+            recovery_tolerance_tps,
+            left["tps"] * recovery_tolerance_fraction,
+        )
+        if increase > tolerance:
+            material_recoveries.append({
+                "from_context": left["context"],
+                "to_context": right["context"],
+                "from_tps": left["tps"], "to_tps": right["tps"],
+                "increase_tps": increase, "tolerance_tps": tolerance,
+            })
+    status = "PASS"
+    if missing or below_floor or material_recoveries:
+        status = "FAIL"
+    return {
+        "status": status,
+        "minimum_tps": minimum_tps,
+        "target_ceiling_tps": target_ceiling_tps,
+        "ceiling_policy": "advisory_only; faster points are never penalized",
+        "recovery_tolerance_tps": recovery_tolerance_tps,
+        "recovery_tolerance_fraction": recovery_tolerance_fraction,
+        "points": points,
+        "observed_min_tps": min((point["tps"] for point in points), default=None),
+        "observed_max_tps": max((point["tps"] for point in points), default=None),
+        "missing_workloads": missing,
+        "below_floor": below_floor,
+        "above_target_ceiling": above_target_ceiling,
+        "material_recoveries": material_recoveries,
+    }
+
+
+def parse_server_progress(text: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": match.group("kind"),
+            "context_span": match.group("context"),
+            "generation_tokens": int(match.group("generation")),
+            "chunk_tps": float(match.group("chunk_tps")),
+            "avg_tps": float(match.group("avg_tps")),
+        }
+        for match in SERVER_PROGRESS_RE.finditer(text)
+    ]
+
+
+def prompt_filler_intercept(
+        first_count: int, first_tokens: int,
+        second_count: int, second_tokens: int) -> int:
+    if second_count <= first_count:
+        raise HarnessError("prompt calibration counts must be increasing")
+    if second_tokens - first_tokens != second_count - first_count:
+        raise HarnessError(
+            "server prompt filler is not one token per repetition; "
+            f"counts {first_count}->{second_count} produced "
+            f"{first_tokens}->{second_tokens} prompt tokens"
+        )
+    return first_tokens - first_count
+
+
+def server_curve_prompt(filler_count: int) -> str:
+    if filler_count < 0:
+        raise HarnessError("target context is smaller than the calibrated prompt wrapper")
+    return (
+        "Read the following calibration filler silently.\nFILLER:"
+        + " alpha" * filler_count
+        + "\nContinue with a long numbered list about reliable GPU benchmarking.\n1."
+    )
 
 
 def parse_layer_profiles(text: str) -> list[dict[str, Any]]:
@@ -1152,7 +1264,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         "qwen_decode_defaults": {
             "q8_1_r8": True,
             "split_k_partitions": 32,
-            "split_k_min_context": 8192,
+            "split_k_min_context": 2048,
             "gqa_query_heads_per_cta": 2,
             "rollback_environment": [
                 "DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1",
@@ -1188,7 +1300,9 @@ def benchmark_model(args: argparse.Namespace) -> int:
         None if args.baseline_run else Path(args.baseline).resolve().parent / "logits"
     )
     try:
-        if args.suite in {"direction", "r8-slow", "long-context-slow"}:
+        if args.suite in {
+                "direction", "r8-slow", "long-context-slow",
+                CONTEXT_CURVE_SUITE}:
             contexts = sorted(int(item["context"]) for item in workloads)
             common = ("generation_tokens", "prefill_chunk", "backend", "batch")
             if any(
@@ -1366,6 +1480,8 @@ def benchmark_model(args: argparse.Namespace) -> int:
             ],
         },
     }
+    if args.suite == CONTEXT_CURVE_SUITE:
+        record["context_curve"] = analyze_context_curve(results)
     record_path = out_dir / "experiment.json"
     record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     print_compact(record)
@@ -1391,6 +1507,258 @@ def benchmark_model(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     return benchmark_model(args)
+
+
+def post_json(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            value = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HarnessError(f"server returned HTTP {exc.code}: {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise HarnessError(f"server request failed: {exc}") from exc
+    if not isinstance(value, dict):
+        raise HarnessError("server response is not a JSON object")
+    return value
+
+
+def wait_for_server(base_url: str, process: subprocess.Popen[Any],
+                    log_path: Path, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            tail = "\n".join(
+                log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-30:]
+            )
+            raise HarnessError(f"ds4-server exited during startup\n{tail}")
+        try:
+            with urllib.request.urlopen(base_url + "/v1/models", timeout=1.0):
+                return
+        except (urllib.error.URLError, TimeoutError):
+            time.sleep(0.1)
+    raise HarnessError(f"ds4-server was not ready after {timeout:.1f}s")
+
+
+def server_progress_since(log_path: Path, offset: int,
+                          timeout: float = 2.0) -> tuple[dict[str, Any], int]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+            stream.seek(offset)
+            text = stream.read()
+            end = stream.tell()
+        rows = parse_server_progress(text)
+        if rows:
+            return rows[-1], end
+        time.sleep(0.05)
+    raise HarnessError("server response completed without a decode progress log")
+
+
+def completion_request(base_url: str, prompt: str, max_tokens: int,
+                       timeout: float) -> dict[str, Any]:
+    return post_json(base_url + "/v1/completions", {
+        "model": "deepseek-chat", "prompt": prompt,
+        "max_tokens": max_tokens, "temperature": 0,
+        "seed": 424242, "stream": False,
+    }, timeout)
+
+
+def completion_usage(response: dict[str, Any]) -> tuple[int, int]:
+    usage = response.get("usage") or {}
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    if not isinstance(prompt_tokens, int) or not isinstance(completion_tokens, int):
+        raise HarnessError("completion response lacks integer token usage")
+    return prompt_tokens, completion_tokens
+
+
+def benchmark_server_curve(args: argparse.Namespace) -> int:
+    binary, model = Path(args.binary), Path(args.model)
+    for path, label in ((binary, "server binary"), (model, "model")):
+        if not path.exists():
+            raise HarnessError(f"{label} does not exist: {path}")
+    workloads = load_workloads(Path(args.workloads), CONTEXT_CURVE_SUITE)
+    contexts = [int(item["context"]) for item in workloads]
+    generation_tokens = int(workloads[0]["generation_tokens"])
+    if any(int(item["generation_tokens"]) != generation_tokens for item in workloads):
+        raise HarnessError("server curve workloads must use one generation length")
+    experiment_id = args.id or datetime.now().strftime("%Y%m%d-%H%M%S-server")
+    out_dir = Path(args.results) / experiment_id
+    if out_dir.exists():
+        raise HarnessError(f"experiment already exists: {out_dir}")
+    out_dir.mkdir(parents=True)
+    log_path = out_dir / "server.log"
+    env = apply_env_overrides(os.environ, args.env)
+    port = args.port
+    if port == 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = int(probe.getsockname()[1])
+    base_url = f"http://127.0.0.1:{port}"
+    context_alloc = max(contexts) + generation_tokens + 1
+    command = [
+        str(binary), "--model", str(model), "--backend", "cuda",
+        "--ctx", str(context_alloc), "--host", "127.0.0.1", "--port", str(port),
+        "--prefill-chunk", str(workloads[0]["prefill_chunk"]),
+    ]
+    process: subprocess.Popen[Any] | None = None
+    log_stream = None
+    results = []
+    try:
+        log_stream = log_path.open("w", encoding="utf-8")
+        process = subprocess.Popen(
+            command, cwd=ROOT, env=env, stdout=log_stream,
+            stderr=subprocess.STDOUT, text=True,
+        )
+        wait_for_server(base_url, process, log_path, args.startup_timeout)
+
+        first_count, second_count = 32, 96
+        first = completion_request(
+            base_url, server_curve_prompt(first_count), 1, args.timeout
+        )
+        second = completion_request(
+            base_url, server_curve_prompt(second_count), 1, args.timeout
+        )
+        first_tokens, _ = completion_usage(first)
+        second_tokens, _ = completion_usage(second)
+        intercept = prompt_filler_intercept(
+            first_count, first_tokens, second_count, second_tokens
+        )
+        log_offset = log_path.stat().st_size
+
+        for workload in workloads:
+            context = int(workload["context"])
+            prompt = server_curve_prompt(context - intercept)
+            samples = []
+            output_hashes = []
+            completion_counts = []
+            for _ in range(args.repetitions):
+                request_offset = log_path.stat().st_size
+                response = completion_request(
+                    base_url, prompt, generation_tokens, args.timeout
+                )
+                actual_context, completion_count = completion_usage(response)
+                if actual_context != context:
+                    raise HarnessError(
+                        f"server prompt calibration missed context {context}: "
+                        f"observed {actual_context}"
+                    )
+                if completion_count < args.minimum_completion_tokens:
+                    raise HarnessError(
+                        f"server generated only {completion_count} tokens at context "
+                        f"{context}; need at least {args.minimum_completion_tokens}"
+                    )
+                progress, log_offset = server_progress_since(
+                    log_path, request_offset
+                )
+                if progress["generation_tokens"] != completion_count:
+                    raise HarnessError(
+                        "server progress log and response usage disagree on completion tokens"
+                    )
+                samples.append(progress["avg_tps"])
+                completion_counts.append(completion_count)
+                choices = response.get("choices") or []
+                output = choices[0].get("text", "") if choices else ""
+                output_hashes.append(hashlib.sha256(output.encode("utf-8")).hexdigest())
+            results.append({
+                "id": workload["id"], "status": "measured",
+                "definition": workload,
+                "metrics": {"gen_steady_tps": summary(samples)},
+                "raw_rows": [
+                    {
+                        "ctx_tokens": context,
+                        "gen_steady_tps": tps,
+                        "completion_tokens": tokens,
+                    }
+                    for tps, tokens in zip(samples, completion_counts)
+                ],
+                "server_output": {
+                    "deterministic": len(set(output_hashes)) == 1,
+                    "sha256": output_hashes[0],
+                    "completion_tokens": sorted(set(completion_counts)),
+                },
+            })
+    except Exception:
+        (out_dir / "FAILED").write_text(utc_now() + "\n", encoding="utf-8")
+        raise
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+        if log_stream is not None:
+            log_stream.close()
+
+    baseline_record = (
+        None if args.baseline_run else read_json(Path(args.baseline), "baseline experiment")
+    )
+    deterministic = all(
+        item["server_output"]["deterministic"] for item in results
+    )
+    baseline_outputs_match = True
+    if baseline_record:
+        baseline_by_id = {item["id"]: item for item in baseline_record["workloads"]}
+        baseline_outputs_match = all(
+            baseline_by_id.get(item["id"], {}).get("server_output", {}).get("sha256") ==
+            item["server_output"]["sha256"]
+            for item in results
+        )
+    record = {
+        "schema_version": SCHEMA_VERSION, "experiment_id": experiment_id,
+        "created_at": utc_now(), "status": "measured",
+        "hypothesis": args.hypothesis, "target_metric": "gen_steady_tps",
+        "suite": CONTEXT_CURVE_SUITE, "runtime": "ds4-server",
+        "repetitions": args.repetitions,
+        "baseline": {
+            "kind": "self" if args.baseline_run else "experiment",
+            "path": None if args.baseline_run else str(Path(args.baseline).resolve()),
+        },
+        "provenance": {
+            "git_commit": git_value("rev-parse", "HEAD"),
+            "git_dirty": bool(git_value("status", "--porcelain")),
+            "binary": str(binary.resolve()), "binary_sha256": sha256(binary),
+            "model": str(model.resolve()),
+            "model_sha256": cached_sha256(model, Path(args.results)),
+            "environment_overrides": dict(item.split("=", 1) for item in args.env),
+            "command": command, "prompt_filler_token_intercept": intercept,
+        },
+        "hardware": hardware_profile(), "workloads": results,
+        "context_curve": analyze_context_curve(results),
+        "correctness": {
+            "status": (
+                "BASELINE" if args.baseline_run else
+                "PASS" if deterministic and baseline_outputs_match else "FAIL"
+            ),
+            "deterministic_outputs": deterministic,
+            "baseline_outputs_match": baseline_outputs_match,
+        },
+    }
+    record_path = out_dir / "experiment.json"
+    record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    print_compact(record)
+    print(f"\nwrote {record_path}", file=sys.stderr)
+    if baseline_record:
+        comparison = compare_records(baseline_record, record)
+        comparison_path = out_dir / "comparison.json"
+        comparison_path.write_text(
+            json.dumps(comparison, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"verdict: {comparison['verdict']} ({comparison['reason']})")
+    return 0
+
+
+def cmd_server_curve(args: argparse.Namespace) -> int:
+    return benchmark_server_curve(args)
 
 
 def metric_median(workload: dict[str, Any], name: str) -> float | None:
@@ -1446,12 +1814,16 @@ def compare_records(baseline: dict[str, Any],
         weight_sum if improvements and weight_sum else None
     )
     correctness = candidate.get("correctness", {}).get("status", "NOT_VERIFIED")
+    context_curve = candidate.get("context_curve")
     if correctness == "FAIL":
         verdict = "REJECT_CANDIDATE"
         reason = "frontier logits drift exceeded a correctness gate"
     elif correctness != "PASS":
         verdict = "NEED_MORE_DATA"
         reason = "performance comparison has no passing correctness report"
+    elif context_curve and context_curve.get("status") != "PASS":
+        verdict = "REJECT_CANDIDATE"
+        reason = "context curve misses the throughput floor or has a material recovery"
     elif candidate.get("suite") in {"direction", "long-context-direction", "quick"}:
         verdict = "NEED_MORE_DATA"
         reason = "direction suite is preliminary; confirm with the slow suite"
@@ -1837,6 +2209,14 @@ def print_compact(record: dict[str, Any]) -> None:
                 unstable = " unstable" if metric["unstable"] else ""
                 fields.append(f"{name}={metric['median']:.2f}{suffix}{unstable}")
         print(f"  {workload['id']}: " + ", ".join(fields))
+    curve = record.get("context_curve")
+    if curve:
+        print(
+            f"  context curve: {curve['status']} "
+            f"min={curve['observed_min_tps']:.2f} tok/s "
+            f"floor={curve['minimum_tps']:.2f} tok/s "
+            f"material_recoveries={len(curve['material_recoveries'])}"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1857,7 +2237,7 @@ def build_parser() -> argparse.ArgumentParser:
                      choices=("direction", "r8-slow",
                               "long-context-direction", "quick",
                               "standard", "slow", "long-context-slow",
-                              "exhaustive"))
+                              CONTEXT_CURVE_SUITE, "exhaustive"))
     run.add_argument("--repetitions", type=int, default=2)
     run.add_argument("--warmup", choices=("auto", "always", "never"), default="auto")
     run.add_argument("--hypothesis", required=True)
@@ -1870,6 +2250,26 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--env", action="append", default=[], metavar="NAME=VALUE")
     run.add_argument("--results", default=str(DEFAULT_RESULTS))
     run.set_defaults(func=cmd_run)
+    server_curve = commands.add_parser(
+        "server-curve",
+        help="start ds4-server and measure its full 2K..30K decode curve",
+    )
+    server_curve.add_argument("--id")
+    server_curve.add_argument("--model", required=True)
+    server_curve.add_argument("--binary", default=str(ROOT / "ds4-server"))
+    server_curve.add_argument("--workloads", default=str(DEFAULT_WORKLOADS))
+    server_curve.add_argument("--repetitions", type=int, default=2)
+    server_curve.add_argument("--minimum-completion-tokens", type=int, default=32)
+    server_curve.add_argument("--port", type=int, default=0)
+    server_curve.add_argument("--startup-timeout", type=float, default=180.0)
+    server_curve.add_argument("--timeout", type=float, default=1800.0)
+    server_curve.add_argument("--hypothesis", required=True)
+    server_baseline = server_curve.add_mutually_exclusive_group(required=True)
+    server_baseline.add_argument("--baseline-run", action="store_true")
+    server_baseline.add_argument("--baseline")
+    server_curve.add_argument("--env", action="append", default=[], metavar="NAME=VALUE")
+    server_curve.add_argument("--results", default=str(DEFAULT_RESULTS))
+    server_curve.set_defaults(func=cmd_server_curve)
     compare = commands.add_parser("compare", help="compare experiment records")
     compare.add_argument("baseline")
     compare.add_argument("candidate")

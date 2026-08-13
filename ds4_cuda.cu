@@ -29614,14 +29614,16 @@ extern "C" int ds4_gpu_qwen35_full_attention_rows_tensor(
             out_heads, q_gate, key_cache, value_cache,
             position_start, n_tokens);
     }
-    /* Five-run model-backed sweeps keep split-K32 at 8K/12K/16K. Below
-     * 8K the extra partial/merge launch has not earned promotion, so retain
-     * the legacy reduction. FORCE exists for the numerical probe and
-     * threshold experiments; NO is the reproducible legacy A/B fallback. */
+    /* A model-backed 2K..30K sweep found that the serial reduction creates a
+     * severe 2K/4K/6K valley (14.25/9.05/6.51 tok/s), while split-K32 removes
+     * it (33.61/32.33/31.20 tok/s) and leaves the long-context path unchanged.
+     * Keep the simpler reduction below 2K, where its lower launch overhead is
+     * useful. FORCE exists for numerical/threshold probes; NO is the
+     * reproducible legacy A/B fallback. */
     const int force_split_k =
         cuda_env_flag_enabled("DS4_CUDA_QWEN_SPLIT_K_ATTN", 0);
     const int automatic_split_k =
-        position_start >= 8192u &&
+        position_start >= 2048u &&
         !cuda_env_flag_enabled("DS4_CUDA_QWEN_NO_SPLIT_K_ATTN", 0);
     if (n_tokens == 1u && (force_split_k || automatic_split_k)) {
         return qwen35_attention_split_k_launch(

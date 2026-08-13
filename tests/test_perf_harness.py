@@ -59,6 +59,75 @@ class PerfHarnessTests(unittest.TestCase):
         for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
             self.assertEqual(len({item[key] for item in slow}), 1)
 
+    def test_full_context_curve_covers_every_two_kib_tokens_through_30k(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "context-curve-full"
+        )
+        self.assertEqual(
+            [item["context"] for item in workloads],
+            list(range(2048, 30721, 2048)),
+        )
+        self.assertEqual(len(workloads), 15)
+        for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
+            self.assertEqual(len({item[key] for item in workloads}), 1)
+
+    @staticmethod
+    def curve_workload(context: int, tps: float) -> dict:
+        return {
+            "id": f"c{context}", "status": "measured",
+            "definition": {"context": context},
+            "metrics": {"gen_steady_tps": {"median": tps}},
+        }
+
+    def test_context_curve_gate_accepts_flat_or_decreasing_throughput(self) -> None:
+        report = HARNESS.analyze_context_curve([
+            self.curve_workload(2048, 31.0),
+            self.curve_workload(4096, 29.5),
+            self.curve_workload(6144, 20.0),
+        ])
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["observed_min_tps"], 20.0)
+        self.assertEqual(len(report["above_target_ceiling"]), 1)
+
+    def test_context_curve_gate_rejects_a_valley_even_when_floor_passes(self) -> None:
+        report = HARNESS.analyze_context_curve([
+            self.curve_workload(2048, 28.0),
+            self.curve_workload(4096, 21.0),
+            self.curve_workload(6144, 27.0),
+        ])
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(len(report["material_recoveries"]), 1)
+
+    def test_context_curve_gate_rejects_points_below_twenty_tps(self) -> None:
+        report = HARNESS.analyze_context_curve([
+            self.curve_workload(2048, 19.99),
+            self.curve_workload(4096, 19.0),
+        ])
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(len(report["below_floor"]), 2)
+
+    def test_server_progress_parser_uses_final_average_not_chunk_speed(self) -> None:
+        rows = HARNESS.parse_server_progress(
+            "ds4-server: completion ctx=2048..2112 gen=64 "
+            "decoding chunk=31.50 t/s avg=27.25 t/s 2.349s\n"
+        )
+        self.assertEqual(rows[0]["generation_tokens"], 64)
+        self.assertEqual(rows[0]["chunk_tps"], 31.5)
+        self.assertEqual(rows[0]["avg_tps"], 27.25)
+
+    def test_server_prompt_calibration_requires_one_token_per_filler(self) -> None:
+        self.assertEqual(HARNESS.prompt_filler_intercept(32, 47, 96, 111), 15)
+        with self.assertRaisesRegex(HARNESS.HarnessError, "not one token"):
+            HARNESS.prompt_filler_intercept(32, 47, 96, 112)
+
+    def test_server_curve_parser_defaults_to_two_repetitions(self) -> None:
+        args = HARNESS.build_parser().parse_args([
+            "server-curve", "--model", "model.gguf", "--baseline-run",
+            "--hypothesis", "server curve remains above the floor",
+        ])
+        self.assertEqual(args.repetitions, 2)
+        self.assertEqual(args.port, 0)
+
     def test_workflow_dry_run_builds_the_documented_script_command(self) -> None:
         parser = HARNESS.build_parser()
         args = parser.parse_args([

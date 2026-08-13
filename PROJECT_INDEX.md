@@ -220,16 +220,19 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   Q8_1 che separano i byte consumati da MMVQ dal metadata `ds.y` e confronti
   full-vocabulary di una riga fra run Qwen etichettati; il gate delle suite
   oracle conta sequenze complete e argmax greedy/teacher-forced; `doctor`
-  segnala separatamente client, benchmark e server obsoleti.
+  segnala separatamente client, benchmark e server obsoleti. La suite completa
+  2K–30K controlla floor e forma della curva; `server-curve` ripete la stessa
+  matrice via HTTP usando i token effettivi e il tempo di decode del server.
 - `tools/perf-qwen-validate.sh`, `tools/perf-qwen-r8.sh`,
   `tools/perf-qwen-long-context.sh` — workflow eseguibili richiamati
   dall'harness per build/correctness, relink congiunto di `ds4`, `ds4-bench` e
   `ds4-server`, A/B F32-vs-R8 e ciclo profile/direction/slow sui contesti
-  8K–16K, compreso il confronto GQA scalare/fuso. R8 fuso, split-K32 da 8K e
+  8K–16K, compreso il confronto GQA scalare/fuso. R8 fuso, split-K32 da 2K e
   GQA2 sono la baseline Qwen3.6 CUDA comune a client e server.
-- `performance/workloads.yaml` — workload canonici direction/quick/standard/slow/exhaustive,
-  incluse la conferma R8 breve e quella long-context a finestre da 64 token,
-  separati per fase, batch, context e prefill chunk.
+- `performance/workloads.yaml` — workload canonici direction/quick/standard/slow/exhaustive
+  e curva completa 2K–30K a passo 2K, incluse la conferma R8 breve e quella
+  long-context a finestre da 64 token, separati per fase, batch, context e
+  prefill chunk.
 - `performance/README.md` — comandi brevi e confini verificati del harness.
 - `performance/references.md` — fonti primarie, implementazioni di confronto e
   letteratura HTML, con criteri espliciti per separare evidenza e fuffa.

@@ -409,7 +409,7 @@ riferimento di dispatch, non come codice copiato.
 | `lc-split-warp` | 8 warp elaborano partizioni temporali indipendenti; core 3–6× | MAE 5,24e-9, max 4,84e-8, cosine 1 | core 38,67 ms; 11,04 tok/s profilati | inferiore allo split-K | REJECT, da rimuovere |
 | `lc-split-k8` | 8 CTA/head aumentano il parallelismo senza duplicare K/V | MAE 5,14e-9, max 5,59e-8, cosine 1 | core 25,27 ms; 13,19 tok/s profilati | inferiore a K32 | REJECT come configurazione |
 | `lc-split-k16` | 16 CTA/head avvicinano la copertura completa degli SM | stessa primitiva split-K verde | core 17,31 ms; 13,18 tok/s profilati | inferiore a K32 | REJECT come configurazione |
-| `lc-split-k32` | più wave riducono la coda dei blocchi; core <17 ms | MAE 5,14e-9, max 5,59e-8; slow: 16/16 token uguali a 8K/12K/16K, top-20 1,0, cosine >0,9999999999991 | core 11,78 ms nel profiler v2; 14,29 tok/s fuori profiler a 10.666 | mediane steady 4,56 → 15,49 a 8K; 3,31 → 14,70 a 12K; 2,60 → 13,94 a 16K; +339,99% medio, CV <0,9% | KEEP; default automatico da 8K |
+| `lc-split-k32` | più wave riducono la coda dei blocchi; core <17 ms | MAE 5,14e-9, max 5,59e-8; slow: 16/16 token uguali a 8K/12K/16K, top-20 1,0, cosine >0,9999999999991 | core 11,78 ms nel profiler v2; 14,29 tok/s fuori profiler a 10.666 | mediane steady 4,56 → 15,49 a 8K; 3,31 → 14,70 a 12K; 2,60 → 13,94 a 16K; +339,99% medio, CV <0,9% | KEEP; default automatico da 2K dopo la curva completa 2026-08-13 |
 
 Artefatti locali: `performance-results/qwen-longctx-10666-*-profile.json` e
 `performance-results/splitk32-longslow-20260811-01-{baseline,candidate}`.
@@ -548,6 +548,36 @@ Artefatti: `performance-results/r8-nosplit-profile-20260812.json`,
 I dati portano DS4 vicino, ma non ancora stabilmente oltre 30 t/s a 10–12K:
 il gap residuo rispetto a LM Studio rimane principalmente nei matvec FFN/GDN,
 non nel solo core attention.
+
+## Curva completa 2K–30K e soglia split-K, 2026-08-13
+
+La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,
+64 token di decode e due ripetizioni in un solo sweep residente. Il gate
+richiede almeno 20 tok/s a ogni punto e rifiuta recuperi adiacenti superiori a
+`max(1,5 tok/s, 8%)`; non penalizza throughput sopra 30 tok/s. Il sottocomando
+`server-curve` applica la stessa matrice al server HTTP, calibrando il prompt
+contro `usage.prompt_tokens` e leggendo l'`avg t/s` di decode dal log server.
+
+Baseline no-force con soglia storica 8K: 2K 14,25, 4K 9,05, 6K 6,51,
+8K 29,12 e 30K 20,26 tok/s. Il salto 6K→8K dimostra una valle di dispatch, non
+un limite fisico crescente col contesto. Con la sola variabile
+`DS4_CUDA_QWEN_SPLIT_K_ATTN=1`: 33,61, 32,33, 31,20 e 29,78 tok/s a
+2K/4K/6K/8K, poi discesa regolare fino a 20,91 a 30K. Il gate curva è `PASS`,
+le 15 frontier e le 15 sequenze decode sono tutte `PASS`, senza artefatti
+`NOT_VERIFIED`. Miglioramenti 2K/4K/6K: +135,81%/+257,04%/+378,89%; nessuna
+regressione dominante nella coda lunga.
+
+Il default automatico è quindi split-K32 da 2K, con GQA2 invariato e rollback
+`DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1`. Dopo il relink comune, le prime due passate
+complete no-env del binario di produzione misurano 34,08 tok/s a 2K e una
+discesa fino a 21,44 a 30K; nessun recupero materiale. Il probe numerico Qwen
+resta `PASS` (split-K vs CPU max abs 5,96e-8, cosine 1), 62 test Qwen Python
+passano e `doctor` dichiara freschi `ds4`, `ds4-bench` e `ds4-server` con soglia
+2048. Artefatti ignorati da Git:
+`context-curve-pre-splitk-baseline-r2`,
+`context-curve-force-splitk-candidate-r2` e le prime 30 righe misurate di
+`context-curve-default-final-r5` (l'esecuzione è stata arrestata dopo le due
+passate concordate; la terza parziale non partecipa alle mediane riportate).
 
 ## Coda ordinata
 
