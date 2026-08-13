@@ -29689,20 +29689,22 @@ __global__ static void qwen35_attention_split_k_partials_kernel(
         const float *q_gate,
         const float *key_cache,
         const float *value_cache,
-        uint32_t position,
+        uint32_t position_start,
         uint32_t n_partitions) {
     const uint32_t qh = blockIdx.x;
     const uint32_t partition = blockIdx.y;
+    const uint32_t trow = blockIdx.z;
     const uint32_t d = threadIdx.x;
     const uint32_t kvh = qh / 6u;
+    const uint32_t position = position_start + trow;
     const uint32_t n_keys = position + 1u;
     const uint32_t keys_per_partition =
         (n_keys + n_partitions - 1u) / n_partitions;
     const uint32_t begin = min(partition * keys_per_partition, n_keys);
     const uint32_t end = min(begin + keys_per_partition, n_keys);
-    const float *q = q_gate + qh * 512u;
+    const float *q = q_gate + (uint64_t)trow * 12288u + qh * 512u;
     float *partial = partials +
-        ((uint64_t)qh * n_partitions + partition) * 258u;
+        (((uint64_t)trow * 24u + qh) * n_partitions + partition) * 258u;
     float acc = 0.0f;
     float online_m = -INFINITY;
     float online_l = 0.0f;
@@ -29738,14 +29740,16 @@ __global__ static void qwen35_attention_split_k_gqa_partials_kernel(
         const float *q_gate,
         const float *key_cache,
         const float *value_cache,
-        uint32_t position,
+        uint32_t position_start,
         uint32_t n_partitions) {
     const uint32_t qh_begin = blockIdx.x * GROUP;
     const uint32_t partition = blockIdx.y;
+    const uint32_t trow = blockIdx.z;
     const uint32_t d = threadIdx.x;
     const uint32_t lane = d & 31u;
     const uint32_t warp = d >> 5u;
     const uint32_t kvh = qh_begin / 6u;
+    const uint32_t position = position_start + trow;
     const uint32_t n_keys = position + 1u;
     const uint32_t keys_per_partition =
         (n_keys + n_partitions - 1u) / n_partitions;
@@ -29765,7 +29769,8 @@ __global__ static void qwen35_attention_split_k_gqa_partials_kernel(
         const float value = value_cache[base + d];
 #pragma unroll
         for (uint32_t h = 0; h < GROUP; h++) {
-            const float *q = q_gate + (qh_begin + h) * 512u;
+            const float *q = q_gate +
+                (uint64_t)trow * 12288u + (qh_begin + h) * 512u;
             float dot = q[d] * key;
 #pragma unroll
             for (uint32_t offset = 16u; offset != 0u; offset >>= 1u) {
@@ -29801,7 +29806,8 @@ __global__ static void qwen35_attention_split_k_gqa_partials_kernel(
 #pragma unroll
     for (uint32_t h = 0; h < GROUP; h++) {
         float *partial = partials +
-            ((uint64_t)(qh_begin + h) * n_partitions + partition) * 258u;
+            (((uint64_t)trow * 24u + qh_begin + h) * n_partitions +
+             partition) * 258u;
         if (d == 0u) {
             partial[0] = online_m[h];
             partial[1] = online_l[h];
@@ -29816,9 +29822,10 @@ __global__ static void qwen35_attention_split_k_merge_kernel(
         const float *partials,
         uint32_t n_partitions) {
     const uint32_t qh = blockIdx.x;
+    const uint32_t trow = blockIdx.y;
     const uint32_t d = threadIdx.x;
     const float *head_partials =
-        partials + (uint64_t)qh * n_partitions * 258u;
+        partials + ((uint64_t)trow * 24u + qh) * n_partitions * 258u;
     float merged_m = -INFINITY;
     for (uint32_t i = 0; i < n_partitions; i++) {
         merged_m = fmaxf(merged_m, head_partials[(uint64_t)i * 258u]);
@@ -29831,9 +29838,10 @@ __global__ static void qwen35_attention_split_k_merge_kernel(
         merged_l += partial[1] * scale;
         merged_acc += partial[2u + d] * scale;
     }
-    const float *q = q_gate + qh * 512u;
+    const float *q = q_gate + (uint64_t)trow * 12288u + qh * 512u;
     const float gate = 1.0f / (1.0f + expf(-q[256u + d]));
-    out[qh * 256u + d] = (merged_acc / merged_l) * gate;
+    out[((uint64_t)trow * 24u + qh) * 256u + d] =
+        (merged_acc / merged_l) * gate;
 }
 
 static int qwen35_attention_split_k_launch(
@@ -29841,11 +29849,12 @@ static int qwen35_attention_split_k_launch(
         const ds4_gpu_tensor *q_gate,
         const ds4_gpu_tensor *key_cache,
         const ds4_gpu_tensor *value_cache,
-        uint32_t position) {
+        uint32_t position_start,
+        uint32_t n_tokens) {
     const uint32_t n_partitions = cuda_parse_u32_env_clamped(
         "DS4_CUDA_QWEN_SPLIT_K_PARTITIONS", 32u, 1u, 32u, NULL);
     const uint64_t partial_count =
-        24ull * n_partitions * 258ull;
+        (uint64_t)n_tokens * 24ull * n_partitions * 258ull;
     float *partials = (float *)cuda_tmp_alloc_on(
         cuda_current_tier(), partial_count * sizeof(float),
         "qwen35 split-k attention partials");
@@ -29864,33 +29873,34 @@ static int qwen35_attention_split_k_launch(
         gqa_group = 1u;
     }
     if (gqa_group == 2u) {
-        const dim3 partial_grid(12u, n_partitions, 1u);
+        const dim3 partial_grid(12u, n_partitions, n_tokens);
         qwen35_attention_split_k_gqa_partials_kernel<2u><<<partial_grid, 256>>>(
             partials, (const float *)q_gate->ptr,
             (const float *)key_cache->ptr, (const float *)value_cache->ptr,
-            position, n_partitions);
+            position_start, n_partitions);
     } else if (gqa_group == 3u) {
-        const dim3 partial_grid(8u, n_partitions, 1u);
+        const dim3 partial_grid(8u, n_partitions, n_tokens);
         qwen35_attention_split_k_gqa_partials_kernel<3u><<<partial_grid, 256>>>(
             partials, (const float *)q_gate->ptr,
             (const float *)key_cache->ptr, (const float *)value_cache->ptr,
-            position, n_partitions);
+            position_start, n_partitions);
     } else if (gqa_group == 6u) {
-        const dim3 partial_grid(4u, n_partitions, 1u);
+        const dim3 partial_grid(4u, n_partitions, n_tokens);
         qwen35_attention_split_k_gqa_partials_kernel<6u><<<partial_grid, 256>>>(
             partials, (const float *)q_gate->ptr,
             (const float *)key_cache->ptr, (const float *)value_cache->ptr,
-            position, n_partitions);
+            position_start, n_partitions);
     } else {
-        const dim3 partial_grid(24u, n_partitions, 1u);
+        const dim3 partial_grid(24u, n_partitions, n_tokens);
         qwen35_attention_split_k_partials_kernel<<<partial_grid, 256>>>(
             partials, (const float *)q_gate->ptr,
             (const float *)key_cache->ptr, (const float *)value_cache->ptr,
-            position, n_partitions);
+            position_start, n_partitions);
     }
     if (!cuda_ok(cudaGetLastError(),
                  "qwen35 split-k attention partials")) return 0;
-    qwen35_attention_split_k_merge_kernel<<<24u, 256>>>(
+    const dim3 merge_grid(24u, n_tokens, 1u);
+    qwen35_attention_split_k_merge_kernel<<<merge_grid, 256>>>(
         (float *)out_heads->ptr, (const float *)q_gate->ptr,
         partials, n_partitions);
     return cuda_ok(cudaGetLastError(), "qwen35 split-k attention merge");
@@ -30256,20 +30266,25 @@ extern "C" int ds4_gpu_qwen35_full_attention_rows_tensor(
             out_heads, q_gate, key_cache, value_cache,
             position_start, n_tokens);
     }
-    /* A model-backed 2K..30K sweep found that the serial reduction creates a
-     * severe 2K/4K/6K valley (14.25/9.05/6.51 tok/s), while split-K32 removes
-     * it (33.61/32.33/31.20 tok/s) and leaves the long-context path unchanged.
-     * Keep the simpler reduction below 2K, where its lower launch overhead is
-     * useful. FORCE exists for numerical/threshold probes; NO is the
-     * reproducible legacy A/B fallback. */
+    /* A resident bisection on the RTX 3090 located the practical crossover
+     * between 64 and 96 occupied tokens. At 96, split-K improves target-only
+     * decode by 7.5% and MTP by 3.5%; at 64 MTP is tied. Use one threshold for
+     * ordinary decode and the small MTP verifier batches so their dispatch
+     * cannot diverge again. FORCE exists for numerical/threshold probes; NO
+     * is the reproducible serial A/B fallback. */
     const int force_split_k =
         cuda_env_flag_enabled("DS4_CUDA_QWEN_SPLIT_K_ATTN", 0);
     const int automatic_split_k =
-        position_start >= 2048u &&
+        position_start >= 96u &&
         !cuda_env_flag_enabled("DS4_CUDA_QWEN_NO_SPLIT_K_ATTN", 0);
-    if (n_tokens == 1u && (force_split_k || automatic_split_k)) {
+    /* MTP verifies at most four drafts plus the mandatory target token.  Use
+     * the same crossover as ordinary decode for those small row batches;
+     * otherwise V(3) falls back to a serial KV scan precisely where the
+     * target-only path becomes split-K. */
+    if (n_tokens <= 5u && (force_split_k || automatic_split_k)) {
         return qwen35_attention_split_k_launch(
-            out_heads, q_gate, key_cache, value_cache, position_start);
+            out_heads, q_gate, key_cache, value_cache,
+            position_start, n_tokens);
     }
     if (n_tokens == 1u &&
         cuda_env_flag_enabled("DS4_CUDA_QWEN_WARP_ATTN", 0)) {

@@ -1561,7 +1561,7 @@ state inserite nello stage Git. Nessun commit è stato creato.
     8,095 ms e full-attention totale 11,181 ms. Per superare stabilmente 30 t/s
     a 10–12K va ridotto il matvec residuo senza riaprire il gate numerico.
 12. La baseline richiesta per locale e server è ora senza env: R8 fuso,
-    split-K32 automatico da 2K e GQA2. `doctor` mostra questi valori e verifica
+    split-K32 automatico da 96 token e GQA2. `doctor` mostra questi valori e verifica
     che `ds4`, `ds4-bench` e `ds4-server` siano tutti rilinkati allo stesso
     `ds4_cuda.o`.
 13. Il run no-env `r8-default-noenv-20260812` è bit-identico al precedente
@@ -1571,3 +1571,7 @@ state inserite nello stage Git. Nessun commit è stato creato.
 14. Split-K64 dopo GQA2 è respinto: il direction +1,53% era instabile; nella
     conferma 7×64 token a 10.666 K32 misura 29,014 t/s medi contro 28,713 di
     K64 (−1,04%). Il limite resta 32 partizioni.
+15. MTP usa lo stesso split-K da 96 token del target-only e adatta la
+    profondità: V(3) sotto 2K, V(2) da 2K. La curva 0–28K migliora tutti i
+    punti (+11,73% medio, +10,04% a 28K); il 24K più debole passa la conferma
+    5× a +2,79%. Q8_1+R8 resta invariato.

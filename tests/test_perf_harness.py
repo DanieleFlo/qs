@@ -71,6 +71,74 @@ class PerfHarnessTests(unittest.TestCase):
         for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
             self.assertEqual(len({item[key] for item in workloads}), 1)
 
+    def test_mtp_context_curve_covers_zero_through_28k(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-context-curve"
+        )
+        self.assertEqual(
+            [item["context"] for item in workloads],
+            list(range(0, 28673, 2048)),
+        )
+        self.assertEqual(len(workloads), 15)
+        self.assertLess(
+            max(item["context"] for item in workloads) +
+            workloads[0]["generation_tokens"] + 1,
+            30000,
+        )
+
+    def test_mtp_threshold_search_follows_the_bisection_points(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-threshold-search"
+        )
+        self.assertEqual(
+            [item["context"] for item in workloads],
+            [64, 125, 250, 500, 1000],
+        )
+        midpoint = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-threshold-midpoint"
+        )
+        self.assertEqual([item["context"] for item in midpoint], [96])
+
+    def test_mtp_long_context_smoke_covers_midpoint_and_28k(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-long-context-smoke"
+        )
+        self.assertEqual([item["context"] for item in workloads], [16384, 28672])
+        self.assertLess(
+            max(item["context"] for item in workloads) +
+            workloads[0]["generation_tokens"] + 1,
+            30000,
+        )
+
+    def test_mtp_depth_crossover_samples_4k_8k_12k(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-depth-crossover"
+        )
+        self.assertEqual(
+            [item["context"] for item in workloads],
+            [4096, 8192, 12288],
+        )
+
+    def test_mtp_depth_2k_is_a_single_boundary_probe(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-depth-2k"
+        )
+        self.assertEqual([item["context"] for item in workloads], [2048])
+
+    def test_mtp_depth_boundary_covers_zero_2k_4k(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-depth-boundary"
+        )
+        self.assertEqual(
+            [item["context"] for item in workloads], [0, 2048, 4096]
+        )
+
+    def test_mtp_weakest_confirm_is_24k(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-weakest-confirm"
+        )
+        self.assertEqual([item["context"] for item in workloads], [24576])
+
     @staticmethod
     def curve_workload(context: int, tps: float) -> dict:
         return {
@@ -97,6 +165,15 @@ class PerfHarnessTests(unittest.TestCase):
         ])
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(len(report["material_recoveries"]), 1)
+
+    def test_context_curve_ignores_recovery_entirely_above_target(self) -> None:
+        report = HARNESS.analyze_context_curve([
+            self.curve_workload(2048, 36.0),
+            self.curve_workload(4096, 39.0),
+            self.curve_workload(6144, 35.0),
+        ])
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["material_recoveries"], [])
 
     def test_context_curve_gate_rejects_points_below_twenty_tps(self) -> None:
         report = HARNESS.analyze_context_curve([
@@ -127,6 +204,19 @@ class PerfHarnessTests(unittest.TestCase):
         ])
         self.assertEqual(args.repetitions, 2)
         self.assertEqual(args.port, 0)
+
+    def test_server_curve_accepts_mtp_curve_and_sidecar(self) -> None:
+        args = HARNESS.build_parser().parse_args([
+            "server-curve", "--model", "model.gguf", "--baseline-run",
+            "--hypothesis", "MTP remains faster through 28K",
+            "--suite", "mtp-context-curve", "--mtp",
+        ])
+        self.assertEqual(args.suite, "mtp-context-curve")
+        self.assertTrue(args.mtp)
+
+    def test_doctor_reports_the_shared_split_k_crossover(self) -> None:
+        self.assertEqual(HARNESS.QWEN_SPLIT_K_MIN_CONTEXT, 96)
+        self.assertEqual(HARNESS.QWEN_MTP_DEPTH1_MIN_CONTEXT, 2048)
 
     def test_workflow_dry_run_builds_the_documented_script_command(self) -> None:
         parser = HARNESS.build_parser()

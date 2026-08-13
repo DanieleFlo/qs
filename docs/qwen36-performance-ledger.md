@@ -579,6 +579,52 @@ passano e `doctor` dichiara freschi `ds4`, `ds4-bench` e `ds4-server` con soglia
 `context-curve-default-final-r5` (l'esecuzione è stata arrestata dopo le due
 passate concordate; la terza parziale non partecipa alle mediane riportate).
 
+## MTP long-context e crossover split-K, 2026-08-13
+
+La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per
+punto, passa da 36,10 tok/s nel bucket minimo a 21,23 tok/s a 28K. Il vecchio
+MTP seriale riproduce il difetto già a 6K: 12,67 tok/s contro 30,77 target-only.
+La causa è il dispatch: split-K32 era automatico soltanto per una riga, mentre
+il verifier MTP V(3) eseguiva la scansione KV seriale.
+
+Il kernel split-K ora indicizza anche la riga verifier e conserva partial e
+merge distinti per posizione causale. Una bisezione residente ha confrontato
+seriale/split su target-only e MTP senza cambiare Q8_1+R8:
+
+| Context | Target-only split vs seriale | MTP split vs seriale |
+|---:|---:|---:|
+| 64 | +5,59% | 0,00% |
+| 96 | +7,53% | +3,54% |
+| 125 | +9,81% | +7,84% |
+| 250 | +18,40% | +13,44% |
+| 500 | +32,95% | +21,26% |
+| 1000 | +62,52% | +39,43% |
+
+Il crossover comune è quindi 96 token. La gate MTP con split forzato passa
+gap argmax 0, sampling 128/128 identico, replay 0 e fallback 0; il probe
+split-K vs CPU resta cosine 1 e max abs 5,96e-8. Artefatti locali:
+`mtp-threshold-target-{serial,split}-*` e `mtp-threshold-*-r5-20260813`.
+
+Il secondo collo era la profondità fissa: V(3) resta migliore sul copy corto
+ad alta accettazione (51,60–51,64 contro 48,80 tok/s V(2)), ma da 2K il costo
+della terza riga cresce col KV. Il default usa quindi V(3) sotto 2K e V(2) da
+2K. La curva server adattiva migliora tutti i 15 punti rispetto a target-only:
++11,73% medio, +12,55% a 2K, +19,78% a 12K e +10,04% a 28K. Il segmento
+default 0/2K/4K a tre run è regolare: 43,99/41,46/38,90 tok/s.
+
+Il punto col margine minore, 24K, è stato riconfermato con cinque run per lato:
+23,26 → 23,91 tok/s (+2,79%), CV 0,71%/1,32%, output identico e gate
+`KEEP_CANDIDATE`. V(2) usa direttamente lo snapshot ricorrente della riga
+target e omette il pre-snapshot completo ridondante. Il gate model-backed V(2)
+passa gap argmax 0, sampling target-match, replay/fallback 0 e prompt logits
+bit-exact. Il CLI a 28.600 token, capacità 28.737, misura 22,64 → 26,97 tok/s
+(+19,1%), stessa continuazione, accettazione 32/32 e memoria pianificata MTP
+21,39 GiB. Q8_1+R8 non è stato modificato.
+
+Artefatti finali: `mtp-0-28k-adaptive-final-r2-20260813`,
+`mtp-depth-boundary-default-r3-20260813`,
+`target-c24k-confirm-r5-20260813` e `mtp-c24k-lean-v2-r5-20260813`.
+
 ## Coda ordinata
 
 1. **MMVQ R8, soprattutto output Q6_K**: ridurre il doppio dot/load mantenendo

@@ -11,6 +11,13 @@
     "decode-b1-c12k": {"phase": "decode", "batch": 1, "context": 12288, "generation_tokens": 64, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
     "decode-b1-c16k-long": {"phase": "decode", "batch": 1, "context": 16384, "generation_tokens": 64, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
     "decode-b1-c16k": {"phase": "decode", "batch": 1, "context": 16384, "generation_tokens": 128, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c0-mtp-curve": {"phase": "decode", "batch": 1, "context": 0, "generation_tokens": 64, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c64-mtp-threshold": {"phase": "decode", "batch": 1, "context": 64, "generation_tokens": 64, "prefill_chunk": 128, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c96-mtp-threshold": {"phase": "decode", "batch": 1, "context": 96, "generation_tokens": 64, "prefill_chunk": 128, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c125-mtp-threshold": {"phase": "decode", "batch": 1, "context": 125, "generation_tokens": 64, "prefill_chunk": 128, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c250-mtp-threshold": {"phase": "decode", "batch": 1, "context": 250, "generation_tokens": 64, "prefill_chunk": 256, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c500-mtp-threshold": {"phase": "decode", "batch": 1, "context": 500, "generation_tokens": 64, "prefill_chunk": 512, "backend": "cuda", "weight": 1.0},
+    "decode-b1-c1k-mtp-threshold": {"phase": "decode", "batch": 1, "context": 1000, "generation_tokens": 64, "prefill_chunk": 512, "backend": "cuda", "weight": 1.0},
     "decode-b1-c2k-curve": {"phase": "decode", "batch": 1, "context": 2048, "generation_tokens": 64, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
     "decode-b1-c4k-curve": {"phase": "decode", "batch": 1, "context": 4096, "generation_tokens": 64, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
     "decode-b1-c6k-curve": {"phase": "decode", "batch": 1, "context": 6144, "generation_tokens": 64, "prefill_chunk": 2048, "backend": "cuda", "weight": 1.0},
@@ -41,6 +48,14 @@
     "slow": ["decode-b1-c2k", "decode-b1-c8k", "decode-b1-c16k", "prefill-b1-c512", "prefill-b1-c2k", "prefill-b1-c8k", "throughput-b4-c2k"],
     "long-context-slow": ["decode-b1-c8k-long", "decode-b1-c12k", "decode-b1-c16k-long"],
     "context-curve-full": ["decode-b1-c2k-curve", "decode-b1-c4k-curve", "decode-b1-c6k-curve", "decode-b1-c8k-curve", "decode-b1-c10k-curve", "decode-b1-c12k-curve", "decode-b1-c14k-curve", "decode-b1-c16k-curve", "decode-b1-c18k-curve", "decode-b1-c20k-curve", "decode-b1-c22k-curve", "decode-b1-c24k-curve", "decode-b1-c26k-curve", "decode-b1-c28k-curve", "decode-b1-c30k-curve"],
+    "mtp-context-curve": ["decode-b1-c0-mtp-curve", "decode-b1-c2k-curve", "decode-b1-c4k-curve", "decode-b1-c6k-curve", "decode-b1-c8k-curve", "decode-b1-c10k-curve", "decode-b1-c12k-curve", "decode-b1-c14k-curve", "decode-b1-c16k-curve", "decode-b1-c18k-curve", "decode-b1-c20k-curve", "decode-b1-c22k-curve", "decode-b1-c24k-curve", "decode-b1-c26k-curve", "decode-b1-c28k-curve"],
+    "mtp-depth-crossover": ["decode-b1-c4k-curve", "decode-b1-c8k-curve", "decode-b1-c12k-curve"],
+    "mtp-depth-2k": ["decode-b1-c2k-curve"],
+    "mtp-depth-boundary": ["decode-b1-c0-mtp-curve", "decode-b1-c2k-curve", "decode-b1-c4k-curve"],
+    "mtp-weakest-confirm": ["decode-b1-c24k-curve"],
+    "mtp-long-context-smoke": ["decode-b1-c16k-curve", "decode-b1-c28k-curve"],
+    "mtp-threshold-search": ["decode-b1-c64-mtp-threshold", "decode-b1-c125-mtp-threshold", "decode-b1-c250-mtp-threshold", "decode-b1-c500-mtp-threshold", "decode-b1-c1k-mtp-threshold"],
+    "mtp-threshold-midpoint": ["decode-b1-c96-mtp-threshold"],
     "exhaustive": ["decode-b1-c2k", "decode-b1-c8k", "decode-b1-c16k", "decode-b1-c32k", "prefill-b1-c512", "prefill-b1-c2k", "prefill-b1-c8k", "throughput-b4-c2k"]
   }
 }

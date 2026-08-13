@@ -46,7 +46,7 @@ separato, 64 token per frontiera e cinque ripetizioni, evitando un nuovo
 caricamento del modello per ogni frontiera.
 Il baseline forza il fallback riproducibile con
 `DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1`; il candidato verifica il dispatch di
-produzione, che usa split-K32 automaticamente da 2K. `--candidate-env` resta
+produzione, che usa split-K32 automaticamente da 96 token. `--candidate-env` resta
 disponibile per esperimenti su partizioni e soglie, ma non serve nel run
 canonico.
 
@@ -320,7 +320,7 @@ binari è più vecchio dei sorgenti o degli oggetti da cui dipende, espone gli
 input più recenti in `runtime_binaries.*.newer_inputs` e non dichiara pronto il
 relativo percorso. La correzione canonica è `workflow --name r8-build` oppure
 il workflow `validate`, non la sola build di `ds4-bench`.
-Lo stesso report espone `qwen_decode_defaults`: R8, split-K32 da 2K e GQA2,
+Lo stesso report espone `qwen_decode_defaults`: R8, split-K32 da 96 token e GQA2,
 insieme ai tre flag di rollback. È quindi possibile verificare la baseline
 attiva senza dedurla dalla shell history.
 
@@ -419,3 +419,27 @@ hardware, modelli, file sorgente, 128 token greedy e depth 2 misura 40.9 ->
 72.8 token/s (1.78x); gli output on/off differiscono solo nella riga dei tempi.
 Il valore assoluto e' direzionale, perche' il frontend llama.cpp applica la
 propria conversazione mentre il gate DS4 sopra usa `--raw-prompt`.
+
+La curva MTP server usa capacità 28.737 e non supera 30K. Copre il bucket di
+prompt minimo e poi 2K–28K a passo 2K:
+
+    python3 tools/perf_harness.py server-curve \
+      --id mtp-curve --suite mtp-context-curve \
+      --model gguf/Qwen3.6-27B-Q4_K_S.gguf --mtp \
+      --repetitions 2 --hypothesis "MTP stays faster through 28K" \
+      --baseline performance-results/target-curve/experiment.json
+
+La ricerca `mtp-threshold-search` confronta seriale e split-K a
+64/125/250/500/1000 token; `mtp-threshold-midpoint` misura 96. La bisezione
+RTX 3090 del 2026-08-13 ha trovato pareggio MTP a 64 e vantaggio split-K a 96
+(+3,54% MTP, +7,53% target-only). Il cutoff automatico comune è quindi 96;
+`DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1` resta il rollback seriale.
+
+La profondità MTP è adattiva: V(3) sotto 2K, V(2) da 2K. Il confronto
+V(3)/V(2) usa `mtp-depth-boundary`, `mtp-depth-crossover` e
+`mtp-long-context-smoke`; `mtp-weakest-confirm` ripete il punto col margine
+minore. La curva finale 0–28K migliora tutte le mediane target-only (+11,73%
+medio, +10,04% a 28K). La conferma 24K a cinque run misura 23,26 → 23,91
+tok/s (+2,79%, CV 0,71%/1,32%, `KEEP_CANDIDATE`). In V(2) i snapshot GDN
+per riga rendono superfluo il pre-snapshot completo; il gate model-backed
+passa reject/rollback, sampling 128/128 identico, gap argmax 0 e fallback 0.

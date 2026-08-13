@@ -443,6 +443,7 @@ static int run_gdn_probe(void) {
                                          state_n * sizeof(float));
         failed |= !ds4_gpu_qwen35_gated_delta_net_rows_tensor(
             t_heads, t_qkv, t_z, t_alpha, t_beta, t_conv, t_state,
+            NULL, NULL,
             map, map_n * sizeof(float), a_off, conv_off, dt_off, norm_off,
             GDN_STEPS);
         failed |= !ds4_gpu_synchronize();

@@ -48,7 +48,8 @@ condizione di completamento.
   8K/12K/16K. Le
   decisioni Qwen mantenute e respinte confluiscono nel ledger canonico
   `docs/qwen36-performance-ledger.md`.
-- Split-K32 è KEEP e default automatico da 2K. La matrice completa residente
+- Split-K32 è KEEP e default automatico da 96 token dopo la bisezione comune
+  target-only/MTP del 2026-08-13. La matrice completa residente
   2K–30K usa due run/punto, richiede almeno 20 tok/s a ogni frontiera e
   controlla che non esistano recuperi materiali dopo una valle. Nel confronto
   isolato la curva passa da 14,25/9,05/6,51 tok/s a 2K/4K/6K a
@@ -60,6 +61,9 @@ condizione di completamento.
   senza flag conferma il dispatch di produzione a 10.666: 3,62 → 14,27
   tok/s. Il profilo del residuo classifica FFN (46,40 ms) e attenzione
   ricorrente (18,92 ms) prima del core full-attention lungo (11,78 ms).
+- MTP long-context è KEEP: V(3) sotto 2K, V(2) da 2K, stesso ingresso split-K
+  a 96 token. La curva 0–28K migliora ogni punto (+11,73% medio, +10,04% a
+  28K); il margine minimo 24K è confermato 5× a +2,79% con output identico.
 - Aggiunto il componente `docs/research/cuda/`: fonti primarie NVIDIA,
   comandi di profiling e ispezione binaria, primitive Ampere sm_86 e mappa
   falsificabile verso i prossimi esperimenti DS4. `research-check` ne verifica

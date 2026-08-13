@@ -38172,6 +38172,7 @@ static int generate_raw_swa_cpu(
 #ifndef DS4_NO_GPU
 #define DS4_QWEN_MTP_MAX_DRAFT 4u
 #define DS4_QWEN_MTP_MAX_VERIFY_ROWS (DS4_QWEN_MTP_MAX_DRAFT + 1u)
+#define DS4_QWEN_MTP_DEPTH1_CONTEXT 2048u
 typedef struct {
     uint32_t ctx_size;
     uint32_t ctx_cap;
@@ -67445,6 +67446,17 @@ static int ds4_session_qwen_mtp_spec_cycle(
     int draft_cap = e->mtp_draft_tokens;
     if (draft_cap > (int)DS4_QWEN_MTP_MAX_DRAFT)
         draft_cap = (int)DS4_QWEN_MTP_MAX_DRAFT;
+    /* V(3) wins on short, highly predictable text, but each extra verifier
+     * row scans the occupied full-attention KV.  Resident RTX 3090 sweeps find
+     * V(2) faster from 2K onward (including +11.5% at 16K and +9.6% at 28K
+     * versus target-only).  Keep the engine-level depth above one so the
+     * frontends enter speculation, then cap this cycle only. */
+    const bool force_depth2 =
+        getenv("DS4_MTP_QWEN_FORCE_DRAFT2") != NULL;
+    if (!force_depth2 && draft_cap > 1 &&
+        (getenv("DS4_MTP_QWEN_DRAFT1") != NULL ||
+         (uint32_t)start >= DS4_QWEN_MTP_DEPTH1_CONTEXT))
+        draft_cap = 1;
     if (draft_cap > max_tokens - n_accept) draft_cap = max_tokens - n_accept;
     if (draft_cap > accepted_cap - n_accept) draft_cap = accepted_cap - n_accept;
     const int room = s->ctx_size - start - (fused_target ? 1 : 0);
@@ -67565,12 +67577,16 @@ static int ds4_session_qwen_mtp_spec_cycle(
 
         bool target_done = false;
         bool snap_ok = false;
+        const bool lean_v2_snapshot =
+            draft_n == 1 &&
+            getenv("DS4_MTP_QWEN_V2_SAFE_SNAPSHOT") == NULL;
         const uint64_t verify_rng_start = stochastic_sampling ?
             *sampling->rng : 0;
         if (stochastic_sampling ||
             sample_argmax(s->logits, DS4_N_VOCAB) == first_token) {
             const double snapshot_t0 = now_sec();
-            snap_ok = qwen_graph_mtp_recurrent_checkpoint(g, false);
+            snap_ok = lean_v2_snapshot ||
+                qwen_graph_mtp_recurrent_checkpoint(g, false);
             cycle_snapshot_ms = (now_sec() - snapshot_t0) * 1000.0;
             s->qwen_mtp_snapshot_ms += cycle_snapshot_ms;
 
@@ -67650,6 +67666,12 @@ static int ds4_session_qwen_mtp_spec_cycle(
             if (stochastic_sampling) {
                 *sampling->rng = verify_rng_start;
                 if (sampling->next_token) *sampling->next_token = -1;
+            }
+            if (lean_v2_snapshot) {
+                snprintf(err, errlen,
+                         "CUDA Qwen V(2) verifier batch failed");
+                ds4_session_invalidate(s);
+                return -1;
             }
             if (snap_ok) {
                 const double rollback_t0 = now_sec();

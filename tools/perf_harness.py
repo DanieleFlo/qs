@@ -33,6 +33,16 @@ DEFAULT_WORKLOADS = ROOT / "performance" / "workloads.yaml"
 DEFAULT_RESULTS = ROOT / "performance-results"
 SCHEMA_VERSION = 1
 CONTEXT_CURVE_SUITE = "context-curve-full"
+MTP_CONTEXT_CURVE_SUITE = "mtp-context-curve"
+MTP_DEPTH_CROSSOVER_SUITE = "mtp-depth-crossover"
+MTP_DEPTH_2K_SUITE = "mtp-depth-2k"
+MTP_DEPTH_BOUNDARY_SUITE = "mtp-depth-boundary"
+MTP_WEAKEST_CONFIRM_SUITE = "mtp-weakest-confirm"
+MTP_LONG_CONTEXT_SMOKE_SUITE = "mtp-long-context-smoke"
+MTP_THRESHOLD_SEARCH_SUITE = "mtp-threshold-search"
+MTP_THRESHOLD_MIDPOINT_SUITE = "mtp-threshold-midpoint"
+QWEN_SPLIT_K_MIN_CONTEXT = 96
+QWEN_MTP_DEPTH1_MIN_CONTEXT = 2048
 CONTEXT_CURVE_MIN_TPS = 20.0
 CONTEXT_CURVE_TARGET_CEILING_TPS = 30.0
 CONTEXT_CURVE_RECOVERY_TOLERANCE_TPS = 1.5
@@ -430,7 +440,14 @@ def analyze_context_curve(
             recovery_tolerance_tps,
             left["tps"] * recovery_tolerance_fraction,
         )
-        if increase > tolerance:
+        # The upper band is intentionally advisory: small dispatch/clock
+        # recoveries are irrelevant while both adjacent points already exceed
+        # the target ceiling.  Valleys that touch the measured band still fail.
+        both_above_target = (
+            left["tps"] > target_ceiling_tps and
+            right["tps"] > target_ceiling_tps
+        )
+        if increase > tolerance and not both_above_target:
             material_recoveries.append({
                 "from_context": left["context"],
                 "to_context": right["context"],
@@ -1264,12 +1281,15 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         "qwen_decode_defaults": {
             "q8_1_r8": True,
             "split_k_partitions": 32,
-            "split_k_min_context": 2048,
+            "split_k_min_context": QWEN_SPLIT_K_MIN_CONTEXT,
+            "mtp_depth1_min_context": QWEN_MTP_DEPTH1_MIN_CONTEXT,
             "gqa_query_heads_per_cta": 2,
             "rollback_environment": [
                 "DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1",
                 "DS4_CUDA_QWEN_NO_SPLIT_K_ATTN=1",
                 "DS4_CUDA_QWEN_NO_GQA_GROUP_ATTN=1",
+                "DS4_MTP_QWEN_FORCE_DRAFT2=1",
+                "DS4_MTP_QWEN_V2_SAFE_SNAPSHOT=1",
             ],
         },
         "hardware": profile,
@@ -1584,7 +1604,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
     for path, label in ((binary, "server binary"), (model, "model")):
         if not path.exists():
             raise HarnessError(f"{label} does not exist: {path}")
-    workloads = load_workloads(Path(args.workloads), CONTEXT_CURVE_SUITE)
+    workloads = load_workloads(Path(args.workloads), args.suite)
     contexts = [int(item["context"]) for item in workloads]
     generation_tokens = int(workloads[0]["generation_tokens"])
     if any(int(item["generation_tokens"]) != generation_tokens for item in workloads):
@@ -1608,6 +1628,13 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
         "--ctx", str(context_alloc), "--host", "127.0.0.1", "--port", str(port),
         "--prefill-chunk", str(workloads[0]["prefill_chunk"]),
     ]
+    if args.mtp_model:
+        mtp_model = Path(args.mtp_model)
+        if not mtp_model.exists():
+            raise HarnessError(f"MTP model does not exist: {mtp_model}")
+        command += ["--mtp-model", str(mtp_model)]
+    elif args.mtp:
+        command += ["--mtp"]
     process: subprocess.Popen[Any] | None = None
     log_stream = None
     results = []
@@ -1635,7 +1662,10 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
 
         for workload in workloads:
             context = int(workload["context"])
-            prompt = server_curve_prompt(context - intercept)
+            # Zero is the requested empty-context bucket. Inference still needs
+            # a real prompt, so use the smallest calibrated wrapper and retain
+            # its actual token count in raw_rows.
+            prompt = server_curve_prompt(0 if context == 0 else context - intercept)
             samples = []
             output_hashes = []
             completion_counts = []
@@ -1645,7 +1675,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
                     base_url, prompt, generation_tokens, args.timeout
                 )
                 actual_context, completion_count = completion_usage(response)
-                if actual_context != context:
+                if context != 0 and actual_context != context:
                     raise HarnessError(
                         f"server prompt calibration missed context {context}: "
                         f"observed {actual_context}"
@@ -1674,6 +1704,9 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
                 "raw_rows": [
                     {
                         "ctx_tokens": context,
+                        "actual_ctx_tokens": (
+                            intercept if context == 0 else context
+                        ),
                         "gen_steady_tps": tps,
                         "completion_tokens": tokens,
                     }
@@ -1717,7 +1750,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
         "schema_version": SCHEMA_VERSION, "experiment_id": experiment_id,
         "created_at": utc_now(), "status": "measured",
         "hypothesis": args.hypothesis, "target_metric": "gen_steady_tps",
-        "suite": CONTEXT_CURVE_SUITE, "runtime": "ds4-server",
+        "suite": args.suite, "runtime": "ds4-server",
         "repetitions": args.repetitions,
         "baseline": {
             "kind": "self" if args.baseline_run else "experiment",
@@ -1814,7 +1847,10 @@ def compare_records(baseline: dict[str, Any],
         weight_sum if improvements and weight_sum else None
     )
     correctness = candidate.get("correctness", {}).get("status", "NOT_VERIFIED")
-    context_curve = candidate.get("context_curve")
+    context_curve = (
+        analyze_context_curve(candidate.get("workloads", []))
+        if candidate.get("context_curve") is not None else None
+    )
     if correctness == "FAIL":
         verdict = "REJECT_CANDIDATE"
         reason = "frontier logits drift exceeded a correctness gate"
@@ -2252,12 +2288,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=cmd_run)
     server_curve = commands.add_parser(
         "server-curve",
-        help="start ds4-server and measure its full 2K..30K decode curve",
+        help="start ds4-server and measure a configured decode curve",
     )
     server_curve.add_argument("--id")
     server_curve.add_argument("--model", required=True)
     server_curve.add_argument("--binary", default=str(ROOT / "ds4-server"))
     server_curve.add_argument("--workloads", default=str(DEFAULT_WORKLOADS))
+    server_curve.add_argument(
+        "--suite", default=CONTEXT_CURVE_SUITE,
+        choices=(CONTEXT_CURVE_SUITE, MTP_CONTEXT_CURVE_SUITE,
+                 MTP_DEPTH_CROSSOVER_SUITE, MTP_LONG_CONTEXT_SMOKE_SUITE,
+                 MTP_DEPTH_2K_SUITE,
+                 MTP_DEPTH_BOUNDARY_SUITE,
+                 MTP_WEAKEST_CONFIRM_SUITE,
+                 MTP_THRESHOLD_SEARCH_SUITE, MTP_THRESHOLD_MIDPOINT_SUITE),
+    )
+    server_curve.add_argument("--mtp", action="store_true")
+    server_curve.add_argument("--mtp-model")
     server_curve.add_argument("--repetitions", type=int, default=2)
     server_curve.add_argument("--minimum-completion-tokens", type=int, default=32)
     server_curve.add_argument("--port", type=int, default=0)

@@ -14,9 +14,10 @@ and stochastic MTP with a fixed seed must remain identical to ordinary target
 sampling. Any verifier, rollback, sampler, or support-cache failure must not
 expose speculative state as accepted state.
 
-Qwen defaults to draft depth two. The implementation hard-caps the requested
-depth at four. It does not adaptively widen the depth and never evaluates a
-Qwen depth greater than four.
+Qwen is configured with draft depth two. Below 2K occupied tokens the cycle
+uses both drafts (target V(3)); from 2K onward it caps the current cycle to one
+draft (target V(2)), because verifier attention grows with the occupied KV.
+The implementation never widens depth adaptively and hard-caps Qwen at four.
 
 The full upstream audit, source links, rejected experiments, and benchmark
 evidence are in
@@ -58,7 +59,7 @@ Each enabled Qwen session owns:
 - support-block scratch and independent full-attention K/V;
 - one normalized target-hidden carry row and two MTP hidden ping-pong rows;
 - a bounded verifier logits buffer and GPU row argmax output;
-- pre-batch safety snapshots of the 48 Gated DeltaNet states;
+- pre-batch safety snapshots of the 48 Gated DeltaNet states for V(3);
 - per-verifier-row GDN snapshots used for direct partial rollback;
 - a logical MTP cache frontier;
 - aggregate and positional timing/acceptance counters.
@@ -67,9 +68,9 @@ Full-attention target KV is position-addressed, so future rejected rows are
 left invisible and overwritten. GDN state is recurrent and must be restored to
 the exact accepted row.
 
-## Production depth-two cycle
+## Production adaptive-depth cycle
 
-For the usual depth two, the default cycle is:
+Below 2K, the configured depth-two cycle is:
 
 1. sample `first_token` from the current target logits;
 2. draft `draft0` and `draft1` autoregressively from the support model;
@@ -91,6 +92,14 @@ For the usual depth two, the default cycle is:
 The row snapshots are written by the convolution and GDN kernels while the
 states are already in registers. The final row is not copied because it is the
 live full-accept state. Partial acceptance does not replay a target token.
+
+At 2K and above, the same cycle verifies only `[first_token, draft0]` as V(2).
+The row-0 snapshot is sufficient for an ordinary rejection, so V(2) omits the
+redundant pre-batch copy of every recurrent state. A batch/backend failure
+invalidates the session instead of exposing speculative state;
+`DS4_MTP_QWEN_V2_SAFE_SNAPSHOT=1` restores the diagnostic safety copy.
+`DS4_MTP_QWEN_FORCE_DRAFT2=1` forces V(3), while
+`DS4_MTP_QWEN_DRAFT1=1` forces V(2), for resident A/B tests.
 
 `DS4_MTP_SPLIT_TARGET=1` retains the older `target_seed + verifier` layout as a
 diagnostic switch for greedy runs. Stochastic verification always uses the
@@ -222,3 +231,11 @@ slower with MTP in those runs.
 
 Short prefill was not changed. In the server gate it remained about 4.9
 seconds in both modes; generation, not prefill, was the MTP optimization target.
+
+Long-context verification now shares the target-only split-K attention path.
+The split partials and merge are indexed by verifier row, so the fused V(3)
+batch enters split-K at the same occupied-context position as ordinary decode.
+An RTX 3090 serial/split bisection selected 96 tokens as the common automatic
+crossover (64 was tied for MTP). A second resident search selected V(3) below
+2K and V(2) from 2K; the MTP context allocation remains capped below 30K in
+the 0–28K harness suite.
