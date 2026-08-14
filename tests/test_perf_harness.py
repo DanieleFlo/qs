@@ -192,6 +192,235 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(rows[0]["chunk_tps"], 31.5)
         self.assertEqual(rows[0]["avg_tps"], 27.25)
 
+    def test_server_phase_profile_parser_keeps_constraint_work_metrics(self) -> None:
+        rows = HARNESS.parse_server_phase_profiles(
+            "0814 14:00:00 ds4-server: phase profile ctx=4096..4149 gen=53 "
+            "mode=compare_new_vs_oracle wall=2370.000ms "
+            "forced_build=290.000ms/40 forced_sync=15.000ms/2/13_tok "
+            "forced_prefix_probe=20.000ms sampling_mask_build=246.000ms "
+            "oracle_compare=250.000ms/40/0_div constraint_cpu=520.000ms "
+            "constraint_cpu_exposed=520.000ms constraint_cpu_overlapped=0.000ms "
+            "filter_setup=0.100ms filter=245.900ms filtered_sample=4.000ms/40 "
+            "plain_sample=0.000ms/0 eval=1360.000ms/40 residual=475.000ms "
+            "vocab=9932800 filter_calls=9932800 accepted=994 "
+            "finite_allowed=994 piece_bytes=73846280 "
+            "candidate_tokens_tested=19865600 parser_transition_count=1234 "
+            "parser_bytes_visited=5678 trie_nodes_visited=321 "
+            "subtrees_pruned=77 trie_leaf_tokens_emitted=19 mask_cache_hit=0 "
+            "mask_cache_miss=40 grammar_compile_ms=0.000 grammar_jit_ms=0.000 "
+            "constraint_state_checkpoint=9932800 constraint_state_rollback=9932800\n"
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["mode"], "compare_new_vs_oracle")
+        self.assertEqual(rows[0]["generation_tokens"], 53)
+        self.assertEqual(rows[0]["sampling_mask_build_ms"], 246.0)
+        self.assertEqual(rows[0]["candidate_tokens_tested"], 19865600)
+        self.assertEqual(rows[0]["trie_nodes_visited"], 321)
+        self.assertEqual(rows[0]["subtrees_pruned"], 77)
+        self.assertEqual(rows[0]["trie_leaf_tokens_emitted"], 19)
+        self.assertEqual(rows[0]["constraint_state_checkpoint"], 9932800)
+        self.assertEqual(rows[0]["oracle_compare_calls"], 40)
+        self.assertEqual(rows[0]["oracle_divergences"], 0)
+
+    def test_constrained_direction_suite_covers_dsml_and_json(self) -> None:
+        workloads = HARNESS.load_constrained_workloads(
+            ROOT / "performance" / "constrained-workloads.json", "direction"
+        )
+        self.assertEqual(
+            [item["kind"] for item in workloads], ["dsml", "json_schema"]
+        )
+        self.assertEqual(
+            [item["id"] for item in workloads],
+            ["dsml-required-enum-const", "json-nested-required-array"],
+        )
+        free_string = HARNESS.load_constrained_workloads(
+            ROOT / "performance" / "constrained-workloads.json", "free-string"
+        )
+        self.assertEqual([item["id"] for item in free_string], [
+            "dsml-free-string-128"
+        ])
+        schema = free_string[0]["payload"]["tools"][0]["parameters"]
+        self.assertEqual(schema["properties"]["content"], {"type": "string"})
+        nullable = HARNESS.load_constrained_workloads(
+            ROOT / "performance" / "constrained-workloads.json",
+            "nullable-free-string",
+        )
+        self.assertEqual([item["id"] for item in nullable], [
+            "dsml-nullable-free-string"
+        ])
+        variants = nullable[0]["payload"]["tools"][0]["parameters"]
+        self.assertEqual(variants["properties"]["content"]["anyOf"], [
+            {"type": "string"}, {"type": "null"}
+        ])
+
+    def test_jsonschemabench_subset_builds_pinned_server_workloads(self) -> None:
+        workloads = HARNESS.load_jsonschemabench_workloads(
+            ROOT / "performance" / "jsonschemabench-subset.json",
+            tier="smoke",
+        )
+        self.assertEqual(len(workloads), 12)
+        self.assertTrue(all(
+            item["id"].startswith("jsonschemabench/") for item in workloads
+        ))
+        self.assertTrue(all(
+            item["payload"]["seed"] == 424242 for item in workloads
+        ))
+        self.assertTrue(all(
+            item["payload"]["response_format"]["json_schema"]["schema"]
+            for item in workloads
+        ))
+        safety = HARNESS.load_jsonschemabench_workloads(
+            ROOT / "performance" / "jsonschemabench-subset.json"
+        )
+        self.assertEqual(len(safety), 32)
+        self.assertTrue({item["source"]["id"] for item in workloads}.issubset(
+            {item["source"]["id"] for item in safety}
+        ))
+        unsupported = HARNESS.load_jsonschemabench_unsupported_probes(
+            ROOT / "performance" / "jsonschemabench-subset.json"
+        )
+        self.assertEqual(len(unsupported), 16)
+        self.assertTrue(all(item["reasons"] for item in unsupported))
+        self.assertTrue(all(
+            item["payload"]["max_tokens"] == 1 for item in unsupported
+        ))
+        selected = HARNESS.load_jsonschemabench_workloads(
+            ROOT / "performance" / "jsonschemabench-subset.json",
+            ["Github_trivial/o27825.json"],
+        )
+        self.assertEqual(
+            [item["source"]["id"] for item in selected],
+            ["Github_trivial/o27825.json"],
+        )
+        with self.assertRaisesRegex(HARNESS.HarnessError, "not in"):
+            HARNESS.load_jsonschemabench_workloads(
+                ROOT / "performance" / "jsonschemabench-subset.json",
+                ["missing.json"],
+            )
+
+    def test_constrained_semantic_output_ignores_random_response_ids(self) -> None:
+        output = HARNESS.constrained_semantic_output("dsml", {
+            "id": "random",
+            "output": [{
+                "type": "function_call", "name": "record",
+                "call_id": "also-random", "arguments": '{"value":1}',
+            }],
+        })
+        self.assertEqual(output, {
+            "function_calls": [{"name": "record", "arguments": {"value": 1}}]
+        })
+        structured = HARNESS.constrained_semantic_output("json_schema", {
+            "choices": [{"message": {"content": '{"ok":true}'}}]
+        })
+        self.assertEqual(structured, {"json": {"ok": True}})
+
+    def test_constrained_semantic_output_rejects_duplicate_keys(self) -> None:
+        with self.assertRaisesRegex(HARNESS.HarnessError, "duplicate JSON"):
+            HARNESS.constrained_semantic_output("json_schema", {
+                "choices": [{"message": {"content": '{"ok":true,"ok":false}'}}]
+            })
+
+    def test_jsonschemabench_prefix_probe_requires_exact_budget(self) -> None:
+        response = {
+            "choices": [{
+                "finish_reason": "error",
+                "message": {"content": '{"partial"'},
+            }]
+        }
+        self.assertEqual(
+            HARNESS.constrained_json_prefix_output(response, 8, 8),
+            {
+                "json_prefix": '{"partial"', "finish_reason": "error",
+                "completion_tokens": 8,
+            },
+        )
+        with self.assertRaisesRegex(HARNESS.HarnessError, "before"):
+            HARNESS.constrained_json_prefix_output(response, 7, 8)
+        with self.assertRaisesRegex(HARNESS.HarnessError, "duplicate JSON"):
+            HARNESS.constrained_semantic_output("dsml", {
+                "output": [{
+                    "type": "function_call", "name": "record",
+                    "arguments": '{"value":1,"value":2}',
+                }],
+            })
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("jsonschema"),
+        "install performance/jsonschemabench-requirements.txt",
+    )
+    def test_jsonschemabench_output_uses_independent_validator(self) -> None:
+        schema = {
+            "type": "object",
+            "required": ["status", "values"],
+            "additionalProperties": False,
+            "properties": {
+                "status": {"const": "ok"},
+                "values": {
+                    "type": "array", "minItems": 2,
+                    "items": {"type": "integer"},
+                },
+            },
+        }
+        result = HARNESS.validate_json_schema_instance(
+            schema, {"status": "ok", "values": [1, 2]}
+        )
+        self.assertTrue(result["valid"])
+        self.assertIn("Validator", result["validator"])
+        with self.assertRaisesRegex(
+            HARNESS.HarnessError, "violates JSON Schema"
+        ):
+            HARNESS.validate_json_schema_instance(
+                schema, {"status": "ok", "values": [1], "extra": True}
+            )
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("jsonschema"),
+        "install performance/jsonschemabench-requirements.txt",
+    )
+    def test_minimal_witness_handles_intersections_and_unions(self) -> None:
+        schema = {
+            "type": "object", "required": ["payload"],
+            "properties": {"payload": {"allOf": [
+                {
+                    "type": "object", "required": ["left"],
+                    "properties": {"left": {"enum": ["L"]}},
+                },
+                {
+                    "type": "object", "required": ["right"],
+                    "properties": {"right": {"anyOf": [
+                        {"type": "string"}, {"type": "null"},
+                    ]}},
+                },
+            ]}},
+        }
+        witness = HARNESS.minimal_json_schema_witness(schema)
+        HARNESS.validate_json_schema_instance(schema, witness)
+        self.assertEqual(witness, {"payload": {"left": "L", "right": ""}})
+
+    def test_constrained_server_parser_exposes_oracle_mode(self) -> None:
+        args = HARNESS.build_parser().parse_args([
+            "constrained-server", "--model", "model.gguf", "--baseline-run",
+            "--hypothesis", "freeze exhaustive constrained baseline",
+            "--constraint-mode", "oracle_only",
+        ])
+        self.assertEqual(args.constraint_mode, "oracle_only")
+        self.assertEqual(args.repetitions, 2)
+        self.assertEqual(args.context, 4096)
+
+    def test_constrained_server_accepts_external_subset(self) -> None:
+        args = HARNESS.build_parser().parse_args([
+            "constrained-server", "--model", "model.gguf", "--baseline-run",
+            "--hypothesis", "measure external schemas",
+            "--jsonschemabench-subset",
+        ])
+        self.assertEqual(
+            args.jsonschemabench_subset,
+            str(HARNESS.DEFAULT_JSONSCHEMABENCH_SUBSET),
+        )
+        self.assertEqual(args.jsonschemabench_tier, "safety")
+        self.assertEqual(args.jsonschemabench_prefix_steps, 0)
+        self.assertFalse(args.jsonschemabench_check_unsupported)
+
     def test_server_prompt_calibration_requires_one_token_per_filler(self) -> None:
         self.assertEqual(HARNESS.prompt_filler_intercept(32, 47, 96, 111), 15)
         with self.assertRaisesRegex(HARNESS.HarnessError, "not one token"):

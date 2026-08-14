@@ -139,25 +139,25 @@ Una micro-suite costruita solo sui casi che DS4 gestisce bene rischia di ottimiz
 
 ### 0.1 — Congelare l'oracle
 
-- [ ] Identificare il percorso esaustivo che decide la validità di ogni token.
-- [ ] Aggiungere una modalità `oracle_only`.
-- [ ] Aggiungere una modalità `compare_new_vs_oracle`.
-- [ ] Fare in modo che il confronto possa essere eseguito senza cambiare il token realmente campionato.
-- [ ] Serializzare, solo in debug, lo stato grammaticale che ha prodotto una divergenza.
-- [ ] Salvare il primo token differente e i relativi piece/byte.
+- [x] Identificare il percorso esaustivo che decide la validità di ogni token.
+- [x] Aggiungere una modalità `oracle_only`.
+- [x] Aggiungere una modalità `compare_new_vs_oracle`.
+- [x] Fare in modo che il confronto possa essere eseguito senza cambiare il token realmente campionato.
+- [x] Serializzare, solo in debug, lo stato grammaticale che ha prodotto una divergenza.
+- [x] Salvare il primo token differente e i relativi piece/byte.
 
 ### 0.2 — Estendere il profiling
 
-- [ ] Contare `parser_transition_count`.
-- [ ] Contare `parser_bytes_visited`.
-- [ ] Contare `candidate_tokens_tested`.
-- [ ] Contare `trie_nodes_visited` anche se inizialmente sarà zero.
-- [ ] Contare `mask_cache_hit` / `mask_cache_miss`.
-- [ ] Contare `grammar_compile_ms`.
-- [ ] Contare `grammar_jit_ms`.
-- [ ] Contare `constraint_state_checkpoint` / `rollback`.
-- [ ] Separare `forced_prefix_probe` da `sampling_mask_build`.
-- [ ] Misurare `constraint_cpu_ms` sovrapposto e non sovrapposto alla GPU.
+- [x] Contare `parser_transition_count`.
+- [x] Contare `parser_bytes_visited`.
+- [x] Contare `candidate_tokens_tested`.
+- [x] Contare `trie_nodes_visited` anche se inizialmente sarà zero.
+- [x] Contare `mask_cache_hit` / `mask_cache_miss`.
+- [x] Contare `grammar_compile_ms`.
+- [x] Contare `grammar_jit_ms`.
+- [x] Contare `constraint_state_checkpoint` / `rollback`.
+- [x] Separare `forced_prefix_probe` da `sampling_mask_build`.
+- [x] Misurare `constraint_cpu_ms` sovrapposto e non sovrapposto alla GPU.
 
 ### 0.3 — Costruire la suite DSML
 
@@ -167,68 +167,68 @@ Una micro-suite costruita solo sui casi che DS4 gestisce bene rischia di ottimiz
 - [ ] Più tool con nomi che condividono prefissi.
 - [ ] Tool name molto lunghi.
 - [ ] Property name che condividono prefissi.
-- [ ] `string="true"` con testo libero.
+- [x] `string="true"` con testo libero.
 - [ ] Parametro JSON.
-- [ ] `enum`.
-- [ ] `const`.
+- [x] `enum`.
+- [x] `const`.
 - [ ] Integer bounded.
 - [ ] Più invoke.
-- [ ] Tool-choice required.
+- [x] Tool-choice required.
 - [ ] Thinking + apertura/chiusura DSML.
 - [ ] Marker DSML spezzati su più token BPE.
 - [ ] Piece che contiene più di una transizione grammaticale.
 
 ### 0.4 — Costruire la suite JSON Schema
 
-- [ ] Object piatto.
-- [ ] Object annidato.
-- [ ] Array.
-- [ ] Array di object.
-- [ ] String libera lunga.
+- [x] Object piatto.
+- [x] Object annidato.
+- [x] Array.
+- [x] Array di object.
+- [x] String libera lunga.
 - [ ] String con escape.
-- [ ] Boolean/null/number/integer.
-- [ ] Enum corto.
+- [x] Boolean/null/number/integer.
+- [x] Enum corto.
 - [ ] Enum grande.
-- [ ] Const.
-- [ ] Required/optional.
-- [ ] `additionalProperties=false`.
+- [x] Const.
+- [x] Required/optional.
+- [x] `additionalProperties=false`.
 - [ ] `oneOf`.
 - [ ] `anyOf`.
 - [ ] `allOf`.
-- [ ] Min/max items/properties.
-- [ ] Min/max numeric.
+- [x] Min/max items/properties.
+- [x] Min/max numeric.
 - [ ] Output da 32, 128, 512 e 2K+ token quando supportato.
 
 ### 0.5 — Aggiungere benchmark esterno
 
-- [ ] Importare una selezione riproducibile di JSONSchemaBench.
-- [ ] Separare schema supportati e non supportati da DS4.
-- [ ] Non trasformare automaticamente schema non supportati per farli passare.
-- [ ] Registrare compilation time.
-- [ ] Registrare mask time.
-- [ ] Registrare end-to-end decode time.
-- [ ] Registrare percentuale di schema supportati.
+- [x] Importare una selezione riproducibile di JSONSchemaBench.
+- [x] Separare schema supportati e non supportati da DS4.
+- [x] Non trasformare automaticamente schema non supportati per farli passare.
+- [x] Registrare compilation time.
+- [x] Registrare mask time.
+- [x] Registrare end-to-end decode time.
+- [x] Registrare percentuale di schema supportati.
 
 ## Criteri di uscita
 
-- [ ] Baseline salvata in forma machine-readable.
-- [ ] Ogni run può essere ripetuto.
-- [ ] Il nuovo codice può essere confrontato mask-per-mask con l'oracle.
-- [ ] Esistono test che coprono tokenizzazione problematica e non solo JSON semplice.
+- [x] Baseline salvata in forma machine-readable.
+- [x] Ogni run può essere ripetuto.
+- [x] Il nuovo codice può essere confrontato mask-per-mask con l'oracle.
+- [x] Esistono test che coprono tokenizzazione problematica e non solo JSON semplice.
 
 ## Stato e retrospettiva — MACRO 0
 
-- **Stato:** ⬜ Non iniziato / 🟨 In corso / ✅ Completato / ⛔ Bloccato
-- **Data/commit di riferimento:**
-- **Baseline raccolta:**
-- **Metriche principali:**
-- **Cosa ha funzionato:**
-- **Cosa non ha funzionato:**
-- **Bug/regressioni trovati:**
-- **Decisioni prese:**
-- **Debito tecnico rimasto:**
-- **Gate:** ⬜ GO / ⬜ ITERATE / ⬜ ROLLBACK
-- **Note:**
+- **Stato:** 🟨 In corso (oracle, profiling e benchmark esterno completati; matrice DSML/JSON lunga ancora parziale)
+- **Data/commit di riferimento:** 2026-08-14, working tree dopo `4c3103357095ddee5dbc905a8b8ace8cc340bb1d`
+- **Baseline raccolta:** `constraint-m0-oracle-slow-001` e `constraint-m0-jsonschemabench-oracle-003` in `performance-results/`.
+- **Metriche principali:** corpus pinned esaminato integralmente: 9.558 schema in 10 categorie, 3.703 classificate supportate (38,74%), 5.855 classificate unsupported; 8.859 eleggibili sotto 16 KiB. Tier versionati: 12 `smoke`, 32 `safety`, 16 esempi unsupported. Il run post-fix `constraint-m5-jsonschemabench-safety-prefix8-compare-002` copre 32 schema × 2, 304 token e 380 confronti oracle: zero divergenze, 22 output completi validi e 10 prefissi bounded dichiarati `PREFIX_ONLY`. Nello stesso run 16/16 schema unsupported ricevono HTTP 400 senza avviare inferenza.
+- **Cosa ha funzionato:** harness riproducibile, output semantic hash, modalità oracle/compare, tempi per fase e importer sparse-fetch pinned al commit JSONSchemaBench `ba103c73756198dd9b149ddc7db7867da7a077f6`. Gli output completi vengono ora verificati con `jsonschema`, indipendente dal validatore C; chiavi duplicate e schema sorgente meta-invalidi falliscono il gate. Tutti i 32 witness safety sono validi esternamente; i probe live verificano anche il rifiuto pre-inferenza degli schema unsupported.
+- **Cosa non ha funzionato:** i primi due run esterni hanno esposto assunzioni errate, correttamente conservate come risultati negativi. Un gate completion model-driven sul caso `Github_hard/o12281.json` può saturare il budget pur avendo `{}` come witness valido; i tentativi `constraint-m5-jsonschemabench-safety-compare-001`, `...-002` e `constraint-m5-jsonschemabench-hard-exact-replay-001` sono conservati come negativi. Il gate rapido usa quindi prefissi bounded e non pretende di dimostrare il completamento dei dieci casi `PREFIX_ONLY`.
+- **Bug/regressioni trovati:** default JSON Schema di `additionalProperties`; stop/control token con spelling non vuoto che potevano terminare JSON incompleto; precedente assenza di validazione indipendente dell'istanza e accettazione implicita delle chiavi JSON duplicate nell'harness. Il primo probe live unsupported (`constraint-m5-jsonschemabench-unsupported-reject-001`) ha inoltre scoperto che keyword sconosciute venivano ignorate: il server ora usa una whitelist ricorsiva e fail-closed; `...-reject-002` e il gate safety `...-compare-002` confermano 16/16 rifiuti prima dell'inferenza.
+- **Decisioni prese:** nessuna riscrittura degli schemi unsupported; fallback fail-closed; output fallito salvato nell'artefatto; separazione esplicita fra completion validation e prefix differential safety.
+- **Debito tecnico rimasto:** completare la matrice DSML/JSON 32–2K+ e combinatori supportati.
+- **Gate:** ☑ GO
+- **Note:** R15: si procede perché i criteri di uscita sono soddisfatti; l'espansione della matrice resta un task di coverage, non un prerequisito dell'oracle differenziale.
 
 ---
 
@@ -262,57 +262,57 @@ La decisione “token valido?”, la mask e l'eventuale determinismo devono deri
 
 ### 1.1 — Definire un risultato unico dell'analisi
 
-- [ ] Definire una struttura `constraint_analysis`.
-- [ ] Includere `allowed_count`.
-- [ ] Includere `allowed_mask` o rappresentazione equivalente.
-- [ ] Includere `single_allowed_token` quando esiste.
+- [x] Definire una struttura `constraint_analysis`.
+- [x] Includere `allowed_count`.
+- [x] Includere `allowed_mask` o rappresentazione equivalente.
+- [x] Includere `single_allowed_token` quando esiste.
 - [ ] Includere eventuale `common_forced_bytes`.
-- [ ] Includere metriche del lavoro effettuato.
-- [ ] Includere flag `analysis_complete`.
+- [x] Includere metriche del lavoro effettuato.
+- [x] Includere flag `analysis_complete`.
 - [ ] Includere fallback reason.
 
 ### 1.2 — Condividere il risultato
 
-- [ ] Fare usare `constraint_analysis` al forced path.
-- [ ] Fare usare lo stesso risultato al sampler.
-- [ ] Evitare una seconda callback validation per gli stessi token.
-- [ ] Non cambiare ancora l'algoritmo di validazione.
-- [ ] Mantenere il vecchio comportamento dietro flag.
+- [x] Fare usare `constraint_analysis` al forced path.
+- [x] Fare usare lo stesso risultato al sampler.
+- [x] Evitare una seconda callback validation per gli stessi token.
+- [x] Non cambiare ancora l'algoritmo di validazione.
+- [x] Mantenere il vecchio comportamento dietro flag.
 
 ### 1.3 — Correttezza
 
-- [ ] Confrontare la mask prima/dopo.
-- [ ] Confrontare forced token prima/dopo.
-- [ ] Verificare i casi di vera biforcazione grammaticale.
-- [ ] Verificare tag DSML parzialmente tokenizzati.
-- [ ] Verificare enum con segmentazioni BPE multiple.
+- [x] Confrontare la mask prima/dopo.
+- [x] Confrontare forced token prima/dopo.
+- [x] Verificare i casi di vera biforcazione grammaticale.
+- [x] Verificare tag DSML parzialmente tokenizzati.
+- [x] Verificare enum con segmentazioni BPE multiple.
 
 ### 1.4 — Performance
 
-- [ ] Misurare numero di candidate test prima/dopo.
-- [ ] Misurare `forced_build_ms`.
-- [ ] Misurare `filter_ms`.
-- [ ] Misurare wall time.
-- [ ] Verificare che la modifica non aumenti il costo del caso senza forced-prefix.
+- [x] Misurare numero di candidate test prima/dopo.
+- [x] Misurare `forced_build_ms`.
+- [x] Misurare `filter_ms`.
+- [x] Misurare wall time.
+- [x] Verificare che la modifica non aumenti il costo del caso senza forced-prefix.
 
 ## Criteri di uscita
 
-- [ ] Nessuna divergenza dall'oracle.
-- [ ] Nessuna doppia passata evitabile sullo stesso set di token.
+- [x] Nessuna divergenza dall'oracle.
+- [x] Nessuna doppia passata evitabile sullo stesso set di token.
 - [ ] Miglioramento misurabile nei casi constrained con scelta reale.
 
 ## Stato e retrospettiva — MACRO 1
 
-- **Stato:** ⬜ Non iniziato / 🟨 In corso / ✅ Completato / ⛔ Bloccato
-- **Data/commit di riferimento:**
-- **Risultato prestazionale:**
-- **Riduzione candidate visitati:**
-- **Cosa ha funzionato:**
-- **Cosa non ha funzionato:**
-- **Divergenze dall'oracle:**
-- **Decisioni prese:**
-- **Gate:** ⬜ GO / ⬜ ITERATE / ⬜ ROLLBACK
-- **Note:**
+- **Stato:** ✅ Completato come esperimento, non promosso
+- **Data/commit di riferimento:** 2026-08-14, run `constraint-m1-shared-slow-001`
+- **Risultato prestazionale:** media pesata −0,687% tok/s contro l'oracle slow; DSML +0,235%, JSON −1,610%.
+- **Riduzione candidate visitati:** trascurabile (circa 0,003–0,007%): il probe legacy termina presto e non era una seconda scansione completa.
+- **Cosa ha funzionato:** una singola mask completa può essere condivisa in modo corretto da forced decision e sampler.
+- **Cosa non ha funzionato:** sostituire sempre il probe early-exit col risultato completo sposta costo nel mask build senza ridurre abbastanza il lavoro.
+- **Divergenze dall'oracle:** zero.
+- **Decisioni prese:** conservare `optimized` per esperimenti e riusare `constraint_analysis` nei backend trie/cache; non promuovere la sola Macro 1.
+- **Gate:** ☑ ROLLBACK
+- **Note:** risultato negativo conservato (R19). R15: si passa alla Macro 2 perché la premessa “doppia passata completa” è stata falsificata dalle misure; il risultato unificato rimane infrastruttura utile.
 
 ---
 
@@ -364,38 +364,38 @@ Il parser stack e lo stato semantico devono essere strutture runtime persistenti
 
 ### 2.1 — Disegnare `constraint_state`
 
-- [ ] Separare stato DSML da stato JSON.
+- [x] Separare stato DSML da stato JSON.
 - [ ] Definire uno stato comune per checkpoint/rollback.
-- [ ] Conservare dialect/syntax DSML.
-- [ ] Conservare `mode`.
-- [ ] Conservare tool attivo.
-- [ ] Conservare proprietà attiva.
+- [x] Conservare dialect/syntax DSML.
+- [x] Conservare `mode`.
+- [x] Conservare tool attivo.
+- [x] Conservare proprietà attiva.
 - [ ] Conservare proprietà già viste.
 - [ ] Conservare required ancora mancanti.
-- [ ] Conservare stato string/escape.
-- [ ] Conservare stack JSON container.
+- [x] Conservare stato string/escape.
+- [x] Conservare stack JSON container.
 - [ ] Conservare schema node corrente.
 - [ ] Conservare array position.
 - [ ] Conservare stato enum/const quando utile.
 
 ### 2.2 — API incrementale
 
-- [ ] `constraint_state_init(...)`.
-- [ ] `constraint_state_feed_bytes(...)`.
+- [x] `constraint_state_init(...)`.
+- [x] `constraint_state_feed_bytes(...)`.
 - [ ] `constraint_state_feed_token(...)`.
-- [ ] `constraint_state_checkpoint(...)`.
-- [ ] `constraint_state_rollback(...)`.
-- [ ] `constraint_state_clone_light(...)`.
-- [ ] `constraint_state_is_complete(...)`.
-- [ ] `constraint_state_can_stop(...)`.
+- [x] `constraint_state_checkpoint(...)`.
+- [x] `constraint_state_rollback(...)`.
+- [x] `constraint_state_clone_light(...)`.
+- [x] `constraint_state_is_complete(...)`.
+- [x] `constraint_state_can_stop(...)`.
 
 ### 2.3 — Migrare DSML
 
-- [ ] Usare lo stato incrementale per marker DSML.
-- [ ] Usarlo per `invoke`.
-- [ ] Usarlo per parametri.
+- [x] Usare lo stato incrementale per marker DSML.
+- [x] Usarlo per `invoke`.
+- [x] Usarlo per parametri.
 - [ ] Usarlo per required/optional.
-- [ ] Usarlo per string body.
+- [x] Usarlo per string body.
 - [ ] Usarlo per JSON param.
 - [ ] Eliminare gradualmente dipendenze dal raw completo nelle decisioni candidate-specifiche.
 
@@ -403,37 +403,37 @@ Il parser stack e lo stato semantico devono essere strutture runtime persistenti
 
 - [ ] Rimuovere la necessità normale di `raw + piece`.
 - [ ] Non richiamare un parser del documento completo per ogni candidate.
-- [ ] Mantenere validation finale completa come barriera di sicurezza.
-- [ ] Verificare number frontier.
-- [ ] Verificare escape e Unicode.
-- [ ] Verificare nested containers.
+- [x] Mantenere validation finale completa come barriera di sicurezza.
+- [x] Verificare number frontier.
+- [x] Verificare escape e Unicode.
+- [x] Verificare nested containers.
 - [ ] Verificare combinatori supportati.
 
 ### 2.5 — Validazione differenziale
 
-- [ ] Per ogni token della suite, confrontare incremental state vs parser esistente.
+- [x] Per ogni token della suite, confrontare incremental state vs parser esistente.
 - [ ] Fuzzare sequenze di byte/token.
-- [ ] Testare checkpoint/rollback profondi.
-- [ ] Testare piece che aprono e chiudono più strutture nello stesso token.
+- [x] Testare checkpoint/rollback profondi.
+- [x] Testare piece che aprono e chiudono più strutture nello stesso token.
 
 ## Criteri di uscita
 
-- [ ] Il costo candidate-specifico non cresce linearmente con tutta la lunghezza dell'output già prodotto nei casi normali.
-- [ ] Validation finale completa rimane presente.
-- [ ] Stato incrementale e oracle concordano.
+- [x] Il costo candidate-specifico non cresce linearmente con tutta la lunghezza dell'output già prodotto nei casi normali.
+- [x] Validation finale completa rimane presente.
+- [x] Stato incrementale e oracle concordano.
 
 ## Stato e retrospettiva — MACRO 2
 
-- **Stato:** ⬜ Non iniziato / 🟨 In corso / ✅ Completato / ⛔ Bloccato
-- **Data/commit di riferimento:**
-- **Costo parser prima/dopo:**
-- **Memoria per stato/checkpoint:**
-- **Cosa ha funzionato:**
-- **Cosa non ha funzionato:**
-- **Casi difficili trovati:**
-- **Divergenze dall'oracle:**
-- **Gate:** ⬜ GO / ⬜ ITERATE / ⬜ ROLLBACK
-- **Note:**
+- **Stato:** 🟨 In corso (lexer JSON e frontier stringa DSML/JSON incrementali; semantica generale ancora ibrida)
+- **Data/commit di riferimento:** 2026-08-14, run `constraint-m2-jsonschemabench-001`
+- **Costo parser prima/dopo:** stringa JSON libera: constraint 8,33→2,80 s (−66%); DSML testo libero: constraint −31,13%, parser bytes −41,44%.
+- **Memoria per stato/checkpoint:** stato lessicale JSON a dimensione fissa (stack limitato da `JSON_MAX_NESTING`) copiato per candidate; tracker DSML persistente già request-local.
+- **Cosa ha funzionato:** DFA JSON byte-level; fast path dentro la stessa stringa semanticamente illimitata; decisione DSML sulla proprietà attiva precomputata fuori dal callback vocabulary-wide.
+- **Cosa non ha funzionato:** il solo lexer, senza frontier semantica, riduceva byte ma non migliorava tok/s; la prima versione DSML rifaceva lookup schema per token e perdeva 3,19%.
+- **Casi difficili trovati:** chiusura stringa, escape/Unicode, numeri incompleti, stop token con piece non vuoto e `minLength` verificato solo alla chiusura.
+- **Divergenze dall'oracle:** zero nei run compare; subset esterno candidato +32,699% tok/s pesati.
+- **Gate:** ☑ GO
+- **Note:** R15: i criteri di uscita sono soddisfatti per i normali hot path misurati; la migrazione semantica completa di required/optional/combinatori resta esplicitamente ibrida e continua a ricadere nel parser completo.
 
 ---
 
@@ -481,69 +481,69 @@ Il trie deve essere costruito sui **piece reali del tokenizer**, non su stringhe
 
 ### 3.1 — Token piece table
 
-- [ ] Precomputare una sola volta `token_id → piece bytes`.
-- [ ] Conservare lunghezza.
-- [ ] Gestire piece vuoti/speciali.
-- [ ] Identificare stop/eos separatamente.
-- [ ] Verificare UTF-8 vs raw byte behavior del tokenizer usato.
-- [ ] Evitare allocazioni nel loop caldo.
+- [x] Precomputare una sola volta `token_id → piece bytes`.
+- [x] Conservare lunghezza.
+- [x] Gestire piece vuoti/speciali.
+- [x] Identificare stop/eos separatamente.
+- [x] Verificare UTF-8 vs raw byte behavior del tokenizer usato.
+- [x] Evitare allocazioni nel loop caldo.
 
 ### 3.2 — Trie
 
-- [ ] Costruire trie sui byte dei piece.
-- [ ] Ogni foglia deve poter contenere uno o più token ID.
-- [ ] Gestire token con piece identici se esistono.
-- [ ] Ottimizzare layout per locality.
-- [ ] Evitare pointer-heavy layout se il profiling mostra cache miss elevati.
-- [ ] Considerare array compatto / edge ranges / radix compression.
+- [x] Costruire trie sui byte dei piece.
+- [x] Ogni foglia deve poter contenere uno o più token ID.
+- [x] Gestire token con piece identici se esistono.
+- [x] Ottimizzare layout per locality.
+- [x] Evitare pointer-heavy layout se il profiling mostra cache miss elevati.
+- [x] Considerare array compatto / edge ranges / radix compression.
 
 ### 3.3 — Traversal con parser incrementale
 
 - [ ] Applicare una transizione parser per edge.
-- [ ] Potare sottoalbero su transizione impossibile.
+- [x] Potare sottoalbero su transizione impossibile.
 - [ ] Fare checkpoint solo quando necessario.
 - [ ] Riutilizzare stato comune fra fratelli.
-- [ ] Raccogliere token validi alle foglie.
-- [ ] Gestire candidate che completano una struttura e continuano nello stesso piece.
+- [x] Raccogliere token validi alle foglie.
+- [x] Gestire candidate che completano una struttura e continuano nello stesso piece.
 
 ### 3.4 — Differential mode
 
-- [ ] Costruire mask con trie.
-- [ ] Costruire mask con oracle esaustivo.
-- [ ] Confrontare bit per bit.
-- [ ] Loggare primo sottoalbero responsabile di divergenza.
+- [x] Costruire mask con trie.
+- [x] Costruire mask con oracle esaustivo.
+- [x] Confrontare bit per bit.
+- [x] Loggare primo sottoalbero responsabile di divergenza.
 - [ ] Fuzzare trie traversal su stati casuali validi.
 
 ### 3.5 — Benchmark
 
-- [ ] `trie_nodes_visited`.
-- [ ] `leaf_tokens_emitted`.
-- [ ] `subtrees_pruned`.
+- [x] `trie_nodes_visited`.
+- [x] `leaf_tokens_emitted`.
+- [x] `subtrees_pruned`.
 - [ ] CPU cycles.
 - [ ] cache misses se disponibile.
-- [ ] confronto con `vocab_tokens` dell'oracle.
-- [ ] testare stati molto permissivi, dove il trie può potare poco.
-- [ ] testare stati molto restrittivi, dove il trie deve vincere molto.
+- [x] confronto con `vocab_tokens` dell'oracle.
+- [x] testare stati molto permissivi, dove il trie può potare poco.
+- [x] testare stati molto restrittivi, dove il trie deve vincere molto.
 
 ## Criteri di uscita
 
-- [ ] Mask identiche all'oracle.
-- [ ] Nei tratti strutturali il numero di nodi visitati è molto inferiore al numero di token del vocabolario.
-- [ ] Nessuna allocazione per candidate nel loop caldo.
+- [x] Mask identiche all'oracle.
+- [x] Nei tratti strutturali il numero di nodi visitati è molto inferiore al numero di token del vocabolario.
+- [x] Nessuna allocazione per candidate nel loop caldo.
 
 ## Stato e retrospettiva — MACRO 3
 
-- **Stato:** ⬜ Non iniziato / 🟨 In corso / ✅ Completato / ⛔ Bloccato
-- **Data/commit di riferimento:**
-- **Nodi trie:**
-- **Memoria trie:**
-- **Nodi visitati medi per decode step:**
-- **Speedup mask:**
-- **Cosa ha funzionato:**
-- **Cosa non ha funzionato:**
-- **Stati in cui il trie non aiuta:**
-- **Gate:** ⬜ GO / ⬜ ITERATE / ⬜ ROLLBACK
-- **Note:**
+- **Stato:** 🟨 In corso (backend funzionante e promosso in policy adattiva; transizione parser realmente edge-local ancora da completare)
+- **Data/commit di riferimento:** 2026-08-14, run `constraint-m3-trie-slow-001` e `constraint-m3-jsonschemabench-compare-001`
+- **Nodi trie:** esposti da `trie_compiled_nodes`; costruzione lazy una volta per tokenizer.
+- **Memoria trie:** esposta da `trie_memory_bytes`; layout flat a indici, più una chain token per foglia duplicata.
+- **Nodi visitati medi per decode step:** canonico: 4.307/7 = 615 DSML e 4.507/14 = 322 JSON nei passi confrontati.
+- **Speedup mask:** JSON annidato 1.958,03→2,63 ms (−99,87%); throughput 4,11→7,07 tok/s (+72,13%). DSML throughput +2,03%, constraint CPU −8,43%.
+- **Cosa ha funzionato:** pruning byte-exact, terminali duplicati, piece vuoti, mask session-owned riusata dal sampler, threshold adattivo su massimo 256 root edge.
+- **Cosa non ha funzionato:** negli stati permissivi la visita di tutti i nodi interni sarebbe più costosa della scansione token; tali stati vengono riconosciuti e inviati al percorso incrementale/esaustivo.
+- **Stati in cui il trie non aiuta:** private reasoning, body di stringa libera e frontier con più di 64 famiglie di primo byte ammesse.
+- **Gate:** ☑ GO
+- **Note:** 678 mask esterne + 42 canoniche confrontate, zero divergenze. R15: si procede perché tutti i criteri di uscita sono soddisfatti; edge-state sharing e fuzz casuale restano miglioramenti espliciti, coperti nel frattempo da test isolato e subset esterno.
 
 ---
 
@@ -589,33 +589,33 @@ La struttura DSML statica, la sintassi JSON e molte transizioni locali possono e
 
 ### 4.1 — Classificare lo stato
 
-- [ ] Identificare campi che influenzano la mask.
-- [ ] Separare stato lessicale da stato semantico.
+- [x] Identificare campi che influenzano la mask.
+- [x] Separare stato lessicale da stato semantico.
 - [ ] Definire `constraint_state_signature`.
-- [ ] Dimostrare quali campi possono essere esclusi dalla signature.
+- [x] Dimostrare quali campi possono essere esclusi dalla signature.
 - [ ] Inserire assertion/debug hash per intercettare collisioni semantiche.
 
 ### 4.2 — Static mask store
 
-- [ ] Precomputare mask per stati puramente statici DSML.
-- [ ] Precomputare mask per stati lessicali JSON comuni.
+- [x] Precomputare mask per stati puramente statici DSML.
+- [x] Precomputare mask per stati lessicali JSON comuni.
 - [ ] Precomputare delimitatori.
 - [ ] Precomputare literal `true/false/null`.
 - [ ] Precomputare transizioni strutturali ricorrenti.
-- [ ] Misurare dimensione del mask store.
+- [x] Misurare dimensione del mask store.
 
 ### 4.3 — Dynamic frontier
 
-- [ ] Identificare token che dipendono realmente dal runtime stack/schema.
-- [ ] Verificare solo questi token dinamicamente.
+- [x] Identificare token che dipendono realmente dal runtime stack/schema.
+- [x] Verificare solo questi token dinamicamente.
 - [ ] Usare trie per il dynamic subset se conveniente.
-- [ ] Misurare la cardinalità del dynamic subset per stato.
+- [x] Misurare la cardinalità del dynamic subset per stato.
 
 ### 4.4 — Mask representation
 
 - [ ] Confrontare bitset denso.
-- [ ] Confrontare sparse token list.
-- [ ] Confrontare base-mask + patch.
+- [x] Confrontare sparse token list.
+- [x] Confrontare base-mask + patch.
 - [ ] Confrontare adaptive representation in base alla densità.
 - [ ] Evitare conversioni costose prima del sampler.
 
@@ -623,30 +623,30 @@ La struttura DSML statica, la sintassi JSON e molte transizioni locali possono e
 
 - [ ] Cache `state_signature → mask`.
 - [ ] LRU/clock o politica adatta.
-- [ ] Contatori hit/miss.
-- [ ] Budget memoria esplicito.
-- [ ] Invalidazione legata a tokenizer/schema/tool registry.
-- [ ] No cache per stato non canonico finché non è dimostrata la sicurezza.
+- [x] Contatori hit/miss.
+- [x] Budget memoria esplicito.
+- [x] Invalidazione legata a tokenizer/schema/tool registry.
+- [x] No cache per stato non canonico finché non è dimostrata la sicurezza.
 
 ## Criteri di uscita
 
-- [ ] La maggioranza degli stati strutturali non richiede più una scansione dinamica completa.
-- [ ] Dynamic subset misurato e significativamente più piccolo di `|V|`.
-- [ ] Cache key dimostrata semanticamente corretta dai test.
+- [x] La maggioranza degli stati strutturali non richiede più una scansione dinamica completa.
+- [x] Dynamic subset misurato e significativamente più piccolo di `|V|`.
+- [x] Cache key dimostrata semanticamente corretta dai test.
 
 ## Stato e retrospettiva — MACRO 4
 
-- **Stato:** ⬜ Non iniziato / 🟨 In corso / ✅ Completato / ⛔ Bloccato
-- **Data/commit di riferimento:**
-- **Static states compilati:**
-- **Dynamic tokens medi:**
-- **Mask cache hit-rate:**
-- **Memoria cache:**
-- **Cosa ha funzionato:**
-- **Cosa non ha funzionato:**
-- **Stati troppo dinamici:**
-- **Gate:** ⬜ GO / ⬜ ITERATE / ⬜ ROLLBACK
-- **Note:**
+- **Stato:** 🟨 In corso (base-mask specializzata alle stringhe illimitate; store strutturale generale ancora da estendere)
+- **Data/commit di riferimento:** 2026-08-14, run `constraint-m4-dsml-static-mask-slow-001` e `constraint-m4-json-static-mask-slow-001`
+- **Static states compilati:** interno stringa DSML senza `<`; interno stringa JSON lessicalmente valido che non chiude la stringa.
+- **Dynamic tokens medi:** DSML 598; JSON 2.651 nel workload libero (contro `|V|=248.320`).
+- **Mask cache hit-rate:** 24 hit per richiesta DSML e 21 per richiesta JSON nei workload misurati; miss separati per gli stati non canonici.
+- **Memoria cache:** 509.636 byte complessivi; compile cold 3,6–3,7 ms, lifetime legato al server/tokenizer.
+- **Cosa ha funzionato:** base-mask + sparse dynamic patch; stop/thinking control sempre dinamici; chiusure ed escape di frontiera rivalidati; DSML +2,06% tok/s vs Macro 2 e CPU vincolo −11,39%.
+- **Cosa non ha funzionato:** JSON libero è neutro (−0,19% tok/s, −0,48% CPU); scrivere comunque la mask float densa e campionare su `|V|` limita il beneficio.
+- **Stati troppo dinamici:** stringhe non semanticamente illimitate, escape/Unicode pendenti, tag di chiusura parziali e qualunque stato con signature incompleta.
+- **Gate:** ☑ GO
+- **Note:** il run `constraint-m4-dsml-static-mask-compare-001` ha trovato 2 divergenze e viene conservato (R19). Aggiungere `tracker.pos == raw_len` alla signature ha portato `compare-002` a 76/76 mask identiche; JSON 68/68.
 
 ---
 
@@ -680,35 +680,35 @@ Le catene di transizioni singole possono essere compresse in archi/path determin
 
 ### 5.1 — Definire determinismo grammaticale
 
-- [ ] Distinguere `single token` da `single byte/string continuation`.
-- [ ] Distinguere più segmentazioni BPE della stessa stringa da più scelte grammaticali.
-- [ ] Non forzare una scelta tra optional parameter e close.
-- [ ] Non forzare una scelta fra tool diversi.
-- [ ] Non forzare enum diversi che condividono prefisso.
+- [x] Distinguere `single token` da `single byte/string continuation`.
+- [x] Distinguere più segmentazioni BPE della stessa stringa da più scelte grammaticali.
+- [x] Non forzare una scelta tra optional parameter e close.
+- [x] Non forzare una scelta fra tool diversi.
+- [x] Non forzare enum diversi che condividono prefisso.
 
 ### 5.2 — Estrarre deterministic path
 
 - [ ] API `constraint_next_deterministic_bytes`.
 - [ ] API `constraint_next_deterministic_tokens`.
-- [ ] Fermarsi al primo branch.
-- [ ] Fermarsi su stop boundary.
-- [ ] Fermarsi su limite output.
-- [ ] Fermarsi quando la tokenizzazione non può essere preservata con certezza.
+- [x] Fermarsi al primo branch.
+- [x] Fermarsi su stop boundary.
+- [x] Fermarsi su limite output.
+- [x] Fermarsi quando la tokenizzazione non può essere preservata con certezza.
 
 ### 5.3 — Tokenizzazione corretta
 
 - [ ] Retokenizzare in modo compatibile con il prefisso reale.
-- [ ] Confrontare token sequence con un tokenization oracle.
-- [ ] Testare path che attraversano confini BPE difficili.
-- [ ] Testare marker DSML con Unicode/full-width markers.
-- [ ] Testare enum con token multipli.
+- [x] Confrontare token sequence con un tokenization oracle.
+- [x] Testare path che attraversano confini BPE difficili.
+- [x] Testare marker DSML con Unicode/full-width markers.
+- [x] Testare enum con token multipli.
 
 ### 5.4 — Sync modello
 
-- [ ] Riutilizzare `append_exact_tokens_to_live_session(...)` o equivalente.
-- [ ] Misurare forced sync separatamente da discovery.
+- [x] Riutilizzare `append_exact_tokens_to_live_session(...)` o equivalente.
+- [x] Misurare forced sync separatamente da discovery.
 - [ ] Non calcolare logits intermedi se il backend consente di evitarli.
-- [ ] Mantenere KV/state esattamente allineati.
+- [x] Mantenere KV/state esattamente allineati.
 - [ ] Verificare MTP sidecar/state quando attivo.
 
 ### 5.5 — Dispatch micro-suffix
@@ -722,22 +722,24 @@ Le catene di transizioni singole possono essere compresse in archi/path determin
 ## Criteri di uscita
 
 - [ ] Discovery del determinismo non richiede normalmente una scansione completa del vocabolario.
-- [ ] Nessuna scelta grammaticale reale viene collassata.
-- [ ] Forced path produce gli stessi token ammessi dell'oracle.
+- [x] Nessuna scelta grammaticale reale viene collassata.
+- [x] Forced path produce gli stessi token ammessi dell'oracle.
 
 ## Stato e retrospettiva — MACRO 5
 
-- **Stato:** ⬜ Non iniziato / 🟨 In corso / ✅ Completato / ⛔ Bloccato
-- **Data/commit di riferimento:**
-- **Token fast-forwardati medi:**
-- **Sampling step eliminati:**
-- **Costo discovery:**
-- **Costo sync:**
-- **Cosa ha funzionato:**
-- **Cosa non ha funzionato:**
-- **Problemi di tokenizzazione:**
-- **Gate:** ⬜ GO / ⬜ ITERATE / ⬜ ROLLBACK
-- **Note:**
+- **Stato:** 🟨 In corso (shadow trie JSON promosso; gate esterno JSON chiuso con esito rosso; residuo DSML free-text identificato e corretto senza ancora ripetere il caso agente)
+- **Data/commit di riferimento:** 2026-08-14, run `constraint-m5-json-shadow-trie-slow-003`, `constraint-final-jsonschemabench-slow-001`, `constraint-m5-jsonschemabench-safety-prefix8-compare-002` e `constraint-m5-agent-dsml-story-300-current-001`
+- **Token fast-forwardati medi:** workload canonico JSON: 39 token generati, 14 mask/decisioni iniziali; le catene shadow eliminano le scansioni intermedie prima dei 14 branch reali.
+- **Sampling step eliminati:** invariati rispetto al fast-forward preesistente; cambia il costo di discovery delle catene.
+- **Costo discovery:** JSON `forced_prefix_probe` 2.282,13→circa 6–7 ms; constraint CPU 2.286,20→10,61 ms.
+- **Costo sync:** resta misurato separatamente come `forced_sync_ms`; nessuna modifica a KV/model sync.
+- **Cosa ha funzionato:** JSON annidato 7,07→35,72 tok/s (+405% circa), vicino al decode non vincolato; 52 shadow mask canoniche confrontate nel prototipo, zero divergenze. Il gate correctness finale sul subset JSONSchemaBench originario totalizza 718 confronti oracle senza divergenze; il nuovo tier safety post-fix aggiunge 380 confronti su 32 schema, ancora zero divergenze, con validazione indipendente di 22 output completi e dei witness per tutti i 32 casi. I 16 esempi unsupported sono respinti con HTTP 400 prima dell'inferenza; questo gate ha trovato e fatto correggere l'accettazione precedente delle keyword sconosciute. Il free-text nullable `string | null` ora riusa conservativamente la mask statica solo quando esiste un'unica variante stringa semanticamente illimitata: la fixture mirata passa 80 confronti oracle senza divergenze e l'A/B migliora 26,76→29,02 tok/s (+8,46%), con constraint CPU 767,07→451,07 ms (−41,20%).
+- **Cosa non ha funzionato:** applicare lo stesso shadow trie a DSML regredisceva 7,9% perché il simulatore semantico non è ancora edge-local; run `constraint-m5-shadow-trie-slow-001` conservato e policy ritirata per DSML. Il gate prestazionale finale JSONSchemaBench è `REJECT_CANDIDATE`: media pesata +73,99%, ma `Github_easy/o8466.json` regredisce del 16,94% e `Github_trivial/o25195.json` del 2,44%, oltre la soglia per workload dominante.
+- **Profilo reale DSML free-text:** un solo tentativo con l'agente `/agent`, grafo `bootstrap-wiki`, contesto occupato 10.770 token e richiesta di una storia italiana di 300 parole nel campo `message` di `exit-with-info-tool`. La fase lunga genera 1.024 token a 16,25 tok/s: `eval_ms` pesa 58,68% del wall, `sampling_mask_build_ms` 40,59%, sampling filtrato 0,30%, forced probe 0,38% e residuo non attribuito 0,05%. L'output raggiunge il limite e fallisce la validazione del tool; il run è quindi conservato come `measured_failed_output`, non come successo funzionale.
+- **Nuovo residuo identificato:** lo schema reale di `message` è il nullable Pydantic `anyOf: [string, null]`. Il riconoscitore della stringa libera rifiutava ogni `anyOf`, producendo 1.022 cache miss e zero hit nella fase lunga: il 40,59% non era overhead inevitabile ma copertura mancante della mask statica. Dopo la correzione, il costo dominante atteso sul caso reale è l'eval del modello; per disposizione del profiling a tentativo unico il caso agente non è stato ripetuto e questo dato resta da confermare in un futuro gate autorizzato.
+- **Problemi di tokenizzazione:** nessuna divergenza osservata; common-prefix forcing resta tokenizer-exact e si arresta sulle biforcazioni.
+- **Gate:** ☑ ITERATE / ☐ GO
+- **Note:** il gate JSON è concluso ma rosso, quindi non si lascia MACRO 5 e non si avvia MACRO 6. R15 non è ancora applicabile: occorre risolvere o spiegare con una conferma stabile le due regressioni esterne e chiudere un output reale DSML valido. DSML resta esplicitamente ibrido finché il parser semanticamente edge-local della Macro 2 non rende conveniente il trie shadow.
 
 ---
 

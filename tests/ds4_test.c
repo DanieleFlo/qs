@@ -6953,6 +6953,10 @@ static void test_qwen35_layer_pattern(void) {
     TEST_ASSERT(ds4_test_qwen35_layer_is_recurrent(64u) == -1);
 }
 
+static void test_constraint_trie_group(void) {
+    TEST_ASSERT(ds4_test_constraint_trie_mask());
+}
+
 typedef void (*test_fn)(void);
 
 typedef struct {
@@ -6978,6 +6982,7 @@ static const ds4_test_entry test_entries[] = {
     {"--dspark-verify-depth", "dspark-verify-depth", "DSpark speculative verify commits autoregressive-identical tokens at draft depth > 2", test_dspark_verify_depth},
 #endif
     {"--qwen35-layer-pattern", "qwen35-layer-pattern", "Qwen hybrid recurrent/full-attention layer pattern", test_qwen35_layer_pattern},
+    {"--constraint-trie", "constraint-trie", "byte-level vocabulary trie mask matches exhaustive oracle", test_constraint_trie_group},
     {"--server", "server", "server parser/rendering/cache unit tests", test_server_unit_group},
 };
 

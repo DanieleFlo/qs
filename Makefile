@@ -47,7 +47,7 @@ DS4_LINK_LIBS ?= $(CUDA_LDLIBS)
 METAL_LDLIBS := $(LDLIBS)
 endif
 
-.PHONY: all help clean test test-constrained-json-live test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics perf-doctor perf-harness-test perf-fast-test perf-direction-ab perf-slow-test research-fetch research-index research-check strix-halo rocm
+.PHONY: all help clean test test-constrained-json-live test-jsonschemabench-safety test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics perf-doctor perf-harness-test perf-fast-test perf-direction-ab perf-slow-test research-fetch research-index research-check strix-halo rocm
 
 ifeq ($(UNAME_S),Darwin)
 all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
@@ -58,6 +58,7 @@ help:
 	@echo "  make cpu          Build CPU-only ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make test         Build and run tests"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
+	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make dspark-verify-depth  Run DSpark speculative verification smoke if support GGUF is present"
 	@echo "  make mtp-verify-depth  Run legacy MTP speculative verification smoke if MTP GGUF is present"
 	@echo "  make clean        Remove build outputs"
@@ -111,6 +112,7 @@ help:
 	@echo "  make cpu                 Build CPU-only ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make test                Build and run tests"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
+	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make dspark-verify-depth Run DSpark speculative verification smoke if support GGUF is present"
 	@echo "  make mtp-verify-depth    Run legacy MTP speculative verification smoke if MTP GGUF is present"
 	@echo "  make clean               Remove build outputs"
@@ -174,7 +176,21 @@ perf-doctor:
 	python3 tools/perf_harness.py doctor
 
 perf-harness-test:
-	python3 -m unittest tests.test_perf_harness -v
+	python3 -m unittest tests.test_perf_harness tests.test_jsonschemabench_subset -v
+
+JSONSCHEMABENCH_MODEL ?= gguf/Qwen3.6-27B-Q4_K_S.gguf
+JSONSCHEMABENCH_PREFIX_STEPS ?= 8
+
+test-jsonschemabench-safety:
+	python3 -c "import jsonschema"
+	python3 tools/perf_harness.py constrained-server \
+		--model "$(JSONSCHEMABENCH_MODEL)" \
+		--jsonschemabench-subset --jsonschemabench-tier safety \
+		--jsonschemabench-check-unsupported \
+		--jsonschemabench-prefix-steps "$(JSONSCHEMABENCH_PREFIX_STEPS)" \
+		--constraint-mode compare_new_vs_oracle --context 4096 \
+		--repetitions 2 --warmup 0 --baseline-run \
+		--hypothesis "pinned JSONSchemaBench safety prefixes remain candidate-vs-oracle equivalent and unsupported schemas fail before inference"
 
 perf-fast-test: perf-harness-test
 

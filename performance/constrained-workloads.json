@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "suites": {
+    "direction": [
+      "dsml-required-enum-const",
+      "json-nested-required-array"
+    ],
+    "slow": [
+      "dsml-required-enum-const",
+      "json-nested-required-array"
+    ],
+    "free-string": [
+      "dsml-free-string-128"
+    ],
+    "nullable-free-string": [
+      "dsml-nullable-free-string"
+    ]
+  },
+  "workloads": [
+    {
+      "id": "dsml-required-enum-const",
+      "kind": "dsml",
+      "endpoint": "/v1/responses",
+      "payload": {
+        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "input": [
+          {
+            "role": "user",
+            "content": "Call record_decision exactly once with decision approve and guard literal-safe. Emit no prose."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "record_decision",
+            "description": "Record one constrained decision",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "decision": {
+                  "type": "string",
+                  "enum": ["approve", "reject"]
+                },
+                "guard": {
+                  "type": "string",
+                  "const": "literal-safe"
+                }
+              },
+              "required": ["decision", "guard"],
+              "additionalProperties": false
+            },
+            "strict": true
+          }
+        ],
+        "tool_choice": "required",
+        "temperature": 0,
+        "seed": 424242,
+        "max_output_tokens": 128,
+        "stream": false,
+        "reasoning": {
+          "effort": "none",
+          "summary": "none"
+        }
+      }
+    },
+    {
+      "id": "json-nested-required-array",
+      "kind": "json_schema",
+      "endpoint": "/v1/chat/completions",
+      "payload": {
+        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Return status ok, values [1,2,3], and meta.source ds4. Output only the requested JSON."
+          }
+        ],
+        "temperature": 0,
+        "seed": 424242,
+        "max_tokens": 128,
+        "stream": false,
+        "thinking": {
+          "type": "disabled"
+        },
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "nested_result",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "const": "ok"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "meta": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "enum": ["ds4", "other"]
+                    }
+                  },
+                  "required": ["source"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["status", "values", "meta"],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "dsml-free-string-128",
+      "kind": "dsml",
+      "endpoint": "/v1/responses",
+      "payload": {
+        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "input": [
+          {
+            "role": "user",
+            "content": "Call write_note exactly once. Set content exactly to: constrained decoding should preserve every literal byte while avoiding repeated parsing of the accepted prefix across vocabulary candidates. Emit no prose."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "write_note",
+            "description": "Write a free-form note",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": ["content"],
+              "additionalProperties": false
+            },
+            "strict": true
+          }
+        ],
+        "tool_choice": "required",
+        "temperature": 0,
+        "seed": 424242,
+        "max_output_tokens": 256,
+        "stream": false,
+        "reasoning": {
+          "effort": "none",
+          "summary": "none"
+        }
+      }
+    },
+    {
+      "id": "dsml-nullable-free-string",
+      "kind": "dsml",
+      "endpoint": "/v1/responses",
+      "payload": {
+        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "input": [
+          {
+            "role": "user",
+            "content": "Call write_optional_note exactly once. Set content exactly to: nullable free text must preserve every literal byte while using the same interior string mask as a non-nullable string. Emit no prose."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "write_optional_note",
+            "description": "Write an optional free-form note",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"}
+                  ]
+                }
+              },
+              "required": ["content"],
+              "additionalProperties": false
+            },
+            "strict": true
+          }
+        ],
+        "tool_choice": "required",
+        "temperature": 0,
+        "seed": 424242,
+        "max_output_tokens": 256,
+        "stream": false,
+        "reasoning": {
+          "effort": "none",
+          "summary": "none"
+        }
+      }
+    }
+  ]
+}

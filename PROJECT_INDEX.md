@@ -225,6 +225,16 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   ricerca del crossover split-K e della profondità V(3)/V(2). `server-curve`
   esegue queste matrici via HTTP usando i token effettivi e il tempo di decode
   del server.
+- `tools/import_jsonschemabench_subset.py` e
+  `performance/jsonschemabench-subset.json` — sparse-fetch riproducibile e
+  pinned dell'intero corpus esterno, classificazione fail-closed delle 9.558
+  schema e tier `smoke`/`safety`, senza adattare gli schema unsupported.
+- `tools/profile_agent_dsml_story.py` — profilo end-to-end del grafo `/agent`
+  `bootstrap-wiki`: forza il testo libero dentro `exit-with-info-tool`, richiede
+  almeno 10k token di contesto e conserva telemetria e fallimenti funzionali.
+- `performance/constrained-workloads.json` — workload canonici DSML/JSON,
+  inclusa la fixture nullable free-string che copre lo schema reale
+  `anyOf: [string, null]` dell'agente.
 - `tools/perf-qwen-validate.sh`, `tools/perf-qwen-r8.sh`,
   `tools/perf-qwen-long-context.sh` — workflow eseguibili richiamati
   dall'harness per build/correctness, relink congiunto di `ds4`, `ds4-bench` e
@@ -449,6 +459,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/test_constrained_json_api.py` — suite HTTP live e model-backed per
   masking DSML/JSON Schema: matrice senza/con history sotto 20k token, prompt
   di injection ostili, duplicati, Unicode/escape e validazione degli output.
+- `tests/test_perf_harness.py` e `tests/test_jsonschemabench_subset.py` — test
+  dell'harness constrained, delle metriche di fase e dell'import esterno pinned.
 - `tests/test-vectors/` — prompt corti/lunghi, vettori ufficiali e golden locali
   per token e distribuzione.
 - `tests/test_engine_correctness.c` — confronto della continuazione greedy fra

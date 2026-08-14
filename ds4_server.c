@@ -42,6 +42,8 @@
 static volatile sig_atomic_t g_stop_requested = 0;
 static volatile sig_atomic_t g_listen_fd = -1;
 
+static double now_sec(void);
+
 #define DS4_SERVER_IO_TIMEOUT_SEC 10
 #define DS4_SERVER_SEND_STALL_TIMEOUT_MS 2000
 /* Qwen3.6 Q4_K_S keeps durable system/session checkpoints without requiring a
@@ -752,6 +754,29 @@ static bool schema_json_schema_supported(const schema_json_value *schema,
             if (!strcmp(schema->member[i].key, schema->member[j].key)) return false;
         }
     }
+    /* Strict constrained decoding must fail closed on unknown vocabulary.
+     * JSON Schema permits extension keywords, but silently treating one as an
+     * annotation can erase an application constraint.  Keep this whitelist in
+     * sync with tools/import_jsonschemabench_subset.py. */
+    static const char *known[] = {
+        "type", "properties", "required", "additionalProperties", "items",
+        "allOf", "anyOf", "oneOf", "enum", "const", "minLength",
+        "maxLength", "minItems", "maxItems", "minProperties",
+        "maxProperties", "minimum", "maximum", "exclusiveMinimum",
+        "exclusiveMaximum", "multipleOf", "uniqueItems",
+        "$schema", "$id", "title", "description", "default", "examples",
+        "deprecated", "readOnly", "writeOnly", "format",
+    };
+    for (size_t i = 0; i < schema->len; i++) {
+        bool recognized = false;
+        for (size_t j = 0; j < sizeof(known) / sizeof(known[0]); j++) {
+            if (!strcmp(schema->member[i].key, known[j])) {
+                recognized = true;
+                break;
+            }
+        }
+        if (!recognized) return false;
+    }
     static const char *unsupported[] = {
         "$ref", "$dynamicRef", "not", "if", "then", "else", "pattern",
         "patternProperties", "unevaluatedProperties", "dependentSchemas",
@@ -1118,6 +1143,11 @@ typedef enum {
     SCHEMA_PREFIX_COMPLETE,
 } schema_prefix_result;
 
+typedef struct {
+    const schema_json_value *schema;
+    bool incomplete_string_value;
+} schema_prefix_frontier;
+
 static void schema_json_serialize_string(buf *b, const char *s) {
     static const char hex[] = "0123456789abcdef";
     buf_putc(b, '"');
@@ -1240,7 +1270,8 @@ static bool schema_validate_span(const schema_json_value *schema,
 }
 
 static schema_prefix_result schema_prefix_value(
-    const schema_json_value *schema, const char **p, const char *end, int depth) {
+    const schema_json_value *schema, const char **p, const char *end, int depth,
+    schema_prefix_frontier *frontier) {
     if (!schema || !p || depth >= JSON_MAX_NESTING) return SCHEMA_PREFIX_INVALID;
     while (*p < end && isspace((unsigned char)**p)) (*p)++;
     if (*p >= end) return SCHEMA_PREFIX_INCOMPLETE;
@@ -1280,7 +1311,7 @@ static schema_prefix_result schema_prefix_value(
             json_prefix_result kr = json_prefix_string(&key_end, end);
             if (kr == JSON_PREFIX_INVALID) return SCHEMA_PREFIX_INVALID;
             if (kr == JSON_PREFIX_INCOMPLETE) {
-                if (!additional || additional->kind != SCHEMA_JSON_BOOL ||
+                if (additional && additional->kind == SCHEMA_JSON_BOOL &&
                     !additional->boolean) {
                     bool viable = false;
                     for (size_t i = 0; i < prop_count; i++) {
@@ -1315,8 +1346,8 @@ static schema_prefix_result schema_prefix_value(
             if (prop_index >= 0) {
                 if (seen[prop_index]) return SCHEMA_PREFIX_INVALID;
                 seen[prop_index] = true;
-            } else if (!additional ||
-                       (additional->kind == SCHEMA_JSON_BOOL && !additional->boolean)) {
+            } else if (additional && additional->kind == SCHEMA_JSON_BOOL &&
+                       !additional->boolean) {
                 return SCHEMA_PREFIX_INVALID;
             }
             *p = key_end;
@@ -1330,15 +1361,16 @@ static schema_prefix_result schema_prefix_value(
                 props->member[prop_index].value :
                 (additional && additional->kind == SCHEMA_JSON_OBJECT ?
                     additional : &allow_any);
-            schema_prefix_result vr = schema_prefix_value(child, p, end, depth + 1);
+            schema_prefix_result vr = schema_prefix_value(
+                child, p, end, depth + 1, frontier);
             if (vr != SCHEMA_PREFIX_COMPLETE) return vr;
             while (*p < end && isspace((unsigned char)**p)) (*p)++;
             if (*p >= end) return SCHEMA_PREFIX_INCOMPLETE;
             if (**p == ',') {
-                bool may_have_more = additional &&
-                    (additional->kind == SCHEMA_JSON_OBJECT ||
-                     (additional->kind == SCHEMA_JSON_BOOL &&
-                      additional->boolean));
+                bool may_have_more = !additional ||
+                    additional->kind == SCHEMA_JSON_OBJECT ||
+                    (additional->kind == SCHEMA_JSON_BOOL &&
+                     additional->boolean);
                 for (size_t i = 0; !may_have_more && i < prop_count; i++) {
                     if (!seen[i]) may_have_more = true;
                 }
@@ -1368,7 +1400,8 @@ static schema_prefix_result schema_prefix_value(
                 return schema_validate_span(schema, start, *p) ?
                     SCHEMA_PREFIX_COMPLETE : SCHEMA_PREFIX_INVALID;
             }
-            schema_prefix_result vr = schema_prefix_value(items, p, end, depth + 1);
+            schema_prefix_result vr = schema_prefix_value(
+                items, p, end, depth + 1, frontier);
             if (vr != SCHEMA_PREFIX_COMPLETE) return vr;
             while (*p < end && isspace((unsigned char)**p)) (*p)++;
             if (*p >= end) return SCHEMA_PREFIX_INCOMPLETE;
@@ -1389,7 +1422,13 @@ static schema_prefix_result schema_prefix_value(
     else if (**p == 'n') pr = json_prefix_literal(p, end, "null");
     else pr = json_prefix_number(p, end);
     if (pr == JSON_PREFIX_INVALID) return SCHEMA_PREFIX_INVALID;
-    if (pr == JSON_PREFIX_INCOMPLETE) return SCHEMA_PREFIX_INCOMPLETE;
+    if (pr == JSON_PREFIX_INCOMPLETE) {
+        if (frontier && kind == SCHEMA_JSON_STRING) {
+            frontier->schema = schema;
+            frontier->incomplete_string_value = true;
+        }
+        return SCHEMA_PREFIX_INCOMPLETE;
+    }
     if (kind == SCHEMA_JSON_NUMBER && *p == end) {
         /* A number ending at the current frontier may still grow.  Validate it
          * only when a delimiter/whitespace, EOS, or final document check makes
@@ -1419,7 +1458,7 @@ static bool schema_json_prefix_possible(const schema_json_value *schema,
     if (!schema_json_allows_kind(schema, kind, 0)) return false;
     const char *semantic = raw;
     schema_prefix_result semantic_result =
-        schema_prefix_value(schema, &semantic, raw + len, 0);
+        schema_prefix_value(schema, &semantic, raw + len, 0, NULL);
     if (semantic_result == SCHEMA_PREFIX_INVALID) return false;
     while (semantic < raw + len && isspace((unsigned char)*semantic)) semantic++;
     if (semantic_result == SCHEMA_PREFIX_COMPLETE && semantic != raw + len) return false;
@@ -1429,6 +1468,56 @@ static bool schema_json_prefix_possible(const schema_json_value *schema,
     bool valid = schema_json_validate_raw(schema, json);
     free(json);
     return valid;
+}
+
+static bool schema_json_is_unbounded_string_depth(
+        const schema_json_value *active, int depth) {
+    if (depth >= JSON_MAX_NESTING) return false;
+    if (!active) return false;
+    if (active->kind == SCHEMA_JSON_BOOL) return active->boolean;
+    if (active->kind != SCHEMA_JSON_OBJECT) return false;
+    if (schema_json_object_get(active, "const") ||
+        schema_json_object_get(active, "enum") ||
+        schema_json_object_get(active, "maxLength") ||
+        schema_json_object_get(active, "allOf")) return false;
+
+    const schema_json_value *any = schema_json_object_get(active, "anyOf");
+    const schema_json_value *one = schema_json_object_get(active, "oneOf");
+    if (any && one) return false;
+    const schema_json_value *variants = any ? any : one;
+    if (variants) {
+        if (variants->kind != SCHEMA_JSON_ARRAY || !variants->len) return false;
+        size_t string_variants = 0;
+        for (size_t i = 0; i < variants->len; i++) {
+            const schema_json_value *variant = variants->item[i];
+            if (!schema_json_allows_kind(
+                    variant, SCHEMA_JSON_STRING, depth + 1)) continue;
+            string_variants++;
+            if (!schema_json_is_unbounded_string_depth(
+                    variant, depth + 1)) return false;
+        }
+        /* This deliberately recognizes the common Pydantic Optional[str]
+         * shape while keeping ambiguous multi-string unions on the oracle. */
+        return string_variants == 1;
+    }
+    return schema_json_allows_kind(active, SCHEMA_JSON_STRING, depth);
+}
+
+static bool schema_json_is_unbounded_string(
+        const schema_json_value *active) {
+    return schema_json_is_unbounded_string_depth(active, 0);
+}
+
+static bool schema_json_unbounded_string_frontier(
+        const schema_json_value *schema, const char *raw, size_t len) {
+    if (!schema || !raw || !len) return false;
+    schema_prefix_frontier frontier = {0};
+    const char *semantic = raw;
+    schema_prefix_result result = schema_prefix_value(
+        schema, &semantic, raw + len, 0, &frontier);
+    if (result != SCHEMA_PREFIX_INCOMPLETE ||
+        !frontier.incomplete_string_value || !frontier.schema) return false;
+    return schema_json_is_unbounded_string(frontier.schema);
 }
 
 static char *json_minify_raw_value(const char *json) {
@@ -1656,6 +1745,7 @@ typedef struct {
     tool_schema_orders tool_orders;
     char *response_schema_json;
     schema_json_value *response_schema;
+    double grammar_compile_ms;
     int max_tokens;
     int top_k;
     float temperature;
@@ -1933,6 +2023,7 @@ static bool request_set_response_schema(request *r, char *raw) {
         free(raw);
         return false;
     }
+    const double compile_t0 = now_sec();
     schema_json_value *schema = schema_json_parse(raw);
     if (!schema || (schema->kind != SCHEMA_JSON_OBJECT &&
                     schema->kind != SCHEMA_JSON_BOOL) ||
@@ -1945,6 +2036,7 @@ static bool request_set_response_schema(request *r, char *raw) {
     schema_json_free(r->response_schema);
     r->response_schema_json = raw;
     r->response_schema = schema;
+    r->grammar_compile_ms += (now_sec() - compile_t0) * 1000.0;
     return true;
 }
 
@@ -7457,6 +7549,13 @@ typedef struct {
     bool saw_invoke;
 } dsml_decode_tracker;
 
+typedef struct {
+    uint64_t parser_transition_count;
+    uint64_t parser_bytes_visited;
+    uint64_t checkpoint_count;
+    uint64_t rollback_count;
+} constraint_parser_metrics;
+
 static void dsml_decode_tracker_init(dsml_decode_tracker *dt, const request *req);
 static void dsml_decode_tracker_update(dsml_decode_tracker *dt,
                                        const char *raw, size_t raw_len);
@@ -7649,17 +7748,292 @@ static bool agentic_should_constrain_sample(const request *r, dsml_decode_state 
 }
 
 typedef struct {
+    ds4_engine *engine;
     const request *req;
     const char *raw;
     size_t raw_len;
     const dsml_decode_tracker *tracker;
+    ds4_think_mode think_mode;
+    bool use_incremental_string;
+    bool incremental_free_string;
     buf scratch;
     const char *scratch_raw;
     size_t scratch_raw_len;
     size_t scratch_history_base;
     size_t scratch_prefix_len;
     bool scratch_ready;
+    constraint_parser_metrics *metrics;
 } agentic_token_filter;
+
+typedef enum {
+    JSON_LEX_EXPECT_VALUE,
+    JSON_LEX_OBJECT_KEY_OR_END,
+    JSON_LEX_OBJECT_KEY,
+    JSON_LEX_OBJECT_COLON,
+    JSON_LEX_OBJECT_COMMA_OR_END,
+    JSON_LEX_ARRAY_VALUE_OR_END,
+    JSON_LEX_ARRAY_VALUE,
+    JSON_LEX_ARRAY_COMMA_OR_END,
+    JSON_LEX_STRING,
+    JSON_LEX_LITERAL,
+    JSON_LEX_NUMBER,
+    JSON_LEX_DONE,
+} response_json_lex_mode;
+
+typedef enum {
+    JSON_NUMBER_SIGN,
+    JSON_NUMBER_ZERO,
+    JSON_NUMBER_INTEGER,
+    JSON_NUMBER_DOT,
+    JSON_NUMBER_FRACTION,
+    JSON_NUMBER_EXPONENT_MARK,
+    JSON_NUMBER_EXPONENT_SIGN,
+    JSON_NUMBER_EXPONENT,
+} response_json_number_mode;
+
+typedef struct {
+    response_json_lex_mode mode;
+    response_json_number_mode number_mode;
+    char container[JSON_MAX_NESTING];
+    int depth;
+    const char *literal;
+    size_t literal_pos;
+    int unicode_remaining;
+    bool string_escape;
+    bool string_is_key;
+    uint64_t string_epoch;
+    bool ready;
+    bool valid;
+    size_t surface_len;
+} response_json_lex_state;
+
+static void response_json_lex_complete_value(response_json_lex_state *state) {
+    if (state->depth == 0) {
+        state->mode = JSON_LEX_DONE;
+    } else if (state->container[state->depth - 1] == '{') {
+        state->mode = JSON_LEX_OBJECT_COMMA_OR_END;
+    } else {
+        state->mode = JSON_LEX_ARRAY_COMMA_OR_END;
+    }
+}
+
+static bool response_json_lex_push(response_json_lex_state *state,
+                                   char container) {
+    if (state->depth >= JSON_MAX_NESTING) return false;
+    state->container[state->depth++] = container;
+    state->mode = container == '{' ? JSON_LEX_OBJECT_KEY_OR_END :
+        JSON_LEX_ARRAY_VALUE_OR_END;
+    return true;
+}
+
+static bool response_json_lex_start_value(response_json_lex_state *state,
+                                          unsigned char byte) {
+    if (byte == '{' || byte == '[') {
+        return response_json_lex_push(state, (char)byte);
+    }
+    if (byte == '"') {
+        state->mode = JSON_LEX_STRING;
+        state->string_is_key = false;
+        state->string_epoch++;
+        state->string_escape = false;
+        state->unicode_remaining = 0;
+        return true;
+    }
+    if (byte == 't' || byte == 'f' || byte == 'n') {
+        state->literal = byte == 't' ? "true" : byte == 'f' ? "false" : "null";
+        state->literal_pos = 1;
+        state->mode = JSON_LEX_LITERAL;
+        return true;
+    }
+    if (byte == '-') {
+        state->number_mode = JSON_NUMBER_SIGN;
+        state->mode = JSON_LEX_NUMBER;
+        return true;
+    }
+    if (byte == '0') {
+        state->number_mode = JSON_NUMBER_ZERO;
+        state->mode = JSON_LEX_NUMBER;
+        return true;
+    }
+    if (byte >= '1' && byte <= '9') {
+        state->number_mode = JSON_NUMBER_INTEGER;
+        state->mode = JSON_LEX_NUMBER;
+        return true;
+    }
+    return false;
+}
+
+static bool response_json_number_accepting(response_json_number_mode mode) {
+    return mode == JSON_NUMBER_ZERO || mode == JSON_NUMBER_INTEGER ||
+        mode == JSON_NUMBER_FRACTION || mode == JSON_NUMBER_EXPONENT;
+}
+
+static bool response_json_lex_feed(response_json_lex_state *state,
+                                   const char *bytes, size_t len,
+                                   uint64_t *transitions) {
+    if (!state || !state->ready || !state->valid || (!bytes && len)) return false;
+    size_t i = 0;
+    while (i < len) {
+        unsigned char byte = (unsigned char)bytes[i];
+        if (transitions) (*transitions)++;
+        switch (state->mode) {
+        case JSON_LEX_EXPECT_VALUE:
+        case JSON_LEX_ARRAY_VALUE:
+            if (!response_json_lex_start_value(state, byte)) goto invalid;
+            i++;
+            break;
+        case JSON_LEX_ARRAY_VALUE_OR_END:
+            if (byte == ']') {
+                state->depth--;
+                response_json_lex_complete_value(state);
+            } else if (!response_json_lex_start_value(state, byte)) {
+                goto invalid;
+            }
+            i++;
+            break;
+        case JSON_LEX_OBJECT_KEY_OR_END:
+            if (byte == '}') {
+                state->depth--;
+                response_json_lex_complete_value(state);
+            } else if (byte == '"') {
+                state->mode = JSON_LEX_STRING;
+                state->string_is_key = true;
+                state->string_epoch++;
+                state->string_escape = false;
+                state->unicode_remaining = 0;
+            } else {
+                goto invalid;
+            }
+            i++;
+            break;
+        case JSON_LEX_OBJECT_KEY:
+            if (byte != '"') goto invalid;
+            state->mode = JSON_LEX_STRING;
+            state->string_is_key = true;
+            state->string_epoch++;
+            state->string_escape = false;
+            state->unicode_remaining = 0;
+            i++;
+            break;
+        case JSON_LEX_OBJECT_COLON:
+            if (byte != ':') goto invalid;
+            state->mode = JSON_LEX_EXPECT_VALUE;
+            i++;
+            break;
+        case JSON_LEX_OBJECT_COMMA_OR_END:
+            if (byte == ',') state->mode = JSON_LEX_OBJECT_KEY;
+            else if (byte == '}') {
+                state->depth--;
+                response_json_lex_complete_value(state);
+            } else goto invalid;
+            i++;
+            break;
+        case JSON_LEX_ARRAY_COMMA_OR_END:
+            if (byte == ',') state->mode = JSON_LEX_ARRAY_VALUE;
+            else if (byte == ']') {
+                state->depth--;
+                response_json_lex_complete_value(state);
+            } else goto invalid;
+            i++;
+            break;
+        case JSON_LEX_STRING:
+            if (state->unicode_remaining) {
+                if (json_prefix_hex(byte) < 0) goto invalid;
+                state->unicode_remaining--;
+            } else if (state->string_escape) {
+                state->string_escape = false;
+                if (byte == 'u') state->unicode_remaining = 4;
+                else if (!strchr("\"\\/bfnrt", byte)) goto invalid;
+            } else if (byte == '\\') {
+                state->string_escape = true;
+            } else if (byte == '"') {
+                if (state->string_is_key) state->mode = JSON_LEX_OBJECT_COLON;
+                else response_json_lex_complete_value(state);
+            } else if (byte < 0x20) {
+                goto invalid;
+            }
+            i++;
+            break;
+        case JSON_LEX_LITERAL:
+            if (!state->literal || byte != (unsigned char)state->literal[state->literal_pos])
+                goto invalid;
+            state->literal_pos++;
+            i++;
+            if (!state->literal[state->literal_pos]) {
+                response_json_lex_complete_value(state);
+            }
+            break;
+        case JSON_LEX_NUMBER: {
+            bool delimiter = byte == ',' || byte == ']' || byte == '}';
+            if (delimiter) {
+                if (!response_json_number_accepting(state->number_mode)) goto invalid;
+                response_json_lex_complete_value(state);
+                break;
+            }
+            switch (state->number_mode) {
+            case JSON_NUMBER_SIGN:
+                if (byte == '0') state->number_mode = JSON_NUMBER_ZERO;
+                else if (byte >= '1' && byte <= '9')
+                    state->number_mode = JSON_NUMBER_INTEGER;
+                else goto invalid;
+                break;
+            case JSON_NUMBER_ZERO:
+                if (byte == '.') state->number_mode = JSON_NUMBER_DOT;
+                else if (byte == 'e' || byte == 'E')
+                    state->number_mode = JSON_NUMBER_EXPONENT_MARK;
+                else goto invalid;
+                break;
+            case JSON_NUMBER_INTEGER:
+                if (byte >= '0' && byte <= '9') { /* remain */ }
+                else if (byte == '.') state->number_mode = JSON_NUMBER_DOT;
+                else if (byte == 'e' || byte == 'E')
+                    state->number_mode = JSON_NUMBER_EXPONENT_MARK;
+                else goto invalid;
+                break;
+            case JSON_NUMBER_DOT:
+                if (byte < '0' || byte > '9') goto invalid;
+                state->number_mode = JSON_NUMBER_FRACTION;
+                break;
+            case JSON_NUMBER_FRACTION:
+                if (byte >= '0' && byte <= '9') { /* remain */ }
+                else if (byte == 'e' || byte == 'E')
+                    state->number_mode = JSON_NUMBER_EXPONENT_MARK;
+                else goto invalid;
+                break;
+            case JSON_NUMBER_EXPONENT_MARK:
+                if (byte == '+' || byte == '-')
+                    state->number_mode = JSON_NUMBER_EXPONENT_SIGN;
+                else if (byte >= '0' && byte <= '9')
+                    state->number_mode = JSON_NUMBER_EXPONENT;
+                else goto invalid;
+                break;
+            case JSON_NUMBER_EXPONENT_SIGN:
+                if (byte < '0' || byte > '9') goto invalid;
+                state->number_mode = JSON_NUMBER_EXPONENT;
+                break;
+            case JSON_NUMBER_EXPONENT:
+                if (byte < '0' || byte > '9') goto invalid;
+                break;
+            }
+            i++;
+            break;
+        }
+        case JSON_LEX_DONE:
+            goto invalid;
+        }
+    }
+    return true;
+invalid:
+    state->valid = false;
+    return false;
+}
+
+static void response_json_lex_init(response_json_lex_state *state) {
+    memset(state, 0, sizeof(*state));
+    state->mode = JSON_LEX_EXPECT_VALUE;
+    state->ready = true;
+    state->valid = true;
+}
 
 static int tool_schema_order_find_prop(const tool_schema_order *o, const char *prop) {
     if (!o || !o->prop || !prop) return -1;
@@ -8409,6 +8783,14 @@ static const schema_json_value *agentic_property_schema(
     return properties ? schema_json_object_get(properties, order->prop[prop]) : NULL;
 }
 
+static bool agentic_tracker_has_unbounded_string(
+        const dsml_decode_tracker *tracker) {
+    return tracker && tracker->mode == DSML_TRACK_STRING_BODY &&
+        tracker->active_order && schema_json_is_unbounded_string(
+            agentic_property_schema(
+                tracker->active_order, tracker->active_prop));
+}
+
 static bool agentic_string_parameter_prefix_possible(
     const tool_schema_order *order, int prop,
     const char *raw, size_t start, size_t end, bool complete) {
@@ -8854,8 +9236,6 @@ static bool agentic_simulate_candidate(const request *r,
 
 static bool agentic_filter_token(void *ud, int token,
                                   const char *piece, size_t piece_len) {
-    (void)token;
-
     agentic_token_filter *f = ud;
     if (!f || !f->req || !piece) return false;
 
@@ -8866,10 +9246,35 @@ static bool agentic_filter_token(void *ud, int token,
         dsml_decode_tracker_update(&reconstructed, f->raw, f->raw_len);
         tracker = &reconstructed;
     }
+    /* Trie probes do not carry a token identity.  When a stop/control token is
+     * already legal, every prefix family must remain visible so its subtree
+     * cannot be pruned because of the printable spelling of that token. */
+    if (token < 0 &&
+        (tracker->mode == DSML_TRACK_DONE ||
+         (!f->req->tool_choice_required &&
+          tracker->mode == DSML_TRACK_SEARCH))) return true;
+    if (f->engine && ds4_token_is_stop_for_think_mode(
+            f->engine, token, f->think_mode)) {
+        if (tracker->mode == DSML_TRACK_DONE) return tracker->saw_invoke;
+        if (f->req->tool_choice_required) return false;
+        return tracker->mode == DSML_TRACK_SEARCH;
+    }
     if (piece_len == 0) {
         if (tracker->mode == DSML_TRACK_DONE) return tracker->saw_invoke;
         if (f->req->tool_choice_required) return false;
         return tracker->mode == DSML_TRACK_SEARCH;
+    }
+    if (f->use_incremental_string && f->incremental_free_string &&
+        tracker->mode == DSML_TRACK_STRING_BODY &&
+        tracker->pos == f->raw_len &&
+        !memchr(piece, '<', piece_len)) {
+        if (f->metrics) {
+            f->metrics->checkpoint_count++;
+            f->metrics->parser_transition_count += piece_len;
+            f->metrics->parser_bytes_visited += piece_len;
+            f->metrics->rollback_count++;
+        }
+        return true;
     }
     size_t history_base = tracker->pos;
     if (f->req->tool_choice_required && tracker->mode == DSML_TRACK_SEARCH) {
@@ -8934,19 +9339,33 @@ static bool agentic_filter_token(void *ud, int token,
         relative.invoke_body_start -= history_base;
     if (relative.param_value_start >= history_base)
         relative.param_value_start -= history_base;
-    return agentic_simulate_candidate(
+    if (f->metrics) {
+        f->metrics->checkpoint_count++;
+        f->metrics->parser_transition_count += combined_len;
+        f->metrics->parser_bytes_visited += combined_len;
+    }
+    bool valid = agentic_simulate_candidate(
         f->req, &relative, combined, combined_len, history_len);
+    if (f->metrics) f->metrics->rollback_count++;
+    return valid;
 }
 
 typedef struct {
+    ds4_engine *engine;
     const schema_json_value *schema;
     const char *raw;
     size_t raw_len;
+    ds4_think_mode think_mode;
     bool thinking_enabled;
+    const response_json_lex_state *lex_state;
+    bool use_incremental_lex;
+    bool incremental_free_string;
+    bool token_sensitive_stop_allowed;
     buf scratch;
     const char *scratch_raw;
     size_t scratch_raw_len;
     bool scratch_ready;
+    constraint_parser_metrics *metrics;
 } response_json_filter;
 
 static bool response_json_is_complete(const schema_json_value *schema,
@@ -8973,6 +9392,43 @@ static bool response_json_surface(const char *raw, size_t raw_len,
     *surface = raw + boundary;
     *surface_len = raw_len - boundary;
     return true;
+}
+
+static bool response_json_lex_sync(response_json_lex_state *state,
+                                   const char *raw, size_t raw_len,
+                                   bool thinking_enabled) {
+    if (!state || (!raw && raw_len)) return false;
+    const char *surface = NULL;
+    size_t surface_len = 0;
+    if (!response_json_surface(raw ? raw : "", raw_len, thinking_enabled,
+                               &surface, &surface_len)) {
+        return !state->ready;
+    }
+    if (!state->ready) response_json_lex_init(state);
+    if (!state->valid || surface_len < state->surface_len) {
+        state->valid = false;
+        return false;
+    }
+    uint64_t ignored = 0;
+    bool valid = response_json_lex_feed(
+        state, surface + state->surface_len,
+        surface_len - state->surface_len, &ignored);
+    state->surface_len = surface_len;
+    return valid;
+}
+
+static bool response_json_incremental_free_string(
+        const schema_json_value *schema,
+        const char *raw, size_t raw_len, bool thinking_enabled,
+        const response_json_lex_state *state) {
+    if (!schema || !state || !state->ready || !state->valid ||
+        state->mode != JSON_LEX_STRING || state->string_is_key) return false;
+    const char *surface = NULL;
+    size_t surface_len = 0;
+    if (!response_json_surface(raw ? raw : "", raw_len, thinking_enabled,
+                               &surface, &surface_len) ||
+        surface_len != state->surface_len) return false;
+    return schema_json_unbounded_string_frontier(schema, surface, surface_len);
 }
 
 static bool response_json_generation_complete(const schema_json_value *schema,
@@ -9005,9 +9461,18 @@ static bool json_has_insignificant_whitespace(const char *raw, size_t len) {
 
 static bool response_json_filter_token(void *ud, int token,
                                        const char *piece, size_t piece_len) {
-    (void)token;
     response_json_filter *f = ud;
     if (!f || !f->schema || !piece || piece_len > SIZE_MAX - f->raw_len) return false;
+    if (token < 0 && f->token_sensitive_stop_allowed) return true;
+    /* Special stop/control tokens can have a non-empty printable vocabulary
+     * spelling.  Gate them by token identity, not by decoded-piece length, so
+     * they cannot terminate an incomplete JSON document. */
+    if (f->engine && ds4_token_is_stop_for_think_mode(
+            f->engine, token, f->think_mode)) {
+        return response_json_generation_complete(
+            f->schema, f->raw ? f->raw : "", f->raw_len,
+            f->thinking_enabled, true);
+    }
     if (piece_len == 0) {
         return response_json_generation_complete(
             f->schema, f->raw ? f->raw : "", f->raw_len,
@@ -9036,6 +9501,38 @@ static bool response_json_filter_token(void *ud, int token,
      * merged `</think>...` token cannot bypass the logits mask. */
     bool valid = !has_surface;
     if (has_surface) {
+        if (f->metrics) {
+            f->metrics->checkpoint_count++;
+        }
+        if (f->use_incremental_lex && f->lex_state &&
+            f->lex_state->ready && f->lex_state->valid &&
+            f->lex_state->surface_len <= surface_len) {
+            response_json_lex_state candidate = *f->lex_state;
+            uint64_t transitions = 0;
+            size_t candidate_len = surface_len - candidate.surface_len;
+            if (f->metrics) {
+                f->metrics->parser_bytes_visited += candidate_len;
+            }
+            if (!response_json_lex_feed(
+                    &candidate, surface + candidate.surface_len,
+                    candidate_len, &transitions)) {
+                if (f->metrics) {
+                    f->metrics->parser_transition_count += transitions;
+                    f->metrics->rollback_count++;
+                }
+                return false;
+            }
+            if (f->metrics) {
+                f->metrics->parser_transition_count += transitions;
+            }
+            if (f->incremental_free_string &&
+                candidate.mode == JSON_LEX_STRING &&
+                !candidate.string_is_key &&
+                candidate.string_epoch == f->lex_state->string_epoch) {
+                if (f->metrics) f->metrics->rollback_count++;
+                return true;
+            }
+        }
         /* Do not let a model that closed reasoning prematurely consume its
          * whole budget on schema-valid leading whitespace.  In thinking mode
          * the public document starts immediately at the boundary. */
@@ -9049,9 +9546,14 @@ static bool response_json_filter_token(void *ud, int token,
         } else {
             bool finalize_number = surface_len &&
                 isspace((unsigned char)surface[surface_len - 1]);
+            if (f->metrics) {
+                f->metrics->parser_transition_count += surface_len;
+                f->metrics->parser_bytes_visited += surface_len;
+            }
             valid = schema_json_prefix_possible(
                 f->schema, surface, surface_len, finalize_number);
         }
+        if (f->metrics) f->metrics->rollback_count++;
     }
     return valid;
 }
@@ -11278,6 +11780,9 @@ static double now_sec(void) {
 
 typedef struct {
     double forced_build_ms;
+    double forced_prefix_probe_ms;
+    double sampling_mask_build_ms;
+    double oracle_compare_ms;
     double forced_sync_ms;
     double filter_setup_ms;
     double filter_ms;
@@ -11295,7 +11800,109 @@ typedef struct {
     uint64_t accepted_tokens;
     uint64_t finite_allowed_tokens;
     uint64_t decoded_piece_bytes;
+    uint64_t candidate_tokens_tested;
+    uint64_t parser_transition_count;
+    uint64_t parser_bytes_visited;
+    uint64_t trie_nodes_visited;
+    uint64_t trie_subtrees_pruned;
+    uint64_t trie_leaf_tokens_emitted;
+    uint64_t trie_compiled_nodes;
+    uint64_t trie_memory_bytes;
+    uint64_t dynamic_frontier_size;
+    uint64_t static_mask_memory_bytes;
+    uint64_t mask_cache_hit;
+    uint64_t mask_cache_miss;
+    double grammar_compile_ms;
+    double grammar_jit_ms;
+    double trie_compile_ms;
+    double static_mask_compile_ms;
+    uint64_t constraint_state_checkpoint;
+    uint64_t constraint_state_rollback;
+    uint64_t oracle_compare_calls;
+    uint64_t oracle_divergences;
 } server_decode_phase_metrics;
+
+typedef enum {
+    SERVER_CONSTRAINT_OPTIMIZED,
+    SERVER_CONSTRAINT_INCREMENTAL,
+    SERVER_CONSTRAINT_TRIE,
+    SERVER_CONSTRAINT_ORACLE_ONLY,
+    SERVER_CONSTRAINT_COMPARE_ORACLE,
+} server_constraint_mode;
+
+typedef struct {
+    ds4_constraint_analysis analysis;
+    ds4_filtered_sample_metrics metrics;
+    ds4_filtered_sample_metrics forced_metrics;
+    ds4_filtered_sample_metrics oracle_metrics;
+    ds4_constraint_difference difference;
+    constraint_parser_metrics parser_metrics;
+    constraint_parser_metrics oracle_parser_metrics;
+    uint64_t dynamic_frontier_size;
+    uint64_t static_mask_memory_bytes;
+    double static_mask_compile_ms;
+    uint64_t forced_candidate_tokens_tested;
+    uint32_t oracle_compare_calls;
+    uint32_t oracle_divergences;
+    bool used_static_mask;
+    bool ready;
+    bool oracle_equal;
+} server_constraint_step;
+
+static void filtered_metrics_add(ds4_filtered_sample_metrics *dst,
+                                 const ds4_filtered_sample_metrics *src) {
+    if (!dst || !src) return;
+    dst->setup_ms += src->setup_ms;
+    dst->filter_ms += src->filter_ms;
+    dst->sample_ms += src->sample_ms;
+    dst->trie_compile_ms += src->trie_compile_ms;
+    dst->decoded_piece_bytes += src->decoded_piece_bytes;
+    dst->trie_nodes_visited += src->trie_nodes_visited;
+    dst->trie_subtrees_pruned += src->trie_subtrees_pruned;
+    dst->trie_leaf_tokens_emitted += src->trie_leaf_tokens_emitted;
+    if (src->trie_compiled_nodes > dst->trie_compiled_nodes) {
+        dst->trie_compiled_nodes = src->trie_compiled_nodes;
+    }
+    if (src->trie_memory_bytes > dst->trie_memory_bytes) {
+        dst->trie_memory_bytes = src->trie_memory_bytes;
+    }
+    dst->vocab_tokens += src->vocab_tokens;
+    dst->filter_calls += src->filter_calls;
+    dst->accepted_tokens += src->accepted_tokens;
+    dst->finite_allowed_tokens += src->finite_allowed_tokens;
+}
+
+static server_constraint_mode server_constraint_mode_from_env(void) {
+    const char *value = getenv("DS4_CONSTRAINT_MODE");
+    if (value && !strcmp(value, "oracle_only")) {
+        return SERVER_CONSTRAINT_ORACLE_ONLY;
+    }
+    if (value && !strcmp(value, "compare_new_vs_oracle")) {
+        return SERVER_CONSTRAINT_COMPARE_ORACLE;
+    }
+    if (value && !strcmp(value, "incremental")) {
+        return SERVER_CONSTRAINT_INCREMENTAL;
+    }
+    if (value && !strcmp(value, "trie")) {
+        return SERVER_CONSTRAINT_TRIE;
+    }
+    if (value && !strcmp(value, "optimized")) {
+        return SERVER_CONSTRAINT_OPTIMIZED;
+    }
+    return value && value[0] ?
+        SERVER_CONSTRAINT_ORACLE_ONLY : SERVER_CONSTRAINT_TRIE;
+}
+
+static const char *server_constraint_mode_name(server_constraint_mode mode) {
+    switch (mode) {
+    case SERVER_CONSTRAINT_ORACLE_ONLY: return "oracle_only";
+    case SERVER_CONSTRAINT_INCREMENTAL: return "incremental";
+    case SERVER_CONSTRAINT_TRIE: return "trie";
+    case SERVER_CONSTRAINT_COMPARE_ORACLE: return "compare_new_vs_oracle";
+    case SERVER_CONSTRAINT_OPTIMIZED: return "optimized";
+    }
+    return "unknown";
+}
 
 static bool server_phase_profile_enabled(void) {
     const char *value = getenv("DS4_SERVER_PHASE_PROFILE");
@@ -11459,6 +12066,12 @@ struct server_slot {
 static bool id_list_contains(const stop_list *ids, const char *id);
 static void id_list_push_unique(stop_list *ids, const char *id);
 
+typedef struct {
+    uint8_t *base_allowed;
+    int *dynamic_tokens;
+    uint32_t dynamic_count;
+} constraint_token_partition;
+
 struct server {
     ds4_engine *engine;
     server_slot *slots;
@@ -11475,6 +12088,12 @@ struct server {
     bool enable_cors;
     pthread_mutex_t tool_mu;
     pthread_mutex_t kv_mu;
+    pthread_mutex_t constraint_cache_mu;
+    constraint_token_partition dsml_string_partition;
+    constraint_token_partition json_string_partition;
+    bool constraint_partitions_ready;
+    double constraint_partitions_compile_ms;
+    uint64_t constraint_partitions_memory_bytes;
     pthread_mutex_t inference_mu;
     pthread_mutex_t model_mu;
     pthread_cond_t model_cv;
@@ -11502,6 +12121,83 @@ struct server {
     uint64_t subagent_checkpoint_count;
     uint64_t subagent_return_count;
 };
+
+static bool response_json_piece_is_string_interior(const char *piece,
+                                                   size_t piece_len) {
+    if (!piece || !piece_len) return false;
+    response_json_lex_state state;
+    response_json_lex_init(&state);
+    state.mode = JSON_LEX_STRING;
+    state.string_is_key = false;
+    state.string_epoch = 1;
+    uint64_t ignored = 0;
+    return response_json_lex_feed(&state, piece, piece_len, &ignored) &&
+        state.mode == JSON_LEX_STRING && !state.string_is_key &&
+        state.string_epoch == 1;
+}
+
+static bool server_constraint_partitions_ensure(server *s,
+                                                bool *compiled_now) {
+    if (compiled_now) *compiled_now = false;
+    if (!s || !s->engine) return false;
+    pthread_mutex_lock(&s->constraint_cache_mu);
+    if (s->constraint_partitions_ready) {
+        pthread_mutex_unlock(&s->constraint_cache_mu);
+        return true;
+    }
+
+    const double t0 = now_sec();
+    const int vocab = ds4_engine_vocab_size(s->engine);
+    if (vocab <= 0) {
+        pthread_mutex_unlock(&s->constraint_cache_mu);
+        return false;
+    }
+    constraint_token_partition dsml = {
+        .base_allowed = xmalloc((size_t)vocab * sizeof(uint8_t)),
+        .dynamic_tokens = xmalloc((size_t)vocab * sizeof(int)),
+    };
+    constraint_token_partition json = {
+        .base_allowed = xmalloc((size_t)vocab * sizeof(uint8_t)),
+        .dynamic_tokens = xmalloc((size_t)vocab * sizeof(int)),
+    };
+    memset(dsml.base_allowed, 0, (size_t)vocab * sizeof(uint8_t));
+    memset(json.base_allowed, 0, (size_t)vocab * sizeof(uint8_t));
+    for (int token = 0; token < vocab; token++) {
+        size_t piece_len = 0;
+        char *piece = ds4_token_text(s->engine, token, &piece_len);
+        const bool identity_sensitive = ds4_token_is_stop(s->engine, token) ||
+            ds4_token_is_thinking_control(s->engine, token);
+        const bool dsml_base = !identity_sensitive && piece_len &&
+            !memchr(piece, '<', piece_len);
+        const bool json_base = !identity_sensitive &&
+            response_json_piece_is_string_interior(piece, piece_len);
+        dsml.base_allowed[token] = dsml_base ? 1u : 0u;
+        json.base_allowed[token] = json_base ? 1u : 0u;
+        if (!dsml_base) {
+            dsml.dynamic_tokens[dsml.dynamic_count++] = token;
+        }
+        if (!json_base) {
+            json.dynamic_tokens[json.dynamic_count++] = token;
+        }
+        free(piece);
+    }
+    dsml.dynamic_tokens = xrealloc(
+        dsml.dynamic_tokens,
+        (size_t)(dsml.dynamic_count ? dsml.dynamic_count : 1) * sizeof(int));
+    json.dynamic_tokens = xrealloc(
+        json.dynamic_tokens,
+        (size_t)(json.dynamic_count ? json.dynamic_count : 1) * sizeof(int));
+    s->dsml_string_partition = dsml;
+    s->json_string_partition = json;
+    s->constraint_partitions_compile_ms = (now_sec() - t0) * 1000.0;
+    s->constraint_partitions_memory_bytes =
+        (uint64_t)vocab * 2u * sizeof(uint8_t) +
+        (uint64_t)(dsml.dynamic_count + json.dynamic_count) * sizeof(int);
+    s->constraint_partitions_ready = true;
+    if (compiled_now) *compiled_now = true;
+    pthread_mutex_unlock(&s->constraint_cache_mu);
+    return true;
+}
 
 static uint64_t kv_cache_indexed_bytes(const kv_disk_cache *kc) {
     uint64_t total = 0;
@@ -14092,18 +14788,65 @@ static bool append_exact_tokens_to_live_session(server *s, server_slot *slot,
     return ok;
 }
 
+static void server_log_constraint_divergence(
+        ds4_engine *engine, const request *r,
+        const dsml_decode_tracker *tracker,
+        const char *raw, size_t raw_len,
+        const server_constraint_step *step) {
+    if (!engine || !r || !tracker || !step || step->difference.token < 0) return;
+    size_t piece_len = 0;
+    char *piece = ds4_token_text(engine, step->difference.token, &piece_len);
+    char piece_hex[129];
+    size_t shown = piece_len < 32 ? piece_len : 32;
+    for (size_t i = 0; i < shown; i++) {
+        snprintf(piece_hex + i * 2, sizeof(piece_hex) - i * 2,
+                 "%02x", (unsigned char)piece[i]);
+    }
+    piece_hex[shown * 2] = '\0';
+    server_log(
+        DS4_LOG_GENERATION,
+        "ds4-server: constraint divergence kind=%s token=%d "
+        "analyzed_allowed=%s oracle_allowed=%s piece_len=%zu piece_hex=%s "
+        "raw_len=%zu dsml_mode=%d decode=%d tracker_pos=%zu "
+        "inside_invoke=%s active_prop=%d invoke_body_start=%zu "
+        "param_value_start=%zu saw_invoke=%s",
+        r->response_schema ? "json_schema" : "dsml",
+        step->difference.token,
+        step->difference.analyzed_allowed ? "true" : "false",
+        step->difference.oracle_allowed ? "true" : "false",
+        piece_len, piece_hex, raw_len,
+        (int)tracker->mode, (int)tracker->decode, tracker->pos,
+        tracker->inside_invoke ? "true" : "false", tracker->active_prop,
+        tracker->invoke_body_start, tracker->param_value_start,
+        tracker->saw_invoke ? "true" : "false");
+    free(piece);
+    (void)raw;
+}
+
 static int build_constrained_forced_tokens(
-    ds4_engine *engine, const request *r,
+    server *srv, ds4_session *session, ds4_engine *engine, const request *r,
     const char *raw, size_t raw_len,
     const thinking_state *thinking,
     const dsml_decode_tracker *tracker,
+    const response_json_lex_state *json_state,
+    server_constraint_mode mode,
+    server_constraint_step *step,
+    bool profile,
     int *out, int cap) {
     if (!engine || !r || !thinking || !tracker || !out || cap <= 0) return 0;
     buf shadow = {0};
     if (raw_len) buf_append(&shadow, raw, raw_len);
     thinking_state shadow_thinking = *thinking;
     dsml_decode_tracker shadow_tracker = *tracker;
+    response_json_lex_state shadow_json_state = {0};
+    if (json_state) shadow_json_state = *json_state;
+    else if (r->response_schema) {
+        (void)response_json_lex_sync(
+            &shadow_json_state, shadow.ptr ? shadow.ptr : "", shadow.len,
+            r->think_mode != DS4_THINK_NONE);
+    }
     int count = 0;
+    bool first_analysis = true;
 
     while (count < cap) {
         dsml_decode_state state = r->kind == REQ_CHAT && r->has_tools ?
@@ -14143,23 +14886,181 @@ static int build_constrained_forced_tokens(
                     shadow_tracker.syn)) break;
         }
 
+        bool incremental_free_string =
+            mode != SERVER_CONSTRAINT_ORACLE_ONLY &&
+            response_json_incremental_free_string(
+                r->response_schema,
+                shadow.ptr ? shadow.ptr : "", shadow.len,
+                r->think_mode != DS4_THINK_NONE, &shadow_json_state);
         response_json_filter json_filter = {
+            .engine = engine,
             .schema = r->response_schema,
             .raw = shadow.ptr ? shadow.ptr : "",
             .raw_len = shadow.len,
+            .think_mode = r->think_mode,
             .thinking_enabled = r->think_mode != DS4_THINK_NONE,
+            .lex_state = &shadow_json_state,
+            .use_incremental_lex =
+                (mode == SERVER_CONSTRAINT_INCREMENTAL &&
+                 incremental_free_string) ||
+                mode == SERVER_CONSTRAINT_TRIE ||
+                mode == SERVER_CONSTRAINT_OPTIMIZED ||
+                mode == SERVER_CONSTRAINT_COMPARE_ORACLE,
+            .incremental_free_string = incremental_free_string,
+            .token_sensitive_stop_allowed =
+                (mode == SERVER_CONSTRAINT_TRIE ||
+                 mode == SERVER_CONSTRAINT_COMPARE_ORACLE) &&
+                response_json_generation_complete(
+                    r->response_schema, shadow.ptr ? shadow.ptr : "",
+                    shadow.len, r->think_mode != DS4_THINK_NONE, true),
+            .metrics = profile && step ? &step->parser_metrics : NULL,
         };
         agentic_token_filter tool_filter = {
+            .engine = engine,
             .req = r,
             .raw = shadow.ptr ? shadow.ptr : "",
             .raw_len = shadow.len,
             .tracker = &shadow_tracker,
+            .think_mode = r->think_mode,
+            .use_incremental_string =
+                mode != SERVER_CONSTRAINT_ORACLE_ONLY,
+            .incremental_free_string =
+                mode != SERVER_CONSTRAINT_ORACLE_ONLY &&
+                agentic_tracker_has_unbounded_string(&shadow_tracker),
+            .metrics = profile && step ? &step->parser_metrics : NULL,
         };
-        int token = ds4_engine_forced_prefix_token(
-            engine,
-            response_constrained ? response_json_filter_token : agentic_filter_token,
-            response_constrained ? (void *)&json_filter : (void *)&tool_filter,
-            false, true);
+        ds4_token_filter_fn filter = response_constrained ?
+            response_json_filter_token : agentic_filter_token;
+        void *filter_ud = response_constrained ?
+            (void *)&json_filter : (void *)&tool_filter;
+        const bool trie_frontier_restrictive = response_constrained ?
+            (shadow_json_state.ready && !incremental_free_string) :
+            (shadow_tracker.mode != DSML_TRACK_SEARCH &&
+             shadow_tracker.mode != DSML_TRACK_DONE &&
+             !(shadow_tracker.mode == DSML_TRACK_STRING_BODY &&
+               tool_filter.incremental_free_string));
+        const bool partition_eligible =
+            (mode == SERVER_CONSTRAINT_TRIE ||
+             mode == SERVER_CONSTRAINT_COMPARE_ORACLE) &&
+            (response_constrained ?
+             (incremental_free_string &&
+              !shadow_json_state.string_escape &&
+              shadow_json_state.unicode_remaining == 0) :
+             (tool_filter.incremental_free_string &&
+              shadow_tracker.mode == DSML_TRACK_STRING_BODY &&
+              shadow_tracker.pos == shadow.len));
+        const constraint_token_partition *partition = NULL;
+        if (step && partition_eligible) {
+            bool compiled_now = false;
+            if (server_constraint_partitions_ensure(srv, &compiled_now)) {
+                partition = response_constrained ?
+                    &srv->json_string_partition :
+                    &srv->dsml_string_partition;
+                step->used_static_mask = true;
+                step->dynamic_frontier_size += partition->dynamic_count;
+                step->static_mask_memory_bytes =
+                    srv->constraint_partitions_memory_bytes;
+                if (compiled_now) {
+                    step->static_mask_compile_ms +=
+                        srv->constraint_partitions_compile_ms;
+                }
+            }
+        }
+        int token = -1;
+        const bool primary_analysis = first_analysis;
+        ds4_constraint_analysis shadow_analysis = {0};
+        ds4_filtered_sample_metrics shadow_metrics = {0};
+        ds4_constraint_analysis *analysis_out = primary_analysis && step ?
+            &step->analysis : &shadow_analysis;
+        ds4_filtered_sample_metrics *analysis_metrics = primary_analysis && step ?
+            &step->metrics : &shadow_metrics;
+        int analysis_rc = 1;
+        const bool indexed_analysis = step &&
+            ((primary_analysis && mode == SERVER_CONSTRAINT_OPTIMIZED) ||
+             ((mode == SERVER_CONSTRAINT_TRIE ||
+               mode == SERVER_CONSTRAINT_COMPARE_ORACLE) &&
+              (primary_analysis || response_constrained) &&
+              (partition || trie_frontier_restrictive ||
+               mode == SERVER_CONSTRAINT_COMPARE_ORACLE)));
+        if (indexed_analysis) {
+            if (partition) {
+                analysis_rc = ds4_session_constraint_analyze_partition(
+                    session, partition->base_allowed,
+                    (uint32_t)ds4_engine_vocab_size(engine),
+                    partition->dynamic_tokens, partition->dynamic_count,
+                    filter, filter_ud, analysis_out,
+                    profile ? analysis_metrics : NULL);
+            } else if (mode == SERVER_CONSTRAINT_TRIE ||
+                       mode == SERVER_CONSTRAINT_COMPARE_ORACLE) {
+                analysis_rc = ds4_session_constraint_analyze_trie(
+                    session, filter, filter_ud, false, true,
+                    analysis_out, profile ? analysis_metrics : NULL);
+            } else {
+                analysis_rc = ds4_session_constraint_analyze(
+                    session, filter, filter_ud, false, true,
+                    analysis_out, profile ? analysis_metrics : NULL);
+            }
+        }
+        if (analysis_rc == 0) {
+            if (primary_analysis) {
+                step->ready = true;
+                step->oracle_equal = true;
+            }
+            if (mode == SERVER_CONSTRAINT_COMPARE_ORACLE) {
+                response_json_filter oracle_json_filter = json_filter;
+                oracle_json_filter.scratch = (buf){0};
+                oracle_json_filter.scratch_ready = false;
+                oracle_json_filter.use_incremental_lex = false;
+                oracle_json_filter.metrics =
+                    profile ? &step->oracle_parser_metrics : NULL;
+                agentic_token_filter oracle_tool_filter = tool_filter;
+                oracle_tool_filter.scratch = (buf){0};
+                oracle_tool_filter.scratch_ready = false;
+                oracle_tool_filter.use_incremental_string = false;
+                oracle_tool_filter.metrics =
+                    profile ? &step->oracle_parser_metrics : NULL;
+                void *oracle_ud = response_constrained ?
+                    (void *)&oracle_json_filter : (void *)&oracle_tool_filter;
+                ds4_filtered_sample_metrics oracle_metrics = {0};
+                ds4_constraint_difference difference = {0};
+                const bool oracle_equal =
+                    ds4_session_constraint_compare_oracle(
+                        session, filter, oracle_ud, analysis_out,
+                        &difference, profile ? &oracle_metrics : NULL);
+                step->oracle_compare_calls++;
+                if (!oracle_equal) step->oracle_divergences++;
+                step->oracle_equal = step->oracle_equal && oracle_equal;
+                filtered_metrics_add(&step->oracle_metrics, &oracle_metrics);
+                step->difference = difference;
+                if (!oracle_equal) {
+                    server_log_constraint_divergence(
+                        engine, r, &shadow_tracker,
+                        shadow.ptr ? shadow.ptr : "", shadow.len, step);
+                }
+                buf_free(&oracle_json_filter.scratch);
+                buf_free(&oracle_tool_filter.scratch);
+            }
+            token = analysis_out->forced_token;
+            if (!primary_analysis) {
+                filtered_metrics_add(&step->forced_metrics, &shadow_metrics);
+                step->forced_candidate_tokens_tested +=
+                    shadow_analysis.candidate_tokens_tested;
+            }
+        } else {
+            ds4_filtered_sample_metrics forced = {0};
+            token = ds4_engine_forced_prefix_token_profiled(
+                engine, filter, filter_ud, false, true,
+                profile ? &forced : NULL);
+            if (profile && step) {
+                filtered_metrics_add(&step->forced_metrics, &forced);
+            }
+            if (step) {
+                step->forced_candidate_tokens_tested +=
+                    profile ? forced.filter_calls :
+                    (uint64_t)ds4_engine_vocab_size(engine);
+            }
+        }
+        first_analysis = false;
         buf_free(&json_filter.scratch);
         buf_free(&tool_filter.scratch);
         if (token < 0 || ds4_token_is_stop_for_think_mode(
@@ -14173,6 +15074,11 @@ static int build_constrained_forced_tokens(
         size_t old_len = shadow.len;
         buf_append(&shadow, piece, piece_len);
         thinking_state_feed(&shadow_thinking, piece, piece_len);
+        if (response_constrained) {
+            (void)response_json_lex_sync(
+                &shadow_json_state, shadow.ptr, shadow.len,
+                r->think_mode != DS4_THINK_NONE);
+        }
         if (r->kind == REQ_CHAT && r->has_tools) {
             dsml_decode_tracker_update(&shadow_tracker, shadow.ptr, shadow.len);
         }
@@ -15503,7 +16409,10 @@ decode_again:
     trace_event(s, trace_id, "prefill done; decode_max=%d ctx_room=%d", max_tokens, room);
     const double decode_t0 = now_sec();
     const bool phase_profile = server_phase_profile_enabled();
+    const server_constraint_mode constraint_mode =
+        server_constraint_mode_from_env();
     server_decode_phase_metrics phase = {0};
+    phase.grammar_compile_ms = j->req.grammar_compile_ms;
     double last_decode_log_t = decode_t0;
     int last_decode_log_completion = 0;
     thinking_state thinking = thinking_state_from_prompt(&j->req);
@@ -15515,12 +16424,23 @@ decode_again:
         getenv("DS4_SERVER_DISABLE_THINK_TOOL_RECOVERY") == NULL;
     dsml_decode_tracker dsml_tracker;
     dsml_decode_tracker_init(&dsml_tracker, &j->req);
+    response_json_lex_state response_json_state = {0};
+    if (j->req.response_schema) {
+        (void)response_json_lex_sync(
+            &response_json_state, "", 0,
+            j->req.think_mode != DS4_THINK_NONE);
+    }
     bool have_speculative_next = false;
     int speculative_next = -1;
 
     server_generation_enter(s);
     while (!g_stop_requested && completion < max_tokens &&
            ds4_session_pos(slot->session) < ds4_session_ctx(slot->session)) {
+        if (j->req.response_schema) {
+            (void)response_json_lex_sync(
+                &response_json_state, text.ptr ? text.ptr : "", text.len,
+                j->req.think_mode != DS4_THINK_NONE);
+        }
         dsml_decode_state dsml_state = j->req.kind == REQ_CHAT && j->req.has_tools ?
             dsml_tracker.decode : DSML_DECODE_OUTSIDE;
         const bool in_tool_call = dsml_decode_state_is_tool(dsml_state);
@@ -15549,28 +16469,170 @@ decode_again:
         const bool response_constrained_sample = j->req.response_schema != NULL;
         const bool constrained_sample =
             agentic_constrained_sample || response_constrained_sample;
+        server_constraint_step constraint_step = {0};
+        constraint_parser_metrics sample_parser_metrics = {0};
         agentic_token_filter token_filter = {
+            .engine = s->engine,
             .req = &j->req,
             .raw = text.ptr ? text.ptr : "",
             .raw_len = text.len,
             .tracker = &dsml_tracker,
+            .think_mode = j->req.think_mode,
+            .use_incremental_string =
+                constraint_mode != SERVER_CONSTRAINT_ORACLE_ONLY,
+            .incremental_free_string =
+                constraint_mode != SERVER_CONSTRAINT_ORACLE_ONLY &&
+                agentic_tracker_has_unbounded_string(&dsml_tracker),
+            .metrics = phase_profile ? &sample_parser_metrics : NULL,
         };
+        bool incremental_free_string =
+            constraint_mode != SERVER_CONSTRAINT_ORACLE_ONLY &&
+            response_json_incremental_free_string(
+                j->req.response_schema,
+                text.ptr ? text.ptr : "", text.len,
+                j->req.think_mode != DS4_THINK_NONE,
+                &response_json_state);
         response_json_filter json_filter = {
+            .engine = s->engine,
             .schema = j->req.response_schema,
             .raw = text.ptr ? text.ptr : "",
             .raw_len = text.len,
+            .think_mode = j->req.think_mode,
             .thinking_enabled = j->req.think_mode != DS4_THINK_NONE,
+            .lex_state = &response_json_state,
+            .use_incremental_lex =
+                constraint_mode == SERVER_CONSTRAINT_INCREMENTAL ||
+                constraint_mode == SERVER_CONSTRAINT_TRIE ||
+                constraint_mode == SERVER_CONSTRAINT_OPTIMIZED ||
+                constraint_mode == SERVER_CONSTRAINT_COMPARE_ORACLE,
+            .incremental_free_string = incremental_free_string,
+            .token_sensitive_stop_allowed =
+                (constraint_mode == SERVER_CONSTRAINT_TRIE ||
+                 constraint_mode == SERVER_CONSTRAINT_COMPARE_ORACLE) &&
+                response_json_generation_complete(
+                    j->req.response_schema, text.ptr ? text.ptr : "",
+                    text.len, j->req.think_mode != DS4_THINK_NONE, true),
+            .metrics = phase_profile ? &sample_parser_metrics : NULL,
         };
         int toks[129];
         const double forced_build_t0 = phase_profile ? now_sec() : 0.0;
         int ntok = constrained_sample ? build_constrained_forced_tokens(
-            s->engine, &j->req, text.ptr ? text.ptr : "", text.len,
-            &thinking, &dsml_tracker, toks,
+            s, slot->session, s->engine, &j->req,
+            text.ptr ? text.ptr : "", text.len,
+            &thinking, &dsml_tracker, &response_json_state, constraint_mode,
+            &constraint_step, phase_profile, toks,
             (int)(sizeof(toks) / sizeof(toks[0])) < max_tokens - completion ?
                 (int)(sizeof(toks) / sizeof(toks[0])) : max_tokens - completion) : 0;
         if (phase_profile && constrained_sample) {
-            phase.forced_build_ms += (now_sec() - forced_build_t0) * 1000.0;
+            const double forced_wall_ms =
+                (now_sec() - forced_build_t0) * 1000.0;
+            const double analysis_ms = constraint_step.ready ?
+                constraint_step.metrics.setup_ms +
+                constraint_step.metrics.filter_ms : 0.0;
+            const double oracle_ms = constraint_step.ready &&
+                constraint_mode == SERVER_CONSTRAINT_COMPARE_ORACLE ?
+                constraint_step.oracle_metrics.setup_ms +
+                constraint_step.oracle_metrics.filter_ms : 0.0;
+            phase.forced_build_ms += forced_wall_ms;
+            phase.sampling_mask_build_ms += analysis_ms;
+            phase.oracle_compare_ms += oracle_ms;
+            phase.forced_prefix_probe_ms +=
+                forced_wall_ms > analysis_ms + oracle_ms ?
+                forced_wall_ms - analysis_ms - oracle_ms : 0.0;
             phase.forced_build_calls++;
+            phase.vocab_tokens += constraint_step.forced_metrics.vocab_tokens;
+            phase.filter_calls += constraint_step.forced_metrics.filter_calls;
+            phase.accepted_tokens +=
+                constraint_step.forced_metrics.accepted_tokens;
+            phase.decoded_piece_bytes +=
+                constraint_step.forced_metrics.decoded_piece_bytes;
+            phase.candidate_tokens_tested +=
+                constraint_step.forced_candidate_tokens_tested;
+            phase.trie_nodes_visited +=
+                constraint_step.forced_metrics.trie_nodes_visited;
+            phase.trie_subtrees_pruned +=
+                constraint_step.forced_metrics.trie_subtrees_pruned;
+            phase.trie_leaf_tokens_emitted +=
+                constraint_step.forced_metrics.trie_leaf_tokens_emitted;
+            if (constraint_step.forced_metrics.trie_compiled_nodes >
+                phase.trie_compiled_nodes) {
+                phase.trie_compiled_nodes =
+                    constraint_step.forced_metrics.trie_compiled_nodes;
+            }
+            if (constraint_step.forced_metrics.trie_memory_bytes >
+                phase.trie_memory_bytes) {
+                phase.trie_memory_bytes =
+                    constraint_step.forced_metrics.trie_memory_bytes;
+            }
+            phase.trie_compile_ms +=
+                constraint_step.forced_metrics.trie_compile_ms;
+            phase.parser_transition_count +=
+                constraint_step.parser_metrics.parser_transition_count;
+            phase.parser_bytes_visited +=
+                constraint_step.parser_metrics.parser_bytes_visited;
+            phase.constraint_state_checkpoint +=
+                constraint_step.parser_metrics.checkpoint_count;
+            phase.constraint_state_rollback +=
+                constraint_step.parser_metrics.rollback_count;
+            if (constraint_step.ready) {
+                phase.filter_setup_ms += constraint_step.metrics.setup_ms;
+                phase.filter_ms += constraint_step.metrics.filter_ms;
+                phase.vocab_tokens += constraint_step.metrics.vocab_tokens;
+                phase.filter_calls += constraint_step.metrics.filter_calls;
+                phase.accepted_tokens += constraint_step.metrics.accepted_tokens;
+                phase.finite_allowed_tokens +=
+                    constraint_step.metrics.finite_allowed_tokens;
+                phase.decoded_piece_bytes +=
+                    constraint_step.metrics.decoded_piece_bytes;
+                phase.candidate_tokens_tested +=
+                    constraint_step.analysis.candidate_tokens_tested;
+                phase.trie_nodes_visited +=
+                    constraint_step.metrics.trie_nodes_visited;
+                phase.trie_subtrees_pruned +=
+                    constraint_step.metrics.trie_subtrees_pruned;
+                phase.trie_leaf_tokens_emitted +=
+                    constraint_step.metrics.trie_leaf_tokens_emitted;
+                if (constraint_step.metrics.trie_compiled_nodes >
+                    phase.trie_compiled_nodes) {
+                    phase.trie_compiled_nodes =
+                        constraint_step.metrics.trie_compiled_nodes;
+                }
+                if (constraint_step.metrics.trie_memory_bytes >
+                    phase.trie_memory_bytes) {
+                    phase.trie_memory_bytes =
+                        constraint_step.metrics.trie_memory_bytes;
+                }
+                phase.trie_compile_ms +=
+                    constraint_step.metrics.trie_compile_ms;
+                phase.dynamic_frontier_size +=
+                    constraint_step.dynamic_frontier_size;
+                if (constraint_step.static_mask_memory_bytes >
+                    phase.static_mask_memory_bytes) {
+                    phase.static_mask_memory_bytes =
+                        constraint_step.static_mask_memory_bytes;
+                }
+                phase.static_mask_compile_ms +=
+                    constraint_step.static_mask_compile_ms;
+                if (constraint_step.used_static_mask) phase.mask_cache_hit++;
+                else phase.mask_cache_miss++;
+            }
+            if (constraint_mode == SERVER_CONSTRAINT_COMPARE_ORACLE &&
+                constraint_step.ready) {
+                phase.oracle_compare_calls +=
+                    constraint_step.oracle_compare_calls;
+                phase.oracle_divergences +=
+                    constraint_step.oracle_divergences;
+                phase.candidate_tokens_tested +=
+                    constraint_step.oracle_metrics.filter_calls;
+                phase.parser_transition_count +=
+                    constraint_step.oracle_parser_metrics.parser_transition_count;
+                phase.parser_bytes_visited +=
+                    constraint_step.oracle_parser_metrics.parser_bytes_visited;
+                phase.constraint_state_checkpoint +=
+                    constraint_step.oracle_parser_metrics.checkpoint_count;
+                phase.constraint_state_rollback +=
+                    constraint_step.oracle_parser_metrics.rollback_count;
+            }
         }
         int token = -1;
         if (ntok > 0) {
@@ -15591,6 +16653,13 @@ decode_again:
             if (!constrained_sample && have_speculative_next) {
                 token = speculative_next;
                 have_speculative_next = false;
+            } else if (constrained_sample && constraint_step.ready) {
+                token = ds4_session_sample_constraint_analysis(
+                    slot->session, temperature, top_k, top_p, min_p, &rng,
+                    &constraint_step.analysis,
+                    phase_profile ? &constraint_step.metrics : NULL);
+                if (phase_profile) filtered.sample_ms =
+                    constraint_step.metrics.sample_ms;
             } else if (response_constrained_sample) {
                 token = ds4_session_sample_filtered_profiled(
                     slot->session, temperature, top_k, top_p, min_p, &rng,
@@ -15612,15 +16681,30 @@ decode_again:
                 }
             }
             if (phase_profile && constrained_sample) {
-                phase.filter_setup_ms += filtered.setup_ms;
-                phase.filter_ms += filtered.filter_ms;
+                if (!constraint_step.ready) {
+                    phase.filter_setup_ms += filtered.setup_ms;
+                    phase.filter_ms += filtered.filter_ms;
+                    phase.sampling_mask_build_ms +=
+                        filtered.setup_ms + filtered.filter_ms;
+                    phase.vocab_tokens += filtered.vocab_tokens;
+                    phase.filter_calls += filtered.filter_calls;
+                    phase.accepted_tokens += filtered.accepted_tokens;
+                    phase.finite_allowed_tokens +=
+                        filtered.finite_allowed_tokens;
+                    phase.decoded_piece_bytes += filtered.decoded_piece_bytes;
+                    phase.candidate_tokens_tested += filtered.filter_calls;
+                    phase.parser_transition_count +=
+                        sample_parser_metrics.parser_transition_count;
+                    phase.parser_bytes_visited +=
+                        sample_parser_metrics.parser_bytes_visited;
+                    phase.constraint_state_checkpoint +=
+                        sample_parser_metrics.checkpoint_count;
+                    phase.constraint_state_rollback +=
+                        sample_parser_metrics.rollback_count;
+                    phase.mask_cache_miss++;
+                }
                 phase.filtered_sample_ms += filtered.sample_ms;
                 phase.filtered_sample_calls++;
-                phase.vocab_tokens += filtered.vocab_tokens;
-                phase.filter_calls += filtered.filter_calls;
-                phase.accepted_tokens += filtered.accepted_tokens;
-                phase.finite_allowed_tokens += filtered.finite_allowed_tokens;
-                phase.decoded_piece_bytes += filtered.decoded_piece_bytes;
             }
             buf_free(&token_filter.scratch);
             buf_free(&json_filter.scratch);
@@ -15697,6 +16781,11 @@ decode_again:
             trace_piece(s, trace_id, piece, piece_len);
             buf_append(&text, piece, piece_len);
             thinking_state_feed(&thinking, piece, piece_len);
+            if (j->req.response_schema) {
+                (void)response_json_lex_sync(
+                    &response_json_state, text.ptr, text.len,
+                    j->req.think_mode != DS4_THINK_NONE);
+            }
             if (j->req.kind == REQ_CHAT && j->req.has_tools) {
                 dsml_decode_tracker_update(&dsml_tracker, text.ptr, text.len);
             }
@@ -15885,26 +16974,46 @@ decode_again:
 
     if (phase_profile) {
         const double decode_wall_ms = (now_sec() - decode_t0) * 1000.0;
+        const double constraint_cpu_ms =
+            phase.forced_prefix_probe_ms + phase.sampling_mask_build_ms +
+            phase.oracle_compare_ms + phase.filtered_sample_ms;
         const double known_ms =
-            phase.forced_build_ms + phase.forced_sync_ms +
-            phase.filter_setup_ms + phase.filter_ms +
+            phase.forced_prefix_probe_ms + phase.sampling_mask_build_ms +
+            phase.oracle_compare_ms + phase.forced_sync_ms +
             phase.filtered_sample_ms + phase.plain_sample_ms + phase.eval_ms;
         const double residual_ms = decode_wall_ms > known_ms ?
             decode_wall_ms - known_ms : 0.0;
         server_log(
             DS4_LOG_GENERATION,
-            "ds4-server: phase profile ctx=%s gen=%d wall=%.3fms "
+            "ds4-server: phase profile ctx=%s gen=%d mode=%s wall=%.3fms "
             "forced_build=%.3fms/%llu forced_sync=%.3fms/%llu/%llu_tok "
+            "forced_prefix_probe=%.3fms sampling_mask_build=%.3fms "
+            "oracle_compare=%.3fms/%llu/%llu_div constraint_cpu=%.3fms "
+            "constraint_cpu_exposed=%.3fms constraint_cpu_overlapped=0.000ms "
             "filter_setup=%.3fms filter=%.3fms filtered_sample=%.3fms/%llu "
             "plain_sample=%.3fms/%llu eval=%.3fms/%llu residual=%.3fms "
             "vocab=%llu filter_calls=%llu accepted=%llu finite_allowed=%llu "
-            "piece_bytes=%llu",
-            ctx_span, completion, decode_wall_ms,
+            "piece_bytes=%llu candidate_tokens_tested=%llu "
+            "parser_transition_count=%llu parser_bytes_visited=%llu "
+            "trie_nodes_visited=%llu subtrees_pruned=%llu "
+            "trie_leaf_tokens_emitted=%llu mask_cache_hit=%llu mask_cache_miss=%llu "
+            "grammar_compile_ms=%.3f grammar_jit_ms=%.3f "
+            "trie_compile_ms=%.3f trie_compiled_nodes=%llu trie_memory_bytes=%llu "
+            "static_mask_compile_ms=%.3f static_mask_memory_bytes=%llu "
+            "dynamic_frontier_size=%llu "
+            "constraint_state_checkpoint=%llu constraint_state_rollback=%llu",
+            ctx_span, completion, server_constraint_mode_name(constraint_mode),
+            decode_wall_ms,
             phase.forced_build_ms,
             (unsigned long long)phase.forced_build_calls,
             phase.forced_sync_ms,
             (unsigned long long)phase.forced_sync_calls,
             (unsigned long long)phase.forced_tokens,
+            phase.forced_prefix_probe_ms, phase.sampling_mask_build_ms,
+            phase.oracle_compare_ms,
+            (unsigned long long)phase.oracle_compare_calls,
+            (unsigned long long)phase.oracle_divergences,
+            constraint_cpu_ms, constraint_cpu_ms,
             phase.filter_setup_ms, phase.filter_ms,
             phase.filtered_sample_ms,
             (unsigned long long)phase.filtered_sample_calls,
@@ -15917,7 +17026,24 @@ decode_again:
             (unsigned long long)phase.filter_calls,
             (unsigned long long)phase.accepted_tokens,
             (unsigned long long)phase.finite_allowed_tokens,
-            (unsigned long long)phase.decoded_piece_bytes);
+            (unsigned long long)phase.decoded_piece_bytes,
+            (unsigned long long)phase.candidate_tokens_tested,
+            (unsigned long long)phase.parser_transition_count,
+            (unsigned long long)phase.parser_bytes_visited,
+            (unsigned long long)phase.trie_nodes_visited,
+            (unsigned long long)phase.trie_subtrees_pruned,
+            (unsigned long long)phase.trie_leaf_tokens_emitted,
+            (unsigned long long)phase.mask_cache_hit,
+            (unsigned long long)phase.mask_cache_miss,
+            phase.grammar_compile_ms, phase.grammar_jit_ms,
+            phase.trie_compile_ms,
+            (unsigned long long)phase.trie_compiled_nodes,
+            (unsigned long long)phase.trie_memory_bytes,
+            phase.static_mask_compile_ms,
+            (unsigned long long)phase.static_mask_memory_bytes,
+            (unsigned long long)phase.dynamic_frontier_size,
+            (unsigned long long)phase.constraint_state_checkpoint,
+            (unsigned long long)phase.constraint_state_rollback);
     }
 
     if (g_stop_requested && strcmp(finish, "error") != 0) {
@@ -16993,8 +18119,13 @@ static void server_close_resources(server *s) {
     }
     free(s->slot_threads);
     free(s->slots);
+    free(s->dsml_string_partition.base_allowed);
+    free(s->dsml_string_partition.dynamic_tokens);
+    free(s->json_string_partition.base_allowed);
+    free(s->json_string_partition.dynamic_tokens);
     pthread_mutex_destroy(&s->tool_mu);
     pthread_mutex_destroy(&s->kv_mu);
+    pthread_mutex_destroy(&s->constraint_cache_mu);
     pthread_mutex_destroy(&s->inference_mu);
     pthread_mutex_destroy(&s->model_mu);
     pthread_mutex_destroy(&s->trace_mu);
@@ -17386,6 +18517,7 @@ int main(int argc, char **argv) {
     pthread_cond_init(&s.clients_cv, NULL);
     pthread_mutex_init(&s.tool_mu, NULL);
     pthread_mutex_init(&s.kv_mu, NULL);
+    pthread_mutex_init(&s.constraint_cache_mu, NULL);
     pthread_mutexattr_t inference_attr;
     pthread_mutexattr_init(&inference_attr);
     pthread_mutexattr_settype(&inference_attr, PTHREAD_MUTEX_RECURSIVE);
@@ -22664,6 +23796,29 @@ static void test_agentic_invoke_header_is_exact(void) {
     request_free(&r);
 }
 
+static void test_constraint_runtime_modes_fail_closed(void) {
+    const char *saved = getenv("DS4_CONSTRAINT_MODE");
+    char *copy = saved ? xstrdup(saved) : NULL;
+    unsetenv("DS4_CONSTRAINT_MODE");
+    TEST_ASSERT(server_constraint_mode_from_env() == SERVER_CONSTRAINT_TRIE);
+    setenv("DS4_CONSTRAINT_MODE", "optimized", 1);
+    TEST_ASSERT(server_constraint_mode_from_env() == SERVER_CONSTRAINT_OPTIMIZED);
+    setenv("DS4_CONSTRAINT_MODE", "incremental", 1);
+    TEST_ASSERT(server_constraint_mode_from_env() == SERVER_CONSTRAINT_INCREMENTAL);
+    setenv("DS4_CONSTRAINT_MODE", "trie", 1);
+    TEST_ASSERT(server_constraint_mode_from_env() == SERVER_CONSTRAINT_TRIE);
+    setenv("DS4_CONSTRAINT_MODE", "oracle_only", 1);
+    TEST_ASSERT(server_constraint_mode_from_env() == SERVER_CONSTRAINT_ORACLE_ONLY);
+    setenv("DS4_CONSTRAINT_MODE", "compare_new_vs_oracle", 1);
+    TEST_ASSERT(server_constraint_mode_from_env() ==
+                SERVER_CONSTRAINT_COMPARE_ORACLE);
+    setenv("DS4_CONSTRAINT_MODE", "misspelled", 1);
+    TEST_ASSERT(server_constraint_mode_from_env() == SERVER_CONSTRAINT_ORACLE_ONLY);
+    if (copy) setenv("DS4_CONSTRAINT_MODE", copy, 1);
+    else unsetenv("DS4_CONSTRAINT_MODE");
+    free(copy);
+}
+
 static void test_agentic_constrained_sampling_scope(void) {
     request r;
     request_init(&r, REQ_CHAT, 32);
@@ -23442,6 +24597,158 @@ static void test_required_tool_choice_cannot_escape_to_text(void) {
     request_free(&r);
 }
 
+static void test_agentic_incremental_free_string(void) {
+    request r;
+    request_init(&r, REQ_CHAT, 32);
+    test_agentic_add_tool(
+        &r, "write",
+        "{\"name\":\"write\",\"input_schema\":{\"type\":\"object\","
+        "\"required\":[\"content\"],\"additionalProperties\":false,"
+        "\"properties\":{\"content\":{\"type\":\"string\"}}}}" );
+    const char *prefix =
+        DS4_TOOL_CALLS_START DS4_INVOKE_START " name=\"write\">"
+        DS4_PARAM_START " name=\"content\" string=\"true\">hello";
+    dsml_decode_tracker tracker;
+    dsml_decode_tracker_init(&tracker, &r);
+    dsml_decode_tracker_update(&tracker, prefix, strlen(prefix));
+    TEST_ASSERT(tracker.mode == DSML_TRACK_STRING_BODY);
+    TEST_ASSERT(tracker.pos == strlen(prefix));
+
+    constraint_parser_metrics metrics = {0};
+    agentic_token_filter incremental = {
+        .req = &r, .raw = prefix, .raw_len = strlen(prefix),
+        .tracker = &tracker, .use_incremental_string = true,
+        .incremental_free_string = true,
+        .metrics = &metrics,
+    };
+    agentic_token_filter exhaustive = incremental;
+    exhaustive.use_incremental_string = false;
+    exhaustive.metrics = NULL;
+    TEST_ASSERT(agentic_filter_token(&incremental, 0, " world", 6));
+    TEST_ASSERT(agentic_filter_token(&exhaustive, 0, " world", 6));
+    TEST_ASSERT(metrics.parser_bytes_visited == 6);
+    TEST_ASSERT(agentic_filter_token(
+        &incremental, 0, DS4_PARAM_END, strlen(DS4_PARAM_END)));
+    TEST_ASSERT(agentic_filter_token(
+        &exhaustive, 0, DS4_PARAM_END, strlen(DS4_PARAM_END)));
+    buf_free(&incremental.scratch);
+    buf_free(&exhaustive.scratch);
+    request_free(&r);
+}
+
+static void test_agentic_nullable_incremental_free_string(void) {
+    schema_json_value *nullable = schema_json_parse(
+        "{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}");
+    schema_json_value *bounded = schema_json_parse(
+        "{\"anyOf\":[{\"type\":\"string\",\"maxLength\":8},"
+        "{\"type\":\"null\"}]}");
+    schema_json_value *ambiguous = schema_json_parse(
+        "{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"string\"},"
+        "{\"type\":\"null\"}]}");
+    TEST_ASSERT(nullable && schema_json_is_unbounded_string(nullable));
+    TEST_ASSERT(bounded && !schema_json_is_unbounded_string(bounded));
+    TEST_ASSERT(ambiguous && !schema_json_is_unbounded_string(ambiguous));
+    schema_json_free(nullable);
+    schema_json_free(bounded);
+    schema_json_free(ambiguous);
+
+    request r;
+    request_init(&r, REQ_CHAT, 32);
+    test_agentic_add_tool(
+        &r, "write",
+        "{\"name\":\"write\",\"input_schema\":{\"type\":\"object\","
+        "\"required\":[\"content\"],\"additionalProperties\":false,"
+        "\"properties\":{\"content\":{\"anyOf\":[{\"type\":\"string\"},"
+        "{\"type\":\"null\"}]}}}}" );
+    const char *prefix =
+        DS4_TOOL_CALLS_START DS4_INVOKE_START " name=\"write\">"
+        DS4_PARAM_START " name=\"content\" string=\"true\">hello";
+    dsml_decode_tracker tracker;
+    dsml_decode_tracker_init(&tracker, &r);
+    dsml_decode_tracker_update(&tracker, prefix, strlen(prefix));
+    TEST_ASSERT(tracker.mode == DSML_TRACK_STRING_BODY);
+    TEST_ASSERT(tracker.pos == strlen(prefix));
+    TEST_ASSERT(agentic_tracker_has_unbounded_string(&tracker));
+
+    constraint_parser_metrics metrics = {0};
+    agentic_token_filter incremental = {
+        .req = &r, .raw = prefix, .raw_len = strlen(prefix),
+        .tracker = &tracker, .use_incremental_string = true,
+        .incremental_free_string = true, .metrics = &metrics,
+    };
+    agentic_token_filter exhaustive = incremental;
+    exhaustive.use_incremental_string = false;
+    exhaustive.metrics = NULL;
+    TEST_ASSERT(agentic_filter_token(&incremental, 0, " world", 6));
+    TEST_ASSERT(agentic_filter_token(&exhaustive, 0, " world", 6));
+    TEST_ASSERT(metrics.parser_bytes_visited == 6);
+    TEST_ASSERT(agentic_filter_token(
+        &incremental, 0, DS4_PARAM_END, strlen(DS4_PARAM_END)));
+    TEST_ASSERT(agentic_filter_token(
+        &exhaustive, 0, DS4_PARAM_END, strlen(DS4_PARAM_END)));
+    buf_free(&incremental.scratch);
+    buf_free(&exhaustive.scratch);
+    request_free(&r);
+}
+
+static void test_json_schema_unknown_keywords_fail_closed(void) {
+    request r;
+    request_init(&r, REQ_CHAT, 32);
+    TEST_ASSERT(!request_set_response_schema(
+        &r, xstrdup("{\"type\":\"object\",\"applicationLimit\":"
+                    "{\"type\":\"integer\"}}")));
+    TEST_ASSERT(!request_set_response_schema(
+        &r, xstrdup("{\"type\":\"object\",\"properties\":{"
+                    "\"id\":{\"type\":\"string\",\"pattern\":\"^x$\"}}}")));
+    TEST_ASSERT(request_set_response_schema(
+        &r, xstrdup("{\"$schema\":\"http://json-schema.org/draft-07/schema#\","
+                    "\"title\":\"known annotations remain inert\","
+                    "\"type\":\"object\",\"properties\":{},"
+                    "\"additionalProperties\":false}")));
+    request_free(&r);
+}
+
+static void test_static_string_partition_classifier(void) {
+    TEST_ASSERT(response_json_piece_is_string_interior("plain", 5));
+    TEST_ASSERT(response_json_piece_is_string_interior("\\n", 2));
+    TEST_ASSERT(response_json_piece_is_string_interior("\\", 1));
+    TEST_ASSERT(!response_json_piece_is_string_interior("\"", 1));
+    TEST_ASSERT(!response_json_piece_is_string_interior("x\"y", 3));
+    const char control[] = {1};
+    TEST_ASSERT(!response_json_piece_is_string_interior(control, 1));
+}
+
+static void test_response_json_incremental_lex_state(void) {
+    response_json_lex_state state = {0};
+    TEST_ASSERT(response_json_lex_sync(&state, "", 0, false));
+    TEST_ASSERT(state.ready && state.valid);
+    const char *chunks[] = {
+        "{\"items\":[1,", "true,null,", "\"a\\u0041\"]}",
+    };
+    buf raw = {0};
+    for (size_t i = 0; i < sizeof(chunks) / sizeof(chunks[0]); i++) {
+        buf_append(&raw, chunks[i], strlen(chunks[i]));
+        TEST_ASSERT(response_json_lex_sync(
+            &state, raw.ptr, raw.len, false));
+        TEST_ASSERT(state.surface_len == raw.len);
+    }
+    TEST_ASSERT(state.mode == JSON_LEX_DONE);
+    response_json_lex_state trailing = state;
+    uint64_t transitions = 0;
+    TEST_ASSERT(!response_json_lex_feed(
+        &trailing, "x", 1, &transitions));
+    TEST_ASSERT(transitions == 1);
+    buf_free(&raw);
+
+    response_json_lex_init(&state);
+    TEST_ASSERT(response_json_lex_feed(&state, "[-1.25e+3]", 10, NULL));
+    TEST_ASSERT(state.mode == JSON_LEX_DONE);
+    response_json_lex_init(&state);
+    TEST_ASSERT(!response_json_lex_feed(&state, "[01]", 4, NULL));
+    response_json_lex_init(&state);
+    TEST_ASSERT(!response_json_lex_feed(&state, "{\"x\",1}", 7, NULL));
+}
+
 static void test_schema_replacement_and_response_formats(void) {
     tool_schema_orders orders = {0};
     tool_schema_orders_add_json(
@@ -23593,6 +24900,55 @@ static void test_schema_replacement_and_response_formats(void) {
         strlen("{\"name\":\"Ada\",\"cognome\":\"Lovelace\","
                "\"decisione_utente\":\"vado_al_mare\",")));
     request_free(&r);
+
+    /* JSON Schema defaults additionalProperties to true.  A schema requiring
+     * at least one property but declaring no named properties must still have
+     * a viable arbitrary-key path. */
+    request_init(&r, REQ_CHAT, 32);
+    TEST_ASSERT(request_set_response_schema(
+        &r, xstrdup("{\"type\":\"object\",\"minProperties\":1}")));
+    filter = (response_json_filter){
+        .schema = r.response_schema, .raw = "", .raw_len = 0,
+    };
+    TEST_ASSERT(response_json_filter_token(&filter, 0, "{\"x", 3));
+    TEST_ASSERT(response_json_filter_token(&filter, 0, "{\"x\":null}", 10));
+    TEST_ASSERT(!response_json_filter_token(&filter, 0, "{}", 2));
+    request_free(&r);
+
+    request_init(&r, REQ_CHAT, 32);
+    TEST_ASSERT(request_set_response_schema(&r, xstrdup(
+        "{\"type\":\"object\",\"properties\":{"
+        "\"s\":{\"type\":\"string\"}},\"required\":[\"s\"],"
+        "\"additionalProperties\":false}")));
+    const char *string_prefix = "{\"s\":\"abc";
+    response_json_lex_state lex = {0};
+    TEST_ASSERT(response_json_lex_sync(
+        &lex, string_prefix, strlen(string_prefix), false));
+    TEST_ASSERT(response_json_incremental_free_string(
+        r.response_schema, string_prefix, strlen(string_prefix), false, &lex));
+    constraint_parser_metrics incremental_metrics = {0};
+    response_json_filter incremental = {
+        .schema = r.response_schema,
+        .raw = string_prefix,
+        .raw_len = strlen(string_prefix),
+        .lex_state = &lex,
+        .use_incremental_lex = true,
+        .incremental_free_string = true,
+        .metrics = &incremental_metrics,
+    };
+    response_json_filter exhaustive = incremental;
+    exhaustive.lex_state = NULL;
+    exhaustive.use_incremental_lex = false;
+    exhaustive.incremental_free_string = false;
+    exhaustive.metrics = NULL;
+    TEST_ASSERT(response_json_filter_token(&incremental, 0, "def", 3));
+    TEST_ASSERT(response_json_filter_token(&exhaustive, 0, "def", 3));
+    TEST_ASSERT(incremental_metrics.parser_bytes_visited == 3);
+    TEST_ASSERT(response_json_filter_token(&incremental, 0, "\"}", 2));
+    TEST_ASSERT(response_json_filter_token(&exhaustive, 0, "\"}", 2));
+    buf_free(&incremental.scratch);
+    buf_free(&exhaustive.scratch);
+    request_free(&r);
 }
 
 static void test_agentic_orphan_checkpoint_cleanup(void) {
@@ -23626,6 +24982,7 @@ static void ds4_server_unit_tests_run(void) {
     test_agentic_parameter_filter_switches_active_tool();
     test_agentic_parameter_header_is_exact();
     test_agentic_invoke_header_is_exact();
+    test_constraint_runtime_modes_fail_closed();
     test_agentic_constrained_sampling_scope();
     test_agentic_structure_rejects_nested_invoke();
     test_agentic_structure_rejects_parameter_outside_invoke();
@@ -23644,6 +25001,11 @@ static void ds4_server_unit_tests_run(void) {
     test_json_schema_validator_edges();
     test_agentic_tool_schema_masking();
     test_required_tool_choice_cannot_escape_to_text();
+    test_agentic_incremental_free_string();
+    test_agentic_nullable_incremental_free_string();
+    test_json_schema_unknown_keywords_fail_closed();
+    test_static_string_partition_classifier();
+    test_response_json_incremental_lex_state();
     test_schema_replacement_and_response_formats();
     test_agentic_orphan_checkpoint_cleanup();
     test_batched_prefill_round_robin();

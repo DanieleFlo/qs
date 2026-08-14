@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Dependency-free performance experiment harness for DS4."""
+"""Performance experiment harness for DS4.
+
+The core remains dependency-free. JSONSchemaBench output validation lazily
+requires the independent ``jsonschema`` package.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +34,10 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKLOADS = ROOT / "performance" / "workloads.yaml"
+DEFAULT_CONSTRAINED_WORKLOADS = ROOT / "performance" / "constrained-workloads.json"
+DEFAULT_JSONSCHEMABENCH_SUBSET = (
+    ROOT / "performance" / "jsonschemabench-subset.json"
+)
 DEFAULT_RESULTS = ROOT / "performance-results"
 SCHEMA_VERSION = 1
 CONTEXT_CURVE_SUITE = "context-curve-full"
@@ -98,6 +106,8 @@ SERVER_PROGRESS_RE = re.compile(
     r"gen=(?P<generation>\d+)[^\r\n]*?decoding chunk="
     r"(?P<chunk_tps>[0-9.]+) t/s avg=(?P<avg_tps>[0-9.]+) t/s"
 )
+SERVER_PHASE_PREFIX = "ds4-server: phase profile "
+SERVER_PHASE_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 
 
 class HarnessError(RuntimeError):
@@ -485,6 +495,83 @@ def parse_server_progress(text: str) -> list[dict[str, Any]]:
         }
         for match in SERVER_PROGRESS_RE.finditer(text)
     ]
+
+
+def _phase_float(value: str, suffix: str = "") -> float:
+    if suffix and not value.endswith(suffix):
+        raise HarnessError(f"phase value {value!r} lacks suffix {suffix!r}")
+    return float(value[:-len(suffix)] if suffix else value)
+
+
+def _phase_head(value: str, suffix: str = "ms") -> float:
+    return _phase_float(value.split("/", 1)[0], suffix)
+
+
+def _phase_int(value: str) -> int:
+    return int(value.split("_", 1)[0])
+
+
+def parse_server_phase_profiles(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    float_ms = (
+        "wall", "forced_prefix_probe", "sampling_mask_build",
+        "constraint_cpu", "constraint_cpu_exposed",
+        "constraint_cpu_overlapped", "filter_setup", "filter", "residual",
+        "grammar_compile_ms", "grammar_jit_ms",
+        "trie_compile_ms", "static_mask_compile_ms",
+    )
+    integer_fields = (
+        "vocab", "filter_calls", "accepted", "finite_allowed", "piece_bytes",
+        "candidate_tokens_tested", "parser_transition_count",
+        "parser_bytes_visited", "trie_nodes_visited", "subtrees_pruned",
+        "trie_leaf_tokens_emitted", "trie_compiled_nodes",
+        "trie_memory_bytes", "static_mask_memory_bytes",
+        "dynamic_frontier_size", "mask_cache_hit",
+        "mask_cache_miss", "constraint_state_checkpoint",
+        "constraint_state_rollback",
+    )
+    for line in text.splitlines():
+        marker = line.find(SERVER_PHASE_PREFIX)
+        if marker < 0:
+            continue
+        fields = {
+            match.group("key"): match.group("value")
+            for match in SERVER_PHASE_FIELD_RE.finditer(
+                line[marker + len(SERVER_PHASE_PREFIX):]
+            )
+        }
+        required = {"ctx", "gen", "mode", "wall", "constraint_cpu"}
+        missing = required.difference(fields)
+        if missing:
+            raise HarnessError(
+                "server phase profile lacks fields: " + ", ".join(sorted(missing))
+            )
+        row: dict[str, Any] = {
+            "context_span": fields["ctx"],
+            "generation_tokens": int(fields["gen"]),
+            "mode": fields["mode"],
+        }
+        for name in float_ms:
+            if name in fields:
+                row[f"{name}_ms" if not name.endswith("_ms") else name] = (
+                    _phase_float(
+                        fields[name], "" if name.endswith("_ms") else "ms"
+                    )
+                )
+        for name in ("forced_build", "forced_sync", "oracle_compare",
+                     "filtered_sample", "plain_sample", "eval"):
+            if name in fields:
+                row[f"{name}_ms"] = _phase_head(fields[name])
+        if "oracle_compare" in fields:
+            oracle_parts = fields["oracle_compare"].split("/")
+            if len(oracle_parts) >= 3:
+                row["oracle_compare_calls"] = _phase_int(oracle_parts[1])
+                row["oracle_divergences"] = _phase_int(oracle_parts[2])
+        for name in integer_fields:
+            if name in fields:
+                row[name] = _phase_int(fields[name])
+        rows.append(row)
+    return rows
 
 
 def prompt_filler_intercept(
@@ -1549,6 +1636,30 @@ def post_json(url: str, payload: dict[str, Any], timeout: float) -> dict[str, An
     return value
 
 
+def post_json_expect_http_error(
+    url: str, payload: dict[str, Any], expected_status: int, timeout: float,
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url, data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            detail = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        if exc.code != expected_status:
+            raise HarnessError(
+                f"server returned HTTP {exc.code}, expected {expected_status}: {detail}"
+            ) from exc
+        return {"status": exc.code, "body": detail}
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise HarnessError(f"server request failed: {exc}") from exc
+    raise HarnessError(
+        f"server accepted an unsupported schema with HTTP 2xx: {detail}"
+    )
+
+
 def wait_for_server(base_url: str, process: subprocess.Popen[Any],
                     log_path: Path, timeout: float) -> None:
     deadline = time.monotonic() + timeout
@@ -1579,6 +1690,481 @@ def server_progress_since(log_path: Path, offset: int,
             return rows[-1], end
         time.sleep(0.05)
     raise HarnessError("server response completed without a decode progress log")
+
+
+def server_phase_since(log_path: Path, offset: int,
+                       timeout: float = 2.0) -> tuple[dict[str, Any], int]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+            stream.seek(offset)
+            text = stream.read()
+            end = stream.tell()
+        rows = parse_server_phase_profiles(text)
+        if rows:
+            return rows[-1], end
+        time.sleep(0.05)
+    raise HarnessError("server response completed without a phase profile log")
+
+
+def load_constrained_workloads(path: Path, suite: str) -> list[dict[str, Any]]:
+    record = read_json(path, "constrained workload file")
+    if record.get("schema_version") != 1:
+        raise HarnessError("unsupported constrained workload schema_version")
+    suite_ids = record.get("suites", {}).get(suite)
+    if not isinstance(suite_ids, list) or not suite_ids:
+        raise HarnessError(f"unknown or empty constrained suite: {suite}")
+    by_id = {
+        item.get("id"): item
+        for item in record.get("workloads", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    missing = [item_id for item_id in suite_ids if item_id not in by_id]
+    if missing:
+        raise HarnessError(
+            "constrained suite references missing workloads: " + ", ".join(missing)
+        )
+    workloads = [by_id[item_id] for item_id in suite_ids]
+    for item in workloads:
+        if item.get("kind") not in ("dsml", "json_schema"):
+            raise HarnessError(f"invalid constrained workload kind: {item.get('id')}")
+        if not isinstance(item.get("endpoint"), str) or not item["endpoint"].startswith("/"):
+            raise HarnessError(f"invalid constrained workload endpoint: {item.get('id')}")
+        if not isinstance(item.get("payload"), dict):
+            raise HarnessError(f"invalid constrained workload payload: {item.get('id')}")
+    return workloads
+
+
+def load_jsonschemabench_workloads(
+    path: Path, selected_ids: list[str] | None = None, tier: str = "safety",
+    prefix_steps: int = 0,
+) -> list[dict[str, Any]]:
+    record = read_json(path, "JSONSchemaBench subset")
+    if record.get("schema_version") != 1:
+        raise HarnessError("unsupported JSONSchemaBench subset schema_version")
+    entries = record.get("supported")
+    if not isinstance(entries, list) or not entries:
+        raise HarnessError("JSONSchemaBench subset has no supported schemas")
+    if selected_ids is None:
+        tier_ids = record.get("tiers", {}).get(tier)
+        if not isinstance(tier_ids, list) or not tier_ids or not all(
+            isinstance(item, str) for item in tier_ids
+        ):
+            raise HarnessError(f"unknown or empty JSONSchemaBench tier: {tier}")
+        selected_ids = tier_ids
+    workloads: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            raise HarnessError("JSONSchemaBench supported entry lacks an id")
+        schema = entry.get("schema")
+        if not isinstance(schema, (dict, bool)):
+            raise HarnessError(
+                f"JSONSchemaBench schema is not object/boolean: {entry['id']}"
+            )
+        encoded = json.dumps(
+            schema, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+        if hashlib.sha256(encoded).hexdigest() != entry.get("sha256"):
+            raise HarnessError(
+                f"JSONSchemaBench schema hash mismatch: {entry['id']}"
+            )
+        if entry.get("unsupported_reasons"):
+            raise HarnessError(
+                f"unsupported schema leaked into benchmark: {entry['id']}"
+            )
+        if selected_ids and entry["id"] not in selected_ids:
+            continue
+        witness = minimal_json_schema_witness(schema)
+        witness_validation = validate_json_schema_instance(schema, witness)
+        witness_text = json.dumps(
+            witness, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        workloads.append({
+            "id": "jsonschemabench/" + entry["id"],
+            "kind": "json_schema",
+            "endpoint": "/v1/chat/completions",
+            "source": {
+                "benchmark": "JSONSchemaBench",
+                "id": entry["id"],
+                "category": entry.get("category"),
+                "schema_sha256": entry["sha256"],
+                "witness_sha256": hashlib.sha256(
+                    witness_text.encode("utf-8")
+                ).hexdigest(),
+                "witness_valid": witness_validation["valid"],
+                "witness_validator": witness_validation["validator"],
+                "prefix_steps": prefix_steps,
+            },
+            "payload": {
+                "model": "model.gguf",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Generate the shortest JSON value satisfying the supplied "
+                        "schema. Output only that JSON value."
+                    ),
+                }],
+                "temperature": 0,
+                "seed": 424242,
+                "max_tokens": prefix_steps if prefix_steps else 256,
+                "stream": False,
+                "thinking": {"type": "disabled"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": f"jsonschemabench_{index:02d}",
+                        "strict": True,
+                        "schema": schema,
+                    },
+                },
+            },
+        })
+    if selected_ids:
+        loaded_ids = {item["source"]["id"] for item in workloads}
+        missing = sorted(set(selected_ids) - loaded_ids)
+        if missing:
+            raise HarnessError(
+                "JSONSchemaBench ids are not in the supported subset: " +
+                ", ".join(missing)
+            )
+    return workloads
+
+
+def load_jsonschemabench_unsupported_probes(path: Path) -> list[dict[str, Any]]:
+    record = read_json(path, "JSONSchemaBench subset")
+    entries = record.get("unsupported")
+    if record.get("schema_version") != 1 or not isinstance(entries, list) or not entries:
+        raise HarnessError("JSONSchemaBench subset has no unsupported probes")
+    probes: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        schema = entry.get("schema") if isinstance(entry, dict) else None
+        reasons = entry.get("unsupported_reasons") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not isinstance(schema, (dict, bool)):
+            raise HarnessError("malformed JSONSchemaBench unsupported entry")
+        if not isinstance(reasons, list) or not reasons:
+            raise HarnessError(f"unsupported probe lacks reasons: {entry['id']}")
+        encoded = json.dumps(
+            schema, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+        if hashlib.sha256(encoded).hexdigest() != entry.get("sha256"):
+            raise HarnessError(
+                f"JSONSchemaBench unsupported hash mismatch: {entry['id']}"
+            )
+        probes.append({
+            "id": entry["id"], "reasons": reasons,
+            "payload": {
+                "model": "model.gguf",
+                "messages": [{
+                    "role": "user", "content": "Do not run inference."
+                }],
+                "temperature": 0, "max_tokens": 1, "stream": False,
+                "thinking": {"type": "disabled"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": f"jsonschemabench_unsupported_{index:02d}",
+                        "strict": True, "schema": schema,
+                    },
+                },
+            },
+        })
+    return probes
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise HarnessError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def parse_json_strict(text: str, label: str) -> Any:
+    try:
+        return json.loads(text, object_pairs_hook=_reject_duplicate_json_pairs)
+    except HarnessError:
+        raise
+    except json.JSONDecodeError as exc:
+        raise HarnessError(f"{label} is not JSON") from exc
+
+
+def validate_json_schema_instance(
+    schema: dict[str, Any] | bool, instance: Any,
+) -> dict[str, Any]:
+    """Validate with an implementation independent from DS4's C validator."""
+    try:
+        import jsonschema
+    except ImportError as exc:
+        raise HarnessError(
+            "JSONSchemaBench safety validation requires jsonschema; install "
+            "performance/jsonschemabench-requirements.txt"
+        ) from exc
+
+    try:
+        validator_class = jsonschema.validators.validator_for(schema)
+        validator_class.check_schema(schema)
+        errors = sorted(
+            validator_class(schema).iter_errors(instance),
+            key=lambda item: (
+                tuple(str(part) for part in item.absolute_path),
+                tuple(str(part) for part in item.absolute_schema_path),
+            ),
+        )
+    except jsonschema.exceptions.SchemaError as exc:
+        raise HarnessError(
+            f"JSONSchemaBench source schema is invalid: {exc.message}"
+        ) from exc
+    if errors:
+        first = errors[0]
+        instance_path = "$" + "".join(
+            f"[{part}]" if isinstance(part, int) else f".{part}"
+            for part in first.absolute_path
+        )
+        raise HarnessError(
+            "constrained output violates JSON Schema at "
+            f"{instance_path}: {first.message}"
+        )
+    return {
+        "valid": True,
+        "validator": validator_class.__name__,
+        "dialect": schema.get("$schema") if isinstance(schema, dict) else None,
+    }
+
+
+def _merge_schema_constraints(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge the supported intersection keywords needed to build a witness."""
+    result: dict[str, Any] = {}
+    properties: dict[str, list[dict[str, Any]]] = {}
+    required: list[str] = []
+    for part in parts:
+        nested = part.get("allOf")
+        base = {key: value for key, value in part.items() if key != "allOf"}
+        expanded = [base]
+        if isinstance(nested, list):
+            expanded.extend(item for item in nested if isinstance(item, dict))
+        if len(expanded) > 1:
+            base = _merge_schema_constraints(expanded)
+        for key, value in base.items():
+            if key == "properties" and isinstance(value, dict):
+                for name, child in value.items():
+                    if isinstance(child, dict):
+                        properties.setdefault(name, []).append(child)
+                continue
+            if key == "required" and isinstance(value, list):
+                for name in value:
+                    if isinstance(name, str) and name not in required:
+                        required.append(name)
+                continue
+            if key in {"minLength", "minItems", "minProperties", "minimum"}:
+                result[key] = max(value, result.get(key, value))
+                continue
+            if key in {"maxLength", "maxItems", "maxProperties", "maximum"}:
+                result[key] = min(value, result.get(key, value))
+                continue
+            if key == "additionalProperties" and value is False:
+                result[key] = False
+                continue
+            if key == "enum" and isinstance(value, list):
+                previous = result.get("enum")
+                result[key] = (
+                    value if not isinstance(previous, list) else
+                    [item for item in previous if item in value]
+                )
+                continue
+            if key == "type" and "type" in result and result["type"] != value:
+                left = result["type"] if isinstance(result["type"], list) else [result["type"]]
+                right = value if isinstance(value, list) else [value]
+                result["type"] = [item for item in left if item in right]
+                continue
+            result[key] = value
+    if properties:
+        result["properties"] = {
+            name: (
+                children[0] if len(children) == 1 else
+                _merge_schema_constraints(children)
+            )
+            for name, children in properties.items()
+        }
+    if required:
+        result["required"] = required
+    return result
+
+
+def _schema_candidate(schema: dict[str, Any] | bool, depth: int = 0) -> Any:
+    if depth > 64:
+        raise HarnessError("JSONSchemaBench witness exceeds nesting limit")
+    if schema is True:
+        return None
+    if schema is False:
+        raise HarnessError("false JSON Schema has no witness")
+    if "const" in schema:
+        return schema["const"]
+    enumeration = schema.get("enum")
+    if isinstance(enumeration, list) and enumeration:
+        return min(
+            enumeration,
+            key=lambda item: len(json.dumps(
+                item, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            ).encode("utf-8")),
+        )
+    if isinstance(schema.get("allOf"), list):
+        schema = _merge_schema_constraints([schema])
+    for keyword in ("oneOf", "anyOf"):
+        variants = schema.get(keyword)
+        if isinstance(variants, list):
+            base = {key: value for key, value in schema.items() if key != keyword}
+            for variant in variants:
+                if not isinstance(variant, dict):
+                    continue
+                candidate = _schema_candidate(
+                    _merge_schema_constraints([base, variant]), depth + 1
+                )
+                try:
+                    validate_json_schema_instance(schema, candidate)
+                    return candidate
+                except HarnessError:
+                    continue
+            raise HarnessError(f"cannot construct witness for {keyword}")
+
+    declared = schema.get("type")
+    types = declared if isinstance(declared, list) else [declared]
+    if declared is None:
+        if "properties" in schema or "required" in schema:
+            types = ["object"]
+        elif "items" in schema:
+            types = ["array"]
+        else:
+            types = ["null", "boolean", "integer", "number", "string", "array", "object"]
+    for kind in types:
+        if kind == "null":
+            return None
+        if kind == "boolean":
+            return False
+        if kind in ("integer", "number"):
+            multiple = float(schema.get("multipleOf", 1))
+            lower = float(schema.get("minimum", 0))
+            if "exclusiveMinimum" in schema:
+                lower = max(lower, float(schema["exclusiveMinimum"]) + multiple)
+            value = math.ceil(lower / multiple) * multiple
+            if kind == "integer":
+                value = math.ceil(value)
+            maximum = schema.get("maximum")
+            if maximum is not None and value > float(maximum):
+                continue
+            return int(value) if kind == "integer" else value
+        if kind == "string":
+            return "a" * int(schema.get("minLength", 0))
+        if kind == "array":
+            count = int(schema.get("minItems", 0))
+            item_schema = schema.get("items", True)
+            values = [_schema_candidate(item_schema, depth + 1) for _ in range(count)]
+            if schema.get("uniqueItems") and len(values) > 1:
+                for index in range(len(values)):
+                    values[index] = index
+            return values
+        if kind == "object":
+            props = schema.get("properties")
+            props = props if isinstance(props, dict) else {}
+            names = list(dict.fromkeys(schema.get("required", [])))
+            minimum = int(schema.get("minProperties", 0))
+            for name in sorted(props):
+                if len(names) >= minimum:
+                    break
+                if name not in names:
+                    names.append(name)
+            result = {
+                name: _schema_candidate(props.get(name, True), depth + 1)
+                for name in names
+            }
+            while len(result) < minimum:
+                name = f"p{len(result)}"
+                if name not in result:
+                    additional = schema.get("additionalProperties", True)
+                    if additional is False:
+                        raise HarnessError("minProperties exceeds declared properties")
+                    result[name] = _schema_candidate(additional, depth + 1)
+            return result
+    raise HarnessError("cannot construct JSONSchemaBench witness")
+
+
+def minimal_json_schema_witness(schema: dict[str, Any] | bool) -> Any:
+    candidates = [None, False, 0, "", [], {}, True, 1]
+    candidates.append(_schema_candidate(schema))
+    valid: list[Any] = []
+    for candidate in candidates:
+        try:
+            validate_json_schema_instance(schema, candidate)
+            valid.append(candidate)
+        except HarnessError:
+            pass
+    if not valid:
+        raise HarnessError("cannot construct a valid JSONSchemaBench witness")
+    return min(
+        valid,
+        key=lambda item: len(json.dumps(
+            item, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")),
+    )
+
+
+def constrained_semantic_output(kind: str,
+                                response: dict[str, Any]) -> dict[str, Any]:
+    if kind == "dsml":
+        calls = []
+        for item in response.get("output", []):
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            arguments = item.get("arguments")
+            if not isinstance(arguments, str):
+                raise HarnessError("DSML response function_call lacks arguments")
+            parsed = parse_json_strict(arguments, "DSML response arguments")
+            calls.append({"name": item.get("name"), "arguments": parsed})
+        if not calls:
+            raise HarnessError("DSML response contains no function_call")
+        return {"function_calls": calls}
+    choices = response.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else None
+    if choice and choice.get("finish_reason") == "error":
+        raise HarnessError("JSON Schema response ended with an error")
+    content = choice.get("message", {}).get("content") if choice else None
+    if not isinstance(content, str):
+        raise HarnessError("JSON Schema response lacks assistant content")
+    return {"json": parse_json_strict(
+        content, "JSON Schema response content"
+    )}
+
+
+def constrained_json_prefix_output(
+    response: dict[str, Any], completion_tokens: int, required_steps: int,
+) -> dict[str, Any]:
+    choices = response.get("choices") or []
+    choice = choices[0] if len(choices) == 1 and isinstance(choices[0], dict) else None
+    content = choice.get("message", {}).get("content") if choice else None
+    finish_reason = choice.get("finish_reason") if choice else None
+    if not isinstance(content, str) or finish_reason != "error":
+        raise HarnessError(
+            "JSONSchemaBench prefix probe must either complete valid JSON or "
+            "end with the structured-output error"
+        )
+    if completion_tokens != required_steps:
+        raise HarnessError(
+            "JSONSchemaBench prefix probe ended before its requested step budget"
+        )
+    return {
+        "json_prefix": content,
+        "finish_reason": finish_reason,
+        "completion_tokens": completion_tokens,
+    }
+
+
+def constrained_usage(response: dict[str, Any]) -> tuple[int, int]:
+    usage = response.get("usage") or {}
+    prompt = usage.get("input_tokens", usage.get("prompt_tokens"))
+    completion = usage.get("output_tokens", usage.get("completion_tokens"))
+    if not isinstance(prompt, int) or not isinstance(completion, int):
+        raise HarnessError("constrained response lacks integer token usage")
+    return prompt, completion
 
 
 def completion_request(base_url: str, prompt: str, max_tokens: int,
@@ -1794,6 +2380,360 @@ def cmd_server_curve(args: argparse.Namespace) -> int:
     return benchmark_server_curve(args)
 
 
+def benchmark_constrained_server(args: argparse.Namespace) -> int:
+    binary, model = Path(args.binary), Path(args.model)
+    for path, label in ((binary, "server binary"), (model, "model")):
+        if not path.exists():
+            raise HarnessError(f"{label} does not exist: {path}")
+    workload_path = Path(
+        args.jsonschemabench_subset
+        if args.jsonschemabench_subset else args.workloads
+    )
+    if args.jsonschemabench_id and not args.jsonschemabench_subset:
+        raise HarnessError("--jsonschemabench-id requires --jsonschemabench-subset")
+    if args.jsonschemabench_check_unsupported and not args.jsonschemabench_subset:
+        raise HarnessError(
+            "--jsonschemabench-check-unsupported requires --jsonschemabench-subset"
+        )
+    if args.jsonschemabench_prefix_steps:
+        if not args.jsonschemabench_subset:
+            raise HarnessError(
+                "--jsonschemabench-prefix-steps requires --jsonschemabench-subset"
+            )
+        if args.constraint_mode != "compare_new_vs_oracle":
+            raise HarnessError(
+                "JSONSchemaBench prefix probes require compare_new_vs_oracle"
+            )
+        if not 1 <= args.jsonschemabench_prefix_steps <= 64:
+            raise HarnessError("JSONSchemaBench prefix steps must be in 1..64")
+    workloads = (
+        load_jsonschemabench_workloads(
+            workload_path, args.jsonschemabench_id, args.jsonschemabench_tier,
+            args.jsonschemabench_prefix_steps,
+        )
+        if args.jsonschemabench_subset else
+        load_constrained_workloads(workload_path, args.suite)
+    )
+    unsupported_probes = (
+        load_jsonschemabench_unsupported_probes(workload_path)
+        if args.jsonschemabench_check_unsupported else []
+    )
+    suite_name = (
+        f"jsonschemabench-{args.jsonschemabench_tier}" + (
+            f"-prefix-{args.jsonschemabench_prefix_steps}"
+            if args.jsonschemabench_prefix_steps else ""
+        )
+        if args.jsonschemabench_subset else args.suite
+    )
+    experiment_id = args.id or datetime.now().strftime("%Y%m%d-%H%M%S-constrained")
+    out_dir = Path(args.results) / experiment_id
+    if out_dir.exists():
+        raise HarnessError(f"experiment already exists: {out_dir}")
+    out_dir.mkdir(parents=True)
+    log_path = out_dir / "server.log"
+    env = apply_env_overrides(os.environ, args.env)
+    env["DS4_SERVER_PHASE_PROFILE"] = "1"
+    env["DS4_CONSTRAINT_MODE"] = args.constraint_mode
+    port = args.port
+    if port == 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = int(probe.getsockname()[1])
+    base_url = f"http://127.0.0.1:{port}"
+    command = [
+        str(binary), "--model", str(model), "--backend", "cuda",
+        "--ctx", str(args.context), "--host", "127.0.0.1", "--port", str(port),
+        "--prefill-chunk", str(args.prefill_chunk),
+    ]
+    process: subprocess.Popen[Any] | None = None
+    log_stream = None
+    results = []
+    unsupported_results: list[dict[str, Any]] = []
+    try:
+        log_stream = log_path.open("w", encoding="utf-8")
+        process = subprocess.Popen(
+            command, cwd=ROOT, env=env, stdout=log_stream,
+            stderr=subprocess.STDOUT, text=True,
+        )
+        wait_for_server(base_url, process, log_path, args.startup_timeout)
+        model_name = model.name
+        for probe in unsupported_probes:
+            payload = json.loads(json.dumps(probe["payload"]))
+            payload["model"] = model_name
+            request_offset = log_path.stat().st_size
+            try:
+                rejection = post_json_expect_http_error(
+                    base_url + "/v1/chat/completions", payload, 400, args.timeout
+                )
+            except HarnessError as exc:
+                raise HarnessError(
+                    f"unsupported schema probe failed for {probe['id']}: {exc}"
+                ) from exc
+            time.sleep(0.02)
+            with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+                stream.seek(request_offset)
+                request_log = stream.read()
+            if " prompt start" in request_log or "phase profile" in request_log:
+                raise HarnessError(
+                    f"unsupported schema reached inference: {probe['id']}"
+                )
+            unsupported_results.append({
+                "id": probe["id"], "status": rejection["status"],
+                "reasons": probe["reasons"], "inference_started": False,
+            })
+        for workload in workloads:
+            payload = json.loads(json.dumps(workload["payload"]))
+            payload["model"] = model_name
+            for _ in range(args.warmup):
+                post_json(base_url + workload["endpoint"], payload, args.timeout)
+            samples: list[dict[str, Any]] = []
+            output_hashes: list[str] = []
+            outputs: list[dict[str, Any]] = []
+            for repetition in range(args.repetitions):
+                request_offset = log_path.stat().st_size
+                request_t0 = time.monotonic()
+                response = post_json(
+                    base_url + workload["endpoint"], payload, args.timeout
+                )
+                request_wall_ms = (time.monotonic() - request_t0) * 1000.0
+                phase, _ = server_phase_since(log_path, request_offset)
+                prompt_tokens, completion_tokens = constrained_usage(response)
+                if phase["generation_tokens"] != completion_tokens:
+                    raise HarnessError(
+                        "phase profile and response usage disagree on completion tokens"
+                    )
+                try:
+                    try:
+                        semantic = constrained_semantic_output(
+                            workload["kind"], response
+                        )
+                    except HarnessError:
+                        if not (
+                            args.jsonschemabench_prefix_steps and
+                            workload["kind"] == "json_schema"
+                        ):
+                            raise
+                        semantic = constrained_json_prefix_output(
+                            response, completion_tokens,
+                            args.jsonschemabench_prefix_steps,
+                        )
+                        schema_validation = {
+                            "status": "PREFIX_ONLY", "valid": None,
+                            "validator": workload["source"]["witness_validator"],
+                        }
+                    else:
+                        schema_validation = None
+                        if workload["kind"] == "json_schema":
+                            schema = payload["response_format"]["json_schema"]["schema"]
+                            schema_validation = {
+                                "status": "PASS",
+                                **validate_json_schema_instance(
+                                    schema, semantic["json"]
+                                ),
+                            }
+                except HarnessError:
+                    (out_dir / "failure-response.json").write_text(
+                        json.dumps({
+                            "workload_id": workload["id"],
+                            "repetition": repetition,
+                            "payload": payload,
+                            "response": response,
+                            "phase": phase,
+                        }, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    raise
+                encoded = json.dumps(
+                    semantic, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                output_hashes.append(hashlib.sha256(encoded).hexdigest())
+                outputs.append(semantic)
+                samples.append({
+                    **phase,
+                    "request_wall_ms": request_wall_ms,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "output_tps": (
+                        completion_tokens * 1000.0 / phase["wall_ms"]
+                        if phase["wall_ms"] > 0 else 0.0
+                    ),
+                })
+            metric_names = (
+                "request_wall_ms", "wall_ms", "output_tps", "constraint_cpu_ms",
+                "forced_build_ms", "forced_sync_ms", "filter_setup_ms",
+                "filter_ms", "plain_sample_ms", "residual_ms",
+                "forced_prefix_probe_ms", "sampling_mask_build_ms",
+                "oracle_compare_ms", "filtered_sample_ms", "eval_ms",
+                "candidate_tokens_tested", "parser_transition_count",
+                "parser_bytes_visited", "trie_nodes_visited",
+                "subtrees_pruned", "trie_leaf_tokens_emitted", "mask_cache_hit",
+                "mask_cache_miss", "constraint_state_checkpoint",
+                "constraint_state_rollback", "grammar_compile_ms",
+                "grammar_jit_ms", "trie_compile_ms", "trie_compiled_nodes",
+                "trie_memory_bytes", "static_mask_compile_ms",
+                "static_mask_memory_bytes", "dynamic_frontier_size",
+            )
+            metrics = {
+                name: summary([float(sample[name]) for sample in samples])
+                for name in metric_names
+                if all(name in sample for sample in samples)
+            }
+            results.append({
+                "id": workload["id"], "status": "measured",
+                "definition": {
+                    "kind": workload["kind"],
+                    "endpoint": workload["endpoint"],
+                    "weight": workload.get("weight", 1.0),
+                    "source": workload.get("source"),
+                },
+                "metrics": metrics,
+                "raw_rows": samples,
+                "server_output": {
+                    "deterministic": len(set(output_hashes)) == 1,
+                    "sha256": output_hashes[0],
+                    "semantic": outputs[0],
+                },
+                "oracle": {
+                    "compare_calls": sum(
+                        int(sample.get("oracle_compare_calls", 0))
+                        for sample in samples
+                    ),
+                    "divergences": sum(
+                        int(sample.get("oracle_divergences", 0))
+                        for sample in samples
+                    ),
+                },
+                "schema_validation": schema_validation,
+            })
+    except Exception:
+        (out_dir / "FAILED").write_text(utc_now() + "\n", encoding="utf-8")
+        raise
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+        if log_stream is not None:
+            log_stream.close()
+
+    baseline_record = (
+        None if args.baseline_run else read_json(Path(args.baseline), "baseline experiment")
+    )
+    deterministic = all(item["server_output"]["deterministic"] for item in results)
+    no_divergences = all(item["oracle"]["divergences"] == 0 for item in results)
+    schema_outputs_valid = all(
+        item["definition"]["kind"] != "json_schema" or
+        item.get("schema_validation", {}).get("status") == "PASS"
+        for item in results
+    )
+    prefix_probes_valid = all(
+        item["definition"]["kind"] != "json_schema" or
+        item.get("schema_validation", {}).get("status") in {"PASS", "PREFIX_ONLY"}
+        for item in results
+    )
+    source_witnesses_valid = all(
+        item["definition"].get("source", {}).get("witness_valid") is True
+        for item in results
+        if item["definition"]["kind"] == "json_schema"
+    )
+    schema_contract_valid = (
+        prefix_probes_valid
+        if args.jsonschemabench_prefix_steps else schema_outputs_valid
+    ) and source_witnesses_valid
+    unsupported_rejected = (
+        not unsupported_probes or
+        len(unsupported_results) == len(unsupported_probes)
+    )
+    unsupported_gate_status = (
+        unsupported_rejected if unsupported_probes else None
+    )
+    baseline_outputs_match = True
+    if baseline_record:
+        baseline_by_id = {item["id"]: item for item in baseline_record["workloads"]}
+        baseline_outputs_match = all(
+            baseline_by_id.get(item["id"], {}).get("server_output", {}).get("sha256") ==
+            item["server_output"]["sha256"]
+            for item in results
+        )
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "experiment_id": experiment_id,
+        "created_at": utc_now(),
+        "status": "measured",
+        "hypothesis": args.hypothesis,
+        "target_metric": "output_tps",
+        "suite": suite_name,
+        "runtime": "ds4-server-constrained",
+        "constraint_mode": args.constraint_mode,
+        "repetitions": args.repetitions,
+        "warmup_requests": args.warmup,
+        "baseline": {
+            "kind": "self" if args.baseline_run else "experiment",
+            "path": None if args.baseline_run else str(Path(args.baseline).resolve()),
+        },
+        "provenance": {
+            "git_commit": git_value("rev-parse", "HEAD"),
+            "git_dirty": bool(git_value("status", "--porcelain")),
+            "binary": str(binary.resolve()),
+            "binary_sha256": sha256(binary),
+            "model": str(model.resolve()),
+            "model_sha256": cached_sha256(model, Path(args.results)),
+            "workloads": str(workload_path.resolve()),
+            "workloads_sha256": sha256(workload_path),
+            "environment_overrides": {
+                **dict(item.split("=", 1) for item in args.env),
+                "DS4_SERVER_PHASE_PROFILE": "1",
+                "DS4_CONSTRAINT_MODE": args.constraint_mode,
+            },
+            "command": command,
+        },
+        "hardware": hardware_profile(),
+        "workloads": results,
+        "unsupported_schema_probes": {
+            "requested": len(unsupported_probes),
+            "rejected_before_inference": len(unsupported_results),
+            "passed": unsupported_gate_status,
+            "cases": unsupported_results,
+        },
+        "correctness": {
+            "status": (
+                "BASELINE" if args.baseline_run and deterministic and no_divergences and schema_contract_valid and unsupported_rejected else
+                "PASS" if deterministic and no_divergences and schema_contract_valid and unsupported_rejected and baseline_outputs_match else
+                "FAIL"
+            ),
+            "deterministic_outputs": deterministic,
+            "schema_outputs_valid": schema_outputs_valid,
+            "prefix_probes_valid": prefix_probes_valid,
+            "source_witnesses_valid": source_witnesses_valid,
+            "unsupported_rejected_before_inference": unsupported_gate_status,
+            "oracle_divergences": sum(
+                item["oracle"]["divergences"] for item in results
+            ),
+            "baseline_outputs_match": baseline_outputs_match,
+        },
+    }
+    record_path = out_dir / "experiment.json"
+    record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    print_compact(record)
+    print(f"\nwrote {record_path}", file=sys.stderr)
+    if baseline_record:
+        comparison = compare_records(baseline_record, record)
+        comparison_path = out_dir / "comparison.json"
+        comparison_path.write_text(
+            json.dumps(comparison, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"verdict: {comparison['verdict']} ({comparison['reason']})")
+    return 0
+
+
+def cmd_constrained_server(args: argparse.Namespace) -> int:
+    return benchmark_constrained_server(args)
+
+
 def metric_median(workload: dict[str, Any], name: str) -> float | None:
     value = workload.get("metrics", {}).get(name, {}).get("median")
     return float(value) if value is not None else None
@@ -1808,11 +2748,19 @@ def compare_records(baseline: dict[str, Any],
         if not previous or current.get("status") != "measured" or previous.get("status") != "measured":
             continue
         metrics = {}
-        for name in ("prefill_tps", "gen_tps", "gen_first_ms", "gen_steady_tps"):
+        for name in (
+            "prefill_tps", "gen_tps", "gen_first_ms", "gen_steady_tps",
+            "output_tps", "request_wall_ms", "wall_ms", "constraint_cpu_ms",
+            "forced_prefix_probe_ms", "sampling_mask_build_ms",
+            "candidate_tokens_tested", "parser_bytes_visited",
+            "grammar_compile_ms", "grammar_jit_ms",
+        ):
             old, new = metric_median(previous, name), metric_median(current, name)
             if old is None or new is None or old == 0:
                 continue
-            higher_is_better = name != "gen_first_ms"
+            higher_is_better = name in (
+                "prefill_tps", "gen_tps", "gen_steady_tps", "output_tps"
+            )
             raw = (new / old - 1.0) * 100.0
             metrics[name] = {
                 "baseline": old, "candidate": new, "delta_percent": raw,
@@ -1853,7 +2801,7 @@ def compare_records(baseline: dict[str, Any],
     )
     if correctness == "FAIL":
         verdict = "REJECT_CANDIDATE"
-        reason = "frontier logits drift exceeded a correctness gate"
+        reason = "candidate failed a correctness gate"
     elif correctness != "PASS":
         verdict = "NEED_MORE_DATA"
         reason = "performance comparison has no passing correctness report"
@@ -2238,7 +3186,10 @@ def print_compact(record: dict[str, Any]) -> None:
             print(f"  {workload['id']}: {workload['status']} ({workload['reason']})")
             continue
         fields = []
-        for name in ("prefill_tps", "gen_steady_tps", "gen_first_ms"):
+        for name in (
+            "prefill_tps", "gen_steady_tps", "output_tps",
+            "gen_first_ms", "constraint_cpu_ms",
+        ):
             metric = workload["metrics"].get(name)
             if metric:
                 suffix = " ms" if name.endswith("_ms") else " tok/s"
@@ -2317,6 +3268,72 @@ def build_parser() -> argparse.ArgumentParser:
     server_curve.add_argument("--env", action="append", default=[], metavar="NAME=VALUE")
     server_curve.add_argument("--results", default=str(DEFAULT_RESULTS))
     server_curve.set_defaults(func=cmd_server_curve)
+    constrained = commands.add_parser(
+        "constrained-server",
+        help="start ds4-server and benchmark tokenizer-exact DSML/JSON constraints",
+    )
+    constrained.add_argument("--id")
+    constrained.add_argument("--model", required=True)
+    constrained.add_argument("--binary", default=str(ROOT / "ds4-server"))
+    constrained.add_argument(
+        "--workloads", default=str(DEFAULT_CONSTRAINED_WORKLOADS)
+    )
+    constrained.add_argument(
+        "--jsonschemabench-subset",
+        nargs="?",
+        const=str(DEFAULT_JSONSCHEMABENCH_SUBSET),
+        help=(
+            "benchmark the supported entries from the pinned external subset; "
+            "optionally provide another subset path"
+        ),
+    )
+    constrained.add_argument(
+        "--jsonschemabench-id",
+        action="append",
+        help="run only this supported external schema id (repeatable)",
+    )
+    constrained.add_argument(
+        "--jsonschemabench-tier", choices=("smoke", "safety"),
+        default="safety",
+        help="pinned external tier used when no explicit schema id is supplied",
+    )
+    constrained.add_argument(
+        "--jsonschemabench-prefix-steps", type=int, default=0,
+        help=(
+            "run a bounded incomplete-prefix differential gate; 1..64 and "
+            "compare_new_vs_oracle are required"
+        ),
+    )
+    constrained.add_argument(
+        "--jsonschemabench-check-unsupported", action="store_true",
+        help=(
+            "require every pinned unsupported example to fail with HTTP 400 "
+            "before inference"
+        ),
+    )
+    constrained.add_argument("--suite", default="direction")
+    constrained.add_argument(
+        "--constraint-mode",
+        choices=(
+            "oracle_only", "incremental", "trie", "optimized",
+            "compare_new_vs_oracle",
+        ),
+        default="trie",
+    )
+    constrained.add_argument("--context", type=int, default=4096)
+    constrained.add_argument("--prefill-chunk", type=int, default=512)
+    constrained.add_argument("--repetitions", type=int, default=2)
+    constrained.add_argument("--warmup", type=int, default=0)
+    constrained.add_argument("--port", type=int, default=0)
+    constrained.add_argument("--startup-timeout", type=float, default=180.0)
+    constrained.add_argument("--timeout", type=float, default=1800.0)
+    constrained.add_argument("--hypothesis", required=True)
+    constrained_baseline = constrained.add_mutually_exclusive_group(required=True)
+    constrained_baseline.add_argument("--baseline-run", action="store_true")
+    constrained_baseline.add_argument("--baseline")
+    constrained.add_argument("--env", action="append", default=[], metavar="NAME=VALUE")
+    constrained.add_argument("--results", default=str(DEFAULT_RESULTS))
+    constrained.set_defaults(func=cmd_constrained_server)
     compare = commands.add_parser("compare", help="compare experiment records")
     compare.add_argument("baseline")
     compare.add_argument("candidate")

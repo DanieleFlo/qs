@@ -3,6 +3,48 @@
 Il punto d'ingresso unico è tools/perf_harness.py. Riusa ds4-bench e gli scorer
 Qwen esistenti: non introduce un secondo percorso di inferenza.
 
+## Constrained decoding DSML e JSON Schema
+
+Le suite riproducibili sono in `performance/constrained-workloads.json` e si
+eseguono con il sottocomando `constrained-server`. `oracle_only` congela la
+baseline esaustiva; `compare_new_vs_oracle` costruisce la mask candidata e
+quella oracle nella stessa richiesta e rende il run non promuovibile se trova
+divergenze.
+L'importer `tools/import_jsonschemabench_subset.py` genera il subset esterno
+pinned descritto da `performance/jsonschemabench-subset.json`, senza riscrivere
+gli schemi non supportati. Senza `--source` esegue uno sparse-fetch temporaneo
+del solo commit fissato; il corpus risultante esamina tutte le 9.558 schema e
+conserva tier `smoke` (12) e `safety` (32).
+
+    python3 tools/import_jsonschemabench_subset.py \
+      --output performance/jsonschemabench-subset.json
+
+Il gate esterno usa `jsonschema` come validatore indipendente, rifiuta chiavi
+JSON duplicate e verifica che ogni schema selezionato abbia un witness valido.
+La dipendenza è isolata dal core dell'harness:
+
+    python3 -m pip install -r performance/jsonschemabench-requirements.txt
+
+Il percorso rapido confronta candidate e oracle per otto token su tutte le 32
+schema, due volte. Un output terminato viene validato integralmente; un output
+che raggiunge il budget è registrato esplicitamente come `PREFIX_ONLY` e passa
+solo se ha consumato esattamente il budget e tutte le mask coincidono. Non va
+presentato come prova di completamento dell'intero output. Nello stesso gate i
+16 esempi non supportati devono ricevere HTTP 400 senza che il log mostri
+l'avvio dell'inferenza: una risposta 2xx o un'inferenza iniziata falliscono il
+run.
+
+    make test-jsonschemabench-safety \
+      JSONSCHEMABENCH_MODEL=gguf/Qwen3.6-27B-Q4_K_S.gguf
+
+Il profilo end-to-end del free-text DSML reale usa
+`tools/profile_agent_dsml_story.py`: costruisce il grafo `bootstrap-wiki`
+installato in `/agent`, richiede la storia nel tool `exit-with-info-tool`,
+verifica almeno 10k token di contesto e salva anche i fallimenti di schema.
+È un profilo funzionale costoso, non una fixture da includere nei test ordinari.
+Le quote di fase provengono dal log server con
+`DS4_SERVER_PHASE_PROFILE=1`; non vanno sostituite col solo tempo HTTP.
+
 ## Workflow eseguibili
 
 Le sequenze ripetute non vanno ricostruite dalla shell history. Sono mantenute

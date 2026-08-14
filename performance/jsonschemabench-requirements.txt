@@ -1,0 +1,2 @@
+# Independent validator used only by the JSONSchemaBench safety gate.
+jsonschema>=4.10,<5

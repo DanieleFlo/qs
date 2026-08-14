@@ -35855,6 +35855,18 @@ static int metal_graph_prompt_logits_test(
 
 typedef struct ds4_vocab ds4_vocab;
 
+enum { DS4_VOCAB_TRIE_NONE = UINT32_MAX };
+
+/* Flat indices keep the vocabulary trie compact and relocatable.  Tokens with
+ * identical decoded pieces share a node and form a chain through
+ * decoded_trie_token_next. */
+typedef struct {
+    uint32_t first_child;
+    uint32_t next_sibling;
+    uint32_t first_token;
+    unsigned char byte;
+} ds4_vocab_trie_node;
+
 static void embed_prompt(
         const ds4_model   * model,
         const ds4_weights * weights,
@@ -35981,6 +35993,10 @@ struct ds4_vocab {
     size_t *decoded_piece_offset;
     size_t decoded_piece_bytes;
     size_t decoded_piece_max;
+    ds4_vocab_trie_node *decoded_trie_nodes;
+    int32_t *decoded_trie_token_next;
+    uint32_t decoded_trie_node_count;
+    uint32_t decoded_trie_node_capacity;
     int n_vocab;
     int bos_id;
     int eos_id;
@@ -37014,6 +37030,8 @@ static void vocab_free(ds4_vocab *vocab) {
     free(vocab->token);
     free(vocab->decoded_piece_data);
     free(vocab->decoded_piece_offset);
+    free(vocab->decoded_trie_nodes);
+    free(vocab->decoded_trie_token_next);
     table_free(&vocab->token_to_id);
     table_free(&vocab->merge_rank);
     memset(vocab, 0, sizeof(*vocab));
@@ -37445,11 +37463,75 @@ static size_t vocab_token_text_decode_copy(const ds4_vocab *vocab, int token,
     return n;
 }
 
+static void vocab_decoded_piece_trie_init(ds4_vocab *vocab) {
+    if (!vocab || vocab->n_vocab <= 0 || !vocab->decoded_piece_offset ||
+        !vocab->decoded_piece_data || vocab->decoded_trie_nodes) return;
+    if (vocab->decoded_piece_bytes >= UINT32_MAX) {
+        ds4_die("decoded vocabulary piece trie exceeds 32-bit node indices");
+    }
+
+    /* One node per decoded byte is a strict upper bound before common-prefix
+     * sharing.  Allocate once during engine startup; traversal itself performs
+     * no allocation. */
+    const size_t capacity = vocab->decoded_piece_bytes + 1;
+    vocab->decoded_trie_nodes =
+        xmalloc(capacity * sizeof(vocab->decoded_trie_nodes[0]));
+    vocab->decoded_trie_token_next =
+        xmalloc((size_t)vocab->n_vocab *
+                sizeof(vocab->decoded_trie_token_next[0]));
+    vocab->decoded_trie_node_capacity = (uint32_t)capacity;
+    vocab->decoded_trie_node_count = 1;
+    vocab->decoded_trie_nodes[0] = (ds4_vocab_trie_node){
+        .first_child = DS4_VOCAB_TRIE_NONE,
+        .next_sibling = DS4_VOCAB_TRIE_NONE,
+        .first_token = DS4_VOCAB_TRIE_NONE,
+        .byte = 0,
+    };
+
+    for (int token = 0; token < vocab->n_vocab; token++) {
+        vocab->decoded_trie_token_next[token] = -1;
+        const size_t begin = vocab->decoded_piece_offset[token];
+        const size_t end = vocab->decoded_piece_offset[token + 1];
+        uint32_t node = 0;
+        for (size_t pos = begin; pos < end; pos++) {
+            const unsigned char byte =
+                (unsigned char)vocab->decoded_piece_data[pos];
+            uint32_t child = vocab->decoded_trie_nodes[node].first_child;
+            while (child != DS4_VOCAB_TRIE_NONE &&
+                   vocab->decoded_trie_nodes[child].byte != byte) {
+                child = vocab->decoded_trie_nodes[child].next_sibling;
+            }
+            if (child == DS4_VOCAB_TRIE_NONE) {
+                if (vocab->decoded_trie_node_count >=
+                    vocab->decoded_trie_node_capacity) {
+                    ds4_die("decoded vocabulary piece trie node bound violated");
+                }
+                child = vocab->decoded_trie_node_count++;
+                vocab->decoded_trie_nodes[child] = (ds4_vocab_trie_node){
+                    .first_child = DS4_VOCAB_TRIE_NONE,
+                    .next_sibling =
+                        vocab->decoded_trie_nodes[node].first_child,
+                    .first_token = DS4_VOCAB_TRIE_NONE,
+                    .byte = byte,
+                };
+                vocab->decoded_trie_nodes[node].first_child = child;
+            }
+            node = child;
+        }
+        vocab->decoded_trie_token_next[token] =
+            vocab->decoded_trie_nodes[node].first_token ==
+                    DS4_VOCAB_TRIE_NONE ?
+                -1 : (int32_t)vocab->decoded_trie_nodes[node].first_token;
+        vocab->decoded_trie_nodes[node].first_token = (uint32_t)token;
+    }
+}
+
 /* Constrained decoding visits token pieces vocabulary-wide. Decode the GPT-2
  * codepoint representation once at engine startup instead of reconstructing
  * every piece for every grammar state. Offsets make embedded NUL bytes safe. */
 static void vocab_decoded_piece_cache_init(ds4_vocab *vocab) {
-    if (!vocab || vocab->n_vocab <= 0 || vocab->decoded_piece_offset) return;
+    if (!vocab || vocab->n_vocab <= 0) return;
+    if (vocab->decoded_piece_offset) return;
     size_t raw_bytes = 0;
     for (int i = 0; i < vocab->n_vocab; i++) {
         if (vocab->token[i].len > SIZE_MAX - raw_bytes) {
@@ -48915,6 +48997,14 @@ struct ds4_session {
     float *logits;
     float *sample_probs;
     float *sample_masked;
+    uint8_t *sample_allowed;
+    uint8_t *sample_oracle_allowed;
+    char *constraint_longest_piece;
+    char *constraint_common_prefix;
+    char *constraint_trie_path;
+    size_t constraint_piece_cap;
+    uint64_t constraint_analysis_serial;
+    bool constraint_analysis_valid;
     float *mtp_logits;
     int greedy_splitkv_anchor_len;
 #ifndef DS4_NO_GPU
@@ -60029,6 +60119,11 @@ void ds4_session_free(ds4_session *s) {
     free(s->logits);
     free(s->sample_probs);
     free(s->sample_masked);
+    free(s->sample_allowed);
+    free(s->sample_oracle_allowed);
+    free(s->constraint_longest_piece);
+    free(s->constraint_common_prefix);
+    free(s->constraint_trie_path);
 #ifndef DS4_NO_GPU
     free(s->glm_mtp_hc);
     free(s->glm_mtp_logits0);
@@ -62140,12 +62235,14 @@ static bool forced_piece_is_complete_utf8(const char *s, size_t len) {
     return true;
 }
 
-int ds4_engine_forced_prefix_token(ds4_engine *e,
-                                   ds4_token_filter_fn filter, void *filter_ud,
-                                   bool ignore_leading_ws,
-                                   bool allow_common_prefix_on_conflict) {
+int ds4_engine_forced_prefix_token_profiled(
+        ds4_engine *e, ds4_token_filter_fn filter, void *filter_ud,
+        bool ignore_leading_ws, bool allow_common_prefix_on_conflict,
+        ds4_filtered_sample_metrics *metrics) {
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
     if (!e || !filter) return -1;
     ds4_vocab *vocab = &e->vocab;
+    const double setup_t0 = metrics ? now_sec() : 0.0;
     vocab_decoded_piece_cache_init(vocab);
     size_t max_piece = vocab->decoded_piece_max;
     char *longest = xmalloc(max_piece + 1);
@@ -62159,13 +62256,24 @@ int ds4_engine_forced_prefix_token(ds4_engine *e,
     int *accepted = NULL;
     int accepted_len = 0;
     int accepted_cap = 0;
+    if (metrics) {
+        metrics->setup_ms = (now_sec() - setup_t0) * 1000.0;
+        metrics->vocab_tokens = (uint32_t)vocab->n_vocab;
+    }
+    const double filter_t0 = metrics ? now_sec() : 0.0;
 
     for (int i = 0; i < vocab->n_vocab; i++) {
         const char *piece = NULL;
         size_t n = 0;
-        if (!vocab_token_text_view(vocab, i, &piece, &n) || !n ||
+        if (!vocab_token_text_view(vocab, i, &piece, &n)) continue;
+        if (metrics) {
+            metrics->filter_calls++;
+            metrics->decoded_piece_bytes += n;
+        }
+        if (!n ||
             (ignore_leading_ws && isspace((unsigned char)piece[0])) ||
             !filter(filter_ud, i, piece, n)) continue;
+        if (metrics) metrics->accepted_tokens++;
         if (accepted_len == accepted_cap) {
             accepted_cap = accepted_cap ? accepted_cap * 2 : 64;
             accepted = xrealloc(accepted,
@@ -62225,8 +62333,708 @@ int ds4_engine_forced_prefix_token(ds4_engine *e,
     free(accepted);
     free(common_prefix);
     free(longest);
+    if (metrics) {
+        metrics->filter_ms = (now_sec() - filter_t0) * 1000.0;
+        metrics->finite_allowed_tokens = metrics->accepted_tokens;
+    }
     return forced;
 }
+
+int ds4_engine_forced_prefix_token(ds4_engine *e,
+                                   ds4_token_filter_fn filter, void *filter_ud,
+                                   bool ignore_leading_ws,
+                                   bool allow_common_prefix_on_conflict) {
+    return ds4_engine_forced_prefix_token_profiled(
+        e, filter, filter_ud, ignore_leading_ws,
+        allow_common_prefix_on_conflict, NULL);
+}
+
+static void constraint_analysis_workspace_init(ds4_session *s,
+                                               ds4_vocab *vocab) {
+    if (!s->sample_masked) {
+        s->sample_masked =
+            xmalloc((size_t)vocab->n_vocab * sizeof(s->sample_masked[0]));
+    }
+    if (!s->sample_allowed) {
+        s->sample_allowed =
+            xcalloc((size_t)vocab->n_vocab, sizeof(s->sample_allowed[0]));
+    }
+    if (!s->sample_oracle_allowed) {
+        s->sample_oracle_allowed =
+            xcalloc((size_t)vocab->n_vocab,
+                    sizeof(s->sample_oracle_allowed[0]));
+    }
+    size_t need = vocab->decoded_piece_max + 1;
+    if (need > s->constraint_piece_cap) {
+        s->constraint_longest_piece =
+            xrealloc(s->constraint_longest_piece, need);
+        s->constraint_common_prefix =
+            xrealloc(s->constraint_common_prefix, need);
+        s->constraint_trie_path =
+            xrealloc(s->constraint_trie_path, need);
+        s->constraint_piece_cap = need;
+    }
+}
+
+int ds4_session_constraint_analyze(
+        ds4_session *s, ds4_token_filter_fn filter, void *filter_ud,
+        bool ignore_leading_ws, bool allow_common_prefix_on_conflict,
+        ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics) {
+    if (analysis) memset(analysis, 0, sizeof(*analysis));
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
+    if (!s || !s->engine || !filter || !analysis) return 1;
+
+    ds4_vocab *vocab = &s->engine->vocab;
+    s->constraint_analysis_valid = false;
+    const double setup_t0 = metrics ? now_sec() : 0.0;
+    vocab_decoded_piece_cache_init(vocab);
+    constraint_analysis_workspace_init(s, vocab);
+    if (metrics) {
+        metrics->setup_ms = (now_sec() - setup_t0) * 1000.0;
+        metrics->vocab_tokens = (uint32_t)vocab->n_vocab;
+    }
+
+    char *longest = s->constraint_longest_piece;
+    char *common_prefix = s->constraint_common_prefix;
+    size_t longest_len = 0;
+    size_t common_len = 0;
+    size_t best_complete_len = 0;
+    int best_complete_token = -1;
+    bool initialized = false;
+    bool conflict = false;
+    uint32_t allowed = 0;
+    uint32_t finite_allowed = 0;
+    const double filter_t0 = metrics ? now_sec() : 0.0;
+
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        const char *piece = NULL;
+        size_t n = 0;
+        bool keep = false;
+        if (vocab_token_text_view(vocab, i, &piece, &n)) {
+            if (metrics) {
+                metrics->filter_calls++;
+                metrics->decoded_piece_bytes += n;
+            }
+            keep = filter(filter_ud, i, piece, n);
+        }
+        s->sample_allowed[i] = keep ? 1u : 0u;
+        s->sample_masked[i] = keep ? s->logits[i] : DS4_NEG_INF;
+        if (!keep) continue;
+        allowed++;
+        if (isfinite(s->sample_masked[i])) finite_allowed++;
+
+        if (!n || (ignore_leading_ws &&
+                   isspace((unsigned char)piece[0]))) continue;
+        bool complete_utf8 = forced_piece_is_complete_utf8(piece, n);
+        if (complete_utf8 && n > best_complete_len) {
+            best_complete_token = i;
+            best_complete_len = n;
+        }
+        if (!initialized) {
+            memcpy(longest, piece, n);
+            memcpy(common_prefix, piece, n);
+            longest_len = n;
+            common_len = n;
+            initialized = true;
+            continue;
+        }
+        size_t prefix_limit = common_len < n ? common_len : n;
+        size_t prefix_n = 0;
+        while (prefix_n < prefix_limit &&
+               common_prefix[prefix_n] == piece[prefix_n]) prefix_n++;
+        common_len = prefix_n;
+        size_t common = longest_len < n ? longest_len : n;
+        if (memcmp(longest, piece, common)) {
+            conflict = true;
+        } else if (n > longest_len) {
+            memcpy(longest, piece, n);
+            longest_len = n;
+        }
+    }
+
+    int forced = initialized && !conflict ? best_complete_token : -1;
+    if (initialized && conflict && common_len &&
+        allow_common_prefix_on_conflict) {
+        size_t best_len = 0;
+        for (int i = 0; i < vocab->n_vocab; i++) {
+            if (!s->sample_allowed[i]) continue;
+            const char *piece = NULL;
+            size_t n = 0;
+            if (vocab_token_text_view(vocab, i, &piece, &n) && n &&
+                !(ignore_leading_ws && isspace((unsigned char)piece[0])) &&
+                forced_piece_is_complete_utf8(piece, n) &&
+                n <= common_len && n > best_len &&
+                !memcmp(piece, common_prefix, n)) {
+                forced = i;
+                best_len = n;
+            }
+        }
+    }
+
+    if (metrics) {
+        metrics->filter_ms = (now_sec() - filter_t0) * 1000.0;
+        metrics->accepted_tokens = allowed;
+        metrics->finite_allowed_tokens = finite_allowed;
+    }
+    s->constraint_analysis_serial++;
+    if (!s->constraint_analysis_serial) s->constraint_analysis_serial++;
+    s->constraint_analysis_valid = true;
+    analysis->serial = s->constraint_analysis_serial;
+    analysis->candidate_tokens_tested = (uint64_t)vocab->n_vocab;
+    analysis->decoded_piece_bytes = metrics ? metrics->decoded_piece_bytes :
+        (uint64_t)vocab->decoded_piece_bytes;
+    analysis->vocab_tokens = (uint32_t)vocab->n_vocab;
+    analysis->allowed_tokens = allowed;
+    analysis->finite_allowed_tokens = finite_allowed;
+    analysis->forced_token = forced;
+    analysis->analysis_complete = true;
+    return 0;
+}
+
+typedef struct {
+    ds4_session *session;
+    ds4_vocab *vocab;
+    ds4_token_filter_fn filter;
+    void *filter_ud;
+    ds4_filtered_sample_metrics *metrics;
+    bool ignore_leading_ws;
+    char *path;
+    char *longest;
+    char *common_prefix;
+    size_t longest_len;
+    size_t common_len;
+    size_t best_complete_len;
+    int best_complete_token;
+    bool initialized;
+    bool conflict;
+    uint32_t allowed;
+    uint32_t finite_allowed;
+    uint64_t candidate_tokens_tested;
+    uint64_t decoded_piece_bytes;
+} constraint_trie_walk;
+
+static void constraint_trie_record_allowed(constraint_trie_walk *walk,
+                                           int token, size_t piece_len) {
+    walk->allowed++;
+    if (isfinite(walk->session->sample_masked[token])) {
+        walk->finite_allowed++;
+    }
+    if (!piece_len ||
+        (walk->ignore_leading_ws &&
+         isspace((unsigned char)walk->path[0]))) return;
+
+    const bool complete_utf8 =
+        forced_piece_is_complete_utf8(walk->path, piece_len);
+    if (complete_utf8 &&
+        (piece_len > walk->best_complete_len ||
+         (piece_len == walk->best_complete_len &&
+          (walk->best_complete_token < 0 ||
+           token < walk->best_complete_token)))) {
+        walk->best_complete_token = token;
+        walk->best_complete_len = piece_len;
+    }
+    if (!walk->initialized) {
+        memcpy(walk->longest, walk->path, piece_len);
+        memcpy(walk->common_prefix, walk->path, piece_len);
+        walk->longest_len = piece_len;
+        walk->common_len = piece_len;
+        walk->initialized = true;
+        return;
+    }
+    const size_t prefix_limit =
+        walk->common_len < piece_len ? walk->common_len : piece_len;
+    size_t prefix_len = 0;
+    while (prefix_len < prefix_limit &&
+           walk->common_prefix[prefix_len] == walk->path[prefix_len]) {
+        prefix_len++;
+    }
+    walk->common_len = prefix_len;
+    const size_t common =
+        walk->longest_len < piece_len ? walk->longest_len : piece_len;
+    if (memcmp(walk->longest, walk->path, common)) {
+        walk->conflict = true;
+    } else if (piece_len > walk->longest_len) {
+        memcpy(walk->longest, walk->path, piece_len);
+        walk->longest_len = piece_len;
+    }
+}
+
+static void constraint_trie_test_terminals(constraint_trie_walk *walk,
+                                           uint32_t node,
+                                           size_t piece_len) {
+    uint32_t token = walk->vocab->decoded_trie_nodes[node].first_token;
+    while (token != DS4_VOCAB_TRIE_NONE) {
+        walk->candidate_tokens_tested++;
+        walk->decoded_piece_bytes += piece_len;
+        if (walk->metrics) {
+            walk->metrics->filter_calls++;
+            walk->metrics->decoded_piece_bytes += piece_len;
+            walk->metrics->trie_leaf_tokens_emitted++;
+        }
+        const bool keep = walk->filter(
+            walk->filter_ud, (int)token, walk->path, piece_len);
+        walk->session->sample_allowed[token] = keep ? 1u : 0u;
+        walk->session->sample_masked[token] =
+            keep ? walk->session->logits[token] : DS4_NEG_INF;
+        if (keep) {
+            if (walk->metrics) walk->metrics->accepted_tokens++;
+            constraint_trie_record_allowed(walk, (int)token, piece_len);
+        }
+        const int32_t next = walk->vocab->decoded_trie_token_next[token];
+        token = next < 0 ? DS4_VOCAB_TRIE_NONE : (uint32_t)next;
+    }
+}
+
+static void constraint_trie_walk_children(constraint_trie_walk *walk,
+                                          uint32_t parent,
+                                          size_t parent_len,
+                                          const uint8_t *root_probe) {
+    uint32_t node = walk->vocab->decoded_trie_nodes[parent].first_child;
+    while (node != DS4_VOCAB_TRIE_NONE) {
+        if (node >= walk->vocab->decoded_trie_node_count ||
+            parent_len >= walk->vocab->decoded_piece_max) {
+            /* A corrupt trie must never broaden the mask.  Leaving this
+             * subtree at the initialized reject value is fail-closed. */
+            if (walk->metrics) walk->metrics->trie_subtrees_pruned++;
+            node = node < walk->vocab->decoded_trie_node_count ?
+                walk->vocab->decoded_trie_nodes[node].next_sibling :
+                DS4_VOCAB_TRIE_NONE;
+            continue;
+        }
+        const unsigned char byte = walk->vocab->decoded_trie_nodes[node].byte;
+        walk->path[parent_len] = (char)byte;
+        const size_t piece_len = parent_len + 1;
+        bool prefix_possible = false;
+        if (root_probe && parent == 0) {
+            prefix_possible = root_probe[byte] != 0;
+        } else {
+            walk->decoded_piece_bytes += piece_len;
+            if (walk->metrics) {
+                walk->metrics->trie_nodes_visited++;
+                walk->metrics->filter_calls++;
+                walk->metrics->decoded_piece_bytes += piece_len;
+            }
+            prefix_possible = walk->filter(
+                walk->filter_ud, -1, walk->path, piece_len);
+        }
+        if (!prefix_possible) {
+            if (walk->metrics) walk->metrics->trie_subtrees_pruned++;
+        } else {
+            constraint_trie_test_terminals(walk, node, piece_len);
+            constraint_trie_walk_children(
+                walk, node, piece_len, NULL);
+        }
+        node = walk->vocab->decoded_trie_nodes[node].next_sibling;
+    }
+}
+
+int ds4_session_constraint_analyze_trie(
+        ds4_session *s, ds4_token_filter_fn filter, void *filter_ud,
+        bool ignore_leading_ws, bool allow_common_prefix_on_conflict,
+        ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics) {
+    if (analysis) memset(analysis, 0, sizeof(*analysis));
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
+    if (!s || !s->engine || !filter || !analysis) return 1;
+
+    ds4_vocab *vocab = &s->engine->vocab;
+    s->constraint_analysis_valid = false;
+    const double setup_t0 = metrics ? now_sec() : 0.0;
+    vocab_decoded_piece_cache_init(vocab);
+    const bool trie_cold = !vocab->decoded_trie_nodes;
+    const double trie_compile_t0 = metrics && trie_cold ? now_sec() : 0.0;
+    vocab_decoded_piece_trie_init(vocab);
+    constraint_analysis_workspace_init(s, vocab);
+    if (!vocab->decoded_trie_nodes ||
+        !vocab->decoded_trie_token_next ||
+        !vocab->decoded_trie_node_count) return 1;
+    if (metrics) {
+        metrics->setup_ms = (now_sec() - setup_t0) * 1000.0;
+        metrics->trie_compile_ms = trie_cold ?
+            (now_sec() - trie_compile_t0) * 1000.0 : 0.0;
+        metrics->trie_compiled_nodes = vocab->decoded_trie_node_count;
+        metrics->trie_memory_bytes =
+            (uint64_t)vocab->decoded_trie_node_capacity *
+                sizeof(vocab->decoded_trie_nodes[0]) +
+            (uint64_t)vocab->n_vocab *
+                sizeof(vocab->decoded_trie_token_next[0]);
+        metrics->vocab_tokens = (uint32_t)vocab->n_vocab;
+    }
+
+    for (int token = 0; token < vocab->n_vocab; token++) {
+        s->sample_allowed[token] = 0;
+        s->sample_masked[token] = DS4_NEG_INF;
+    }
+    constraint_trie_walk walk = {
+        .session = s,
+        .vocab = vocab,
+        .filter = filter,
+        .filter_ud = filter_ud,
+        .metrics = metrics,
+        .ignore_leading_ws = ignore_leading_ws,
+        .path = s->constraint_trie_path,
+        .longest = s->constraint_longest_piece,
+        .common_prefix = s->constraint_common_prefix,
+        .best_complete_token = -1,
+    };
+
+    /* A trie wins only if the current grammar rejects most first-byte
+     * families.  Probe the at-most-256 root edges once; broad lexical states
+     * (notably free strings and private reasoning) retain the exhaustive path
+     * rather than paying for every internal trie node. */
+    uint8_t root_probe[256] = {0};
+    uint32_t root_children = 0;
+    uint32_t root_accepted = 0;
+    const double filter_t0 = metrics ? now_sec() : 0.0;
+    uint32_t node = vocab->decoded_trie_nodes[0].first_child;
+    while (node != DS4_VOCAB_TRIE_NONE) {
+        if (node >= vocab->decoded_trie_node_count) break;
+        const unsigned char byte = vocab->decoded_trie_nodes[node].byte;
+        walk.path[0] = (char)byte;
+        walk.decoded_piece_bytes++;
+        root_children++;
+        if (metrics) {
+            metrics->trie_nodes_visited++;
+            metrics->filter_calls++;
+            metrics->decoded_piece_bytes++;
+        }
+        if (filter(filter_ud, -1, walk.path, 1)) {
+            root_probe[byte] = 1;
+            root_accepted++;
+        }
+        node = vocab->decoded_trie_nodes[node].next_sibling;
+    }
+
+    enum { DS4_TRIE_ROOT_ACCEPT_LIMIT = 64 };
+    if (root_accepted > DS4_TRIE_ROOT_ACCEPT_LIMIT) {
+        if (metrics) {
+            metrics->filter_ms = (now_sec() - filter_t0) * 1000.0;
+        }
+        ds4_filtered_sample_metrics fallback = {0};
+        ds4_filtered_sample_metrics probe = metrics ? *metrics :
+            (ds4_filtered_sample_metrics){0};
+        const int rc = ds4_session_constraint_analyze(
+            s, filter, filter_ud, ignore_leading_ws,
+            allow_common_prefix_on_conflict, analysis,
+            metrics ? &fallback : NULL);
+        if (metrics) {
+            *metrics = fallback;
+            metrics->setup_ms += probe.setup_ms;
+            metrics->filter_ms += probe.filter_ms;
+            metrics->decoded_piece_bytes += probe.decoded_piece_bytes;
+            metrics->filter_calls += probe.filter_calls;
+            metrics->trie_nodes_visited = probe.trie_nodes_visited;
+            metrics->trie_compile_ms += probe.trie_compile_ms;
+            metrics->trie_compiled_nodes = probe.trie_compiled_nodes;
+            metrics->trie_memory_bytes = probe.trie_memory_bytes;
+        }
+        return rc;
+    }
+
+    constraint_trie_test_terminals(&walk, 0, 0);
+    constraint_trie_walk_children(&walk, 0, 0, root_probe);
+
+    int forced = walk.initialized && !walk.conflict ?
+        walk.best_complete_token : -1;
+    if (walk.initialized && walk.conflict && walk.common_len &&
+        allow_common_prefix_on_conflict) {
+        size_t best_len = 0;
+        for (int token = 0; token < vocab->n_vocab; token++) {
+            if (!s->sample_allowed[token]) continue;
+            const char *piece = NULL;
+            size_t piece_len = 0;
+            if (vocab_token_text_view(vocab, token, &piece, &piece_len) &&
+                piece_len &&
+                !(ignore_leading_ws &&
+                  isspace((unsigned char)piece[0])) &&
+                forced_piece_is_complete_utf8(piece, piece_len) &&
+                piece_len <= walk.common_len && piece_len > best_len &&
+                !memcmp(piece, walk.common_prefix, piece_len)) {
+                forced = token;
+                best_len = piece_len;
+            }
+        }
+    }
+
+    if (metrics) {
+        metrics->filter_ms = (now_sec() - filter_t0) * 1000.0;
+        metrics->finite_allowed_tokens = walk.finite_allowed;
+        (void)root_children;
+    }
+    s->constraint_analysis_serial++;
+    if (!s->constraint_analysis_serial) s->constraint_analysis_serial++;
+    s->constraint_analysis_valid = true;
+    analysis->serial = s->constraint_analysis_serial;
+    analysis->candidate_tokens_tested = walk.candidate_tokens_tested;
+    analysis->decoded_piece_bytes = walk.decoded_piece_bytes;
+    analysis->vocab_tokens = (uint32_t)vocab->n_vocab;
+    analysis->allowed_tokens = walk.allowed;
+    analysis->finite_allowed_tokens = walk.finite_allowed;
+    analysis->forced_token = forced;
+    analysis->analysis_complete = true;
+    return 0;
+}
+
+int ds4_session_constraint_analyze_partition(
+        ds4_session *s, const uint8_t *base_allowed, uint32_t base_vocab,
+        const int *dynamic_tokens, uint32_t dynamic_count,
+        ds4_token_filter_fn filter, void *filter_ud,
+        ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics) {
+    if (analysis) memset(analysis, 0, sizeof(*analysis));
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
+    if (!s || !s->engine || !base_allowed || !filter || !analysis ||
+        (dynamic_count && !dynamic_tokens)) return 1;
+
+    ds4_vocab *vocab = &s->engine->vocab;
+    if (base_vocab != (uint32_t)vocab->n_vocab) return 1;
+    for (uint32_t j = 0; j < dynamic_count; j++) {
+        const int token = dynamic_tokens[j];
+        if (token < 0 || token >= vocab->n_vocab || base_allowed[token]) {
+            return 1;
+        }
+    }
+
+    s->constraint_analysis_valid = false;
+    const double setup_t0 = metrics ? now_sec() : 0.0;
+    vocab_decoded_piece_cache_init(vocab);
+    constraint_analysis_workspace_init(s, vocab);
+    if (metrics) {
+        metrics->setup_ms = (now_sec() - setup_t0) * 1000.0;
+        metrics->vocab_tokens = (uint32_t)vocab->n_vocab;
+    }
+
+    uint32_t allowed = 0;
+    uint32_t finite_allowed = 0;
+    const double filter_t0 = metrics ? now_sec() : 0.0;
+    for (int token = 0; token < vocab->n_vocab; token++) {
+        const bool keep = base_allowed[token] != 0;
+        s->sample_allowed[token] = keep ? 1u : 0u;
+        s->sample_masked[token] = keep ? s->logits[token] : DS4_NEG_INF;
+        if (keep) {
+            allowed++;
+            if (isfinite(s->sample_masked[token])) finite_allowed++;
+        }
+    }
+    uint64_t decoded_piece_bytes = 0;
+    for (uint32_t j = 0; j < dynamic_count; j++) {
+        const int token = dynamic_tokens[j];
+        const char *piece = NULL;
+        size_t piece_len = 0;
+        bool keep = false;
+        if (vocab_token_text_view(vocab, token, &piece, &piece_len)) {
+            decoded_piece_bytes += piece_len;
+            if (metrics) {
+                metrics->filter_calls++;
+                metrics->decoded_piece_bytes += piece_len;
+            }
+            keep = filter(filter_ud, token, piece, piece_len);
+        }
+        s->sample_allowed[token] = keep ? 1u : 0u;
+        s->sample_masked[token] = keep ? s->logits[token] : DS4_NEG_INF;
+        if (keep) {
+            allowed++;
+            if (isfinite(s->sample_masked[token])) finite_allowed++;
+        }
+    }
+    if (metrics) {
+        metrics->filter_ms = (now_sec() - filter_t0) * 1000.0;
+        metrics->accepted_tokens = allowed;
+        metrics->finite_allowed_tokens = finite_allowed;
+    }
+
+    s->constraint_analysis_serial++;
+    if (!s->constraint_analysis_serial) s->constraint_analysis_serial++;
+    s->constraint_analysis_valid = true;
+    analysis->serial = s->constraint_analysis_serial;
+    analysis->candidate_tokens_tested = dynamic_count;
+    analysis->decoded_piece_bytes = decoded_piece_bytes;
+    analysis->vocab_tokens = (uint32_t)vocab->n_vocab;
+    analysis->allowed_tokens = allowed;
+    analysis->finite_allowed_tokens = finite_allowed;
+    analysis->forced_token = -1;
+    analysis->analysis_complete = true;
+    return 0;
+}
+
+int ds4_session_sample_constraint_analysis(
+        ds4_session *s, float temperature, int top_k,
+        float top_p, float min_p, uint64_t *rng,
+        const ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics) {
+    if (!s || !analysis || !analysis->analysis_complete ||
+        !s->constraint_analysis_valid ||
+        analysis->serial != s->constraint_analysis_serial) return -1;
+    const double sample_t0 = metrics ? now_sec() : 0.0;
+    int token = analysis->finite_allowed_tokens ?
+        sample_top_p_min_p(s->sample_masked, analysis->vocab_tokens,
+                           temperature, top_k, top_p, min_p,
+                           rng, s->sample_probs) : -1;
+    if (metrics) metrics->sample_ms += (now_sec() - sample_t0) * 1000.0;
+    return token;
+}
+
+bool ds4_session_constraint_compare_oracle(
+        ds4_session *s, ds4_token_filter_fn oracle, void *oracle_ud,
+        ds4_constraint_analysis *analysis,
+        ds4_constraint_difference *difference,
+        ds4_filtered_sample_metrics *metrics) {
+    if (difference) {
+        difference->token = -1;
+        difference->analyzed_allowed = false;
+        difference->oracle_allowed = false;
+    }
+    if (metrics) memset(metrics, 0, sizeof(*metrics));
+    if (!s || !s->engine || !oracle || !analysis ||
+        !analysis->analysis_complete || !s->constraint_analysis_valid ||
+        analysis->serial != s->constraint_analysis_serial) return false;
+
+    ds4_vocab *vocab = &s->engine->vocab;
+    const double setup_t0 = metrics ? now_sec() : 0.0;
+    vocab_decoded_piece_cache_init(vocab);
+    constraint_analysis_workspace_init(s, vocab);
+    if (metrics) {
+        metrics->setup_ms = (now_sec() - setup_t0) * 1000.0;
+        metrics->vocab_tokens = (uint32_t)vocab->n_vocab;
+    }
+    const double filter_t0 = metrics ? now_sec() : 0.0;
+    int first_difference = -1;
+    uint32_t allowed = 0;
+    uint32_t finite_allowed = 0;
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        const char *piece = NULL;
+        size_t n = 0;
+        bool keep = false;
+        if (vocab_token_text_view(vocab, i, &piece, &n)) {
+            if (metrics) {
+                metrics->filter_calls++;
+                metrics->decoded_piece_bytes += n;
+            }
+            keep = oracle(oracle_ud, i, piece, n);
+        }
+        s->sample_oracle_allowed[i] = keep ? 1u : 0u;
+        if (keep) {
+            allowed++;
+            if (isfinite(s->logits[i])) finite_allowed++;
+        }
+        if (first_difference < 0 &&
+            s->sample_oracle_allowed[i] != s->sample_allowed[i]) {
+            first_difference = i;
+        }
+    }
+    if (metrics) {
+        metrics->filter_ms = (now_sec() - filter_t0) * 1000.0;
+        metrics->accepted_tokens = allowed;
+        metrics->finite_allowed_tokens = finite_allowed;
+    }
+    if (first_difference < 0) return true;
+
+    if (difference) {
+        difference->token = first_difference;
+        difference->analyzed_allowed =
+            s->sample_allowed[first_difference] != 0;
+        difference->oracle_allowed =
+            s->sample_oracle_allowed[first_difference] != 0;
+    }
+    for (int i = 0; i < vocab->n_vocab; i++) {
+        bool keep = s->sample_oracle_allowed[i] != 0;
+        s->sample_allowed[i] = keep ? 1u : 0u;
+        s->sample_masked[i] = keep ? s->logits[i] : DS4_NEG_INF;
+    }
+    analysis->allowed_tokens = allowed;
+    analysis->finite_allowed_tokens = finite_allowed;
+    analysis->forced_token = -1;
+    return false;
+}
+
+#ifdef DS4_TEST_HOOKS
+static bool ds4_test_constraint_prefix_filter(void *ud, int token,
+                                              const char *piece,
+                                              size_t piece_len) {
+    (void)token;
+    const char *target = ud;
+    const size_t target_len = strlen(target);
+    return piece_len > 0 && piece_len <= target_len &&
+        !memcmp(piece, target, piece_len);
+}
+
+bool ds4_test_constraint_trie_mask(void) {
+    static const char *pieces[] = {
+        "", "{", "{\"", "{\"a", "x", "xy", "{\"a",
+    };
+    enum { N = (int)(sizeof(pieces) / sizeof(pieces[0])) };
+    ds4_engine engine = {0};
+    ds4_session session = {0};
+    session.engine = &engine;
+    engine.vocab.n_vocab = N;
+    engine.vocab.decoded_piece_offset =
+        xcalloc((size_t)N + 1, sizeof(size_t));
+    size_t bytes = 0;
+    for (int i = 0; i < N; i++) bytes += strlen(pieces[i]);
+    engine.vocab.decoded_piece_data = xmalloc(bytes + 1);
+    size_t used = 0;
+    for (int i = 0; i < N; i++) {
+        const size_t len = strlen(pieces[i]);
+        engine.vocab.decoded_piece_offset[i] = used;
+        memcpy(engine.vocab.decoded_piece_data + used, pieces[i], len);
+        used += len;
+        if (len > engine.vocab.decoded_piece_max) {
+            engine.vocab.decoded_piece_max = len;
+        }
+    }
+    engine.vocab.decoded_piece_offset[N] = used;
+    engine.vocab.decoded_piece_data[used] = '\0';
+    engine.vocab.decoded_piece_bytes = used;
+    session.logits = xmalloc((size_t)N * sizeof(session.logits[0]));
+    for (int i = 0; i < N; i++) session.logits[i] = (float)i;
+
+    ds4_constraint_analysis analysis = {0};
+    ds4_filtered_sample_metrics metrics = {0};
+    const char *target = "{\"a\":1}";
+    bool ok = ds4_session_constraint_analyze_trie(
+        &session, ds4_test_constraint_prefix_filter, (void *)target,
+        false, true, &analysis, &metrics) == 0;
+    ok = ok && analysis.analysis_complete && analysis.allowed_tokens == 4 &&
+        analysis.candidate_tokens_tested == 5 &&
+        metrics.trie_leaf_tokens_emitted == 5 &&
+        metrics.trie_subtrees_pruned >= 1 &&
+        metrics.trie_compiled_nodes > 1 && metrics.trie_memory_bytes > 0;
+    ds4_constraint_difference difference = {0};
+    ok = ok && ds4_session_constraint_compare_oracle(
+        &session, ds4_test_constraint_prefix_filter, (void *)target,
+        &analysis, &difference, NULL) && difference.token == -1;
+
+    const uint8_t base_allowed[N] = {0, 1, 0, 0, 0, 0, 0};
+    const int dynamic_tokens[] = {0, 2, 3, 4, 5, 6};
+    memset(&metrics, 0, sizeof(metrics));
+    ok = ok && ds4_session_constraint_analyze_partition(
+        &session, base_allowed, N, dynamic_tokens,
+        (uint32_t)(sizeof(dynamic_tokens) / sizeof(dynamic_tokens[0])),
+        ds4_test_constraint_prefix_filter, (void *)target,
+        &analysis, &metrics) == 0;
+    ok = ok && analysis.allowed_tokens == 4 &&
+        analysis.candidate_tokens_tested == 6 &&
+        metrics.filter_calls == 6 && analysis.forced_token == -1;
+    memset(&difference, 0, sizeof(difference));
+    ok = ok && ds4_session_constraint_compare_oracle(
+        &session, ds4_test_constraint_prefix_filter, (void *)target,
+        &analysis, &difference, NULL) && difference.token == -1;
+
+    free(session.logits);
+    free(session.sample_masked);
+    free(session.sample_allowed);
+    free(session.sample_oracle_allowed);
+    free(session.constraint_longest_piece);
+    free(session.constraint_common_prefix);
+    free(session.constraint_trie_path);
+    free(engine.vocab.decoded_piece_data);
+    free(engine.vocab.decoded_piece_offset);
+    free(engine.vocab.decoded_trie_nodes);
+    free(engine.vocab.decoded_trie_token_next);
+    return ok;
+}
+#endif
 
 int ds4_session_top_logprobs(ds4_session *s, ds4_token_score *out, int k) {
     if (!s || !out || k <= 0) return 0;

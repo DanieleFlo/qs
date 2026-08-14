@@ -380,12 +380,33 @@ typedef struct {
     double setup_ms;
     double filter_ms;
     double sample_ms;
+    double trie_compile_ms;
     uint64_t decoded_piece_bytes;
+    uint64_t trie_nodes_visited;
+    uint64_t trie_subtrees_pruned;
+    uint64_t trie_leaf_tokens_emitted;
+    uint64_t trie_compiled_nodes;
+    uint64_t trie_memory_bytes;
     uint32_t vocab_tokens;
     uint32_t filter_calls;
     uint32_t accepted_tokens;
     uint32_t finite_allowed_tokens;
 } ds4_filtered_sample_metrics;
+typedef struct {
+    uint64_t serial;
+    uint64_t candidate_tokens_tested;
+    uint64_t decoded_piece_bytes;
+    uint32_t vocab_tokens;
+    uint32_t allowed_tokens;
+    uint32_t finite_allowed_tokens;
+    int forced_token;
+    bool analysis_complete;
+} ds4_constraint_analysis;
+typedef struct {
+    int token;
+    bool analyzed_allowed;
+    bool oracle_allowed;
+} ds4_constraint_difference;
 /* Sample after assigning zero probability to tokens rejected by filter.  The
  * callback sees decoded token bytes, not tokenizer-internal GPT-2 codepoints. */
 int ds4_session_sample_filtered(ds4_session *s, float temperature, int top_k,
@@ -398,6 +419,52 @@ int ds4_session_sample_filtered_profiled(
         float top_p, float min_p, uint64_t *rng,
         ds4_token_filter_fn filter, void *filter_ud,
         ds4_filtered_sample_metrics *metrics);
+/* Build one complete exhaustive allowed-token mask while also deriving the
+ * forced-prefix decision.  The result is session-owned and remains usable only
+ * until the next constraint analysis on that session. */
+int ds4_session_constraint_analyze(
+        ds4_session *s, ds4_token_filter_fn filter, void *filter_ud,
+        bool ignore_leading_ws, bool allow_common_prefix_on_conflict,
+        ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics);
+/* Build the same complete mask through the tokenizer's byte-level piece trie.
+ * The callback is additionally invoked with token == -1 for proper piece
+ * prefixes; returning false prunes every ordinary token below that prefix.
+ * A token-dependent callback must conservatively return true for such probes
+ * whenever an identity-sensitive token below the prefix could be accepted.
+ * When the root frontier is too permissive, the implementation automatically
+ * falls back to the exhaustive analysis. */
+int ds4_session_constraint_analyze_trie(
+        ds4_session *s, ds4_token_filter_fn filter, void *filter_ud,
+        bool ignore_leading_ws, bool allow_common_prefix_on_conflict,
+        ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics);
+/* Build a complete mask from a context-independent base plus a small dynamic
+ * frontier.  base_allowed must contain base_vocab entries and every token not
+ * unconditionally accepted must occur in dynamic_tokens; omitted tokens fail
+ * closed.  This form is intended for states whose base already proves a real
+ * grammar branch, so forced_token is conservatively reported as -1. */
+int ds4_session_constraint_analyze_partition(
+        ds4_session *s, const uint8_t *base_allowed, uint32_t base_vocab,
+        const int *dynamic_tokens, uint32_t dynamic_count,
+        ds4_token_filter_fn filter, void *filter_ud,
+        ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics);
+/* Sample the mask produced by ds4_session_constraint_analyze().  A stale or
+ * incomplete analysis fails closed and returns -1. */
+int ds4_session_sample_constraint_analysis(
+        ds4_session *s, float temperature, int top_k,
+        float top_p, float min_p, uint64_t *rng,
+        const ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics);
+/* Re-run the exhaustive callback oracle into a separate mask and compare it
+ * bit-for-bit with the current analysis.  On divergence, the session mask is
+ * replaced with the oracle mask before returning false. */
+bool ds4_session_constraint_compare_oracle(
+        ds4_session *s, ds4_token_filter_fn oracle, void *oracle_ud,
+        ds4_constraint_analysis *analysis,
+        ds4_constraint_difference *difference,
+        ds4_filtered_sample_metrics *metrics);
 /* Return a tokenizer token whose entire decoded piece is a deterministic
  * common prefix of every grammar-accepted continuation.  When
  * ignore_leading_ws is true, whitespace-leading alternatives are formatting
@@ -406,6 +473,10 @@ int ds4_engine_forced_prefix_token(ds4_engine *e,
                                    ds4_token_filter_fn filter, void *filter_ud,
                                    bool ignore_leading_ws,
                                    bool allow_common_prefix_on_conflict);
+int ds4_engine_forced_prefix_token_profiled(
+        ds4_engine *e, ds4_token_filter_fn filter, void *filter_ud,
+        bool ignore_leading_ws, bool allow_common_prefix_on_conflict,
+        ds4_filtered_sample_metrics *metrics);
 #ifdef DS4_TEST_HOOKS
 int ds4_test_sample_logits(const float *logits, uint32_t n_vocab,
                            float temperature, int top_k,
@@ -413,6 +484,7 @@ int ds4_test_sample_logits(const float *logits, uint32_t n_vocab,
                            float *prob_scratch);
 uint64_t ds4_test_mixed_native_count(void);
 int ds4_test_qwen35_layer_is_recurrent(uint32_t layer);
+bool ds4_test_constraint_trie_mask(void);
 #endif
 int ds4_session_top_logprobs(ds4_session *s, ds4_token_score *out, int k);
 int ds4_session_token_logprob(ds4_session *s, int token, ds4_token_score *out);
