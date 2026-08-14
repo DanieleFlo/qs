@@ -15,6 +15,8 @@ pinned descritto da `performance/jsonschemabench-subset.json`, senza riscrivere
 gli schemi non supportati. Senza `--source` esegue uno sparse-fetch temporaneo
 del solo commit fissato; il corpus risultante esamina tutte le 9.558 schema e
 conserva tier `smoke` (12) e `safety` (32).
+Il tier `regressions` conserva inoltre i due casi che hanno bloccato il gate
+prestazionale di MACRO 5, anche quando la selezione greedy `safety` cambia.
 
     python3 tools/import_jsonschemabench_subset.py \
       --output performance/jsonschemabench-subset.json
@@ -44,6 +46,42 @@ verifica almeno 10k token di contesto e salva anche i fallimenti di schema.
 È un profilo funzionale costoso, non una fixture da includere nei test ordinari.
 Le quote di fase provengono dal log server con
 `DS4_SERVER_PHASE_PROFILE=1`; non vanno sostituite col solo tempo HTTP.
+La baseline non vincolata equivalente usa un prompt calibrato a 10.770 token e
+147 token di decode, la lunghezza del gate agente valido:
+
+    python3 tools/perf_harness.py server-curve \
+      --id constraint-m56-unconstrained-c10770-g147-001 \
+      --suite agent-dsml-unconstrained-baseline \
+      --model gguf/Qwen3.6-27B-Q4_K_S.gguf --repetitions 1 \
+      --minimum-completion-tokens 147 --baseline-run \
+      --hypothesis "same-context unconstrained ceiling for the DSML agent gate"
+
+Il prototipo DSML state-per-edge è stato ritirato dopo un gate slow neutro entro
+il 2%; il percorso predefinito conserva il backend precedente. La phase metric
+`exhaustive_fallback_steps` misura invece il fallback adattivo promosso. La suite
+constrained `dsml-json-fallback` include un tool con parametri JSON tipizzati:
+in `DSML_TRACK_JSON_PARAM` il backend sceglie l'analisi esaustiva perché token
+BPE che uniscono fine JSON e tag di chiusura rendono il linguaggio dei prefix
+del trie non chiuso.
+
+## Release gate segmentato
+
+La suite GPU completa supera normalmente 10 minuti anche sul commit baseline.
+Per ottenere un esito conclusivo senza un timeout ambiguo, eseguire sullo stesso
+modello e sulla stessa build i tre segmenti seguenti e sommare i tempi:
+
+    ./ds4_test --long-context
+    ./ds4_test --tool-call-quality --think-tool-recovery
+    ./ds4_test --logprob-vectors --metal-ssd-streaming-cache-pressure \
+      --local-golden-vectors --metal-short-prefill --metal-kernels \
+      --metal-tensor-equivalence --streaming-decode-prefill-correctness \
+      --mtp-verify-depth --dspark-verify-depth --qwen35-layer-pattern \
+      --constraint-trie --server
+
+Impostare `DS4_TEST_MODEL` allo stesso path in tutti i segmenti. Se quel modello
+non corrisponde ai fixture dei golden vector, confrontare esplicitamente anche
+numero e posizione dei fallimenti col commit baseline; non interpretare il solo
+exit code come regressione del constrained decoder.
 
 ## Workflow eseguibili
 

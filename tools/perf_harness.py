@@ -49,6 +49,7 @@ MTP_WEAKEST_CONFIRM_SUITE = "mtp-weakest-confirm"
 MTP_LONG_CONTEXT_SMOKE_SUITE = "mtp-long-context-smoke"
 MTP_THRESHOLD_SEARCH_SUITE = "mtp-threshold-search"
 MTP_THRESHOLD_MIDPOINT_SUITE = "mtp-threshold-midpoint"
+AGENT_DSML_BASELINE_SUITE = "agent-dsml-unconstrained-baseline"
 QWEN_SPLIT_K_MIN_CONTEXT = 96
 QWEN_MTP_DEPTH1_MIN_CONTEXT = 2048
 CONTEXT_CURVE_MIN_TPS = 20.0
@@ -528,7 +529,7 @@ def parse_server_phase_profiles(text: str) -> list[dict[str, Any]]:
         "trie_memory_bytes", "static_mask_memory_bytes",
         "dynamic_frontier_size", "mask_cache_hit",
         "mask_cache_miss", "constraint_state_checkpoint",
-        "constraint_state_rollback",
+        "constraint_state_rollback", "exhaustive_fallback_steps",
     )
     for line in text.splitlines():
         marker = line.find(SERVER_PHASE_PREFIX)
@@ -572,6 +573,16 @@ def parse_server_phase_profiles(text: str) -> list[dict[str, Any]]:
                 row[name] = _phase_int(fields[name])
         rows.append(row)
     return rows
+
+
+def constrained_source_witnesses_valid(results: list[dict[str, Any]]) -> bool:
+    """Require imported JSONSchemaBench witnesses, not internal fixtures."""
+    return all(
+        item["definition"].get("source") is None or
+        item["definition"]["source"].get("witness_valid") is True
+        for item in results
+        if item["definition"]["kind"] == "json_schema"
+    )
 
 
 def prompt_filler_intercept(
@@ -2569,7 +2580,8 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
                 "parser_bytes_visited", "trie_nodes_visited",
                 "subtrees_pruned", "trie_leaf_tokens_emitted", "mask_cache_hit",
                 "mask_cache_miss", "constraint_state_checkpoint",
-                "constraint_state_rollback", "grammar_compile_ms",
+                "constraint_state_rollback", "exhaustive_fallback_steps",
+                "grammar_compile_ms",
                 "grammar_jit_ms", "trie_compile_ms", "trie_compiled_nodes",
                 "trie_memory_bytes", "static_mask_compile_ms",
                 "static_mask_memory_bytes", "dynamic_frontier_size",
@@ -2635,11 +2647,7 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
         item.get("schema_validation", {}).get("status") in {"PASS", "PREFIX_ONLY"}
         for item in results
     )
-    source_witnesses_valid = all(
-        item["definition"].get("source", {}).get("witness_valid") is True
-        for item in results
-        if item["definition"]["kind"] == "json_schema"
-    )
+    source_witnesses_valid = constrained_source_witnesses_valid(results)
     schema_contract_valid = (
         prefix_probes_valid
         if args.jsonschemabench_prefix_steps else schema_outputs_valid
@@ -3252,7 +3260,8 @@ def build_parser() -> argparse.ArgumentParser:
                  MTP_DEPTH_2K_SUITE,
                  MTP_DEPTH_BOUNDARY_SUITE,
                  MTP_WEAKEST_CONFIRM_SUITE,
-                 MTP_THRESHOLD_SEARCH_SUITE, MTP_THRESHOLD_MIDPOINT_SUITE),
+                 MTP_THRESHOLD_SEARCH_SUITE, MTP_THRESHOLD_MIDPOINT_SUITE,
+                 AGENT_DSML_BASELINE_SUITE),
     )
     server_curve.add_argument("--mtp", action="store_true")
     server_curve.add_argument("--mtp-model")
@@ -3293,7 +3302,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="run only this supported external schema id (repeatable)",
     )
     constrained.add_argument(
-        "--jsonschemabench-tier", choices=("smoke", "safety"),
+        "--jsonschemabench-tier", choices=("smoke", "safety", "regressions"),
         default="safety",
         help="pinned external tier used when no explicit schema id is supplied",
     )

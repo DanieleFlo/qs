@@ -14,6 +14,10 @@
     ],
     "nullable-free-string": [
       "dsml-nullable-free-string"
+    ],
+    "dsml-json-fallback": [
+      "dsml-required-enum-const",
+      "dsml-json-const-enum"
     ]
   },
   "workloads": [
@@ -120,6 +124,47 @@
               "additionalProperties": false
             }
           }
+        }
+      }
+    },
+    {
+      "id": "dsml-json-const-enum",
+      "kind": "dsml",
+      "endpoint": "/v1/responses",
+      "payload": {
+        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "input": [
+          {
+            "role": "user",
+            "content": "Call record_typed exactly once with count 2, flag false, and meta equal to the object {\"id\":7}. Emit no prose."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "record_typed",
+            "description": "Record fixed typed values",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "count": {"type": "integer", "const": 2},
+                "flag": {"type": "boolean", "enum": [false]},
+                "meta": {"type": "object", "const": {"id": 7}}
+              },
+              "required": ["count", "flag", "meta"],
+              "additionalProperties": false
+            },
+            "strict": true
+          }
+        ],
+        "tool_choice": "required",
+        "temperature": 0,
+        "seed": 424242,
+        "max_output_tokens": 192,
+        "stream": false,
+        "reasoning": {
+          "effort": "none",
+          "summary": "none"
         }
       }
     },

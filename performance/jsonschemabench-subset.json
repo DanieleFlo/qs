@@ -26,9 +26,9 @@
     "examined_supported": 3703,
     "examined_unsupported": 5855,
     "examined_support_rate": 0.38742414731115293,
-    "selected_supported": 32,
+    "selected_supported": 33,
     "selected_unsupported": 16,
-    "selection_supported_fraction": 0.6666666666666666
+    "selection_supported_fraction": 0.673469387755102
   },
   "tiers": {
     "smoke": [
@@ -78,6 +78,10 @@
       "Github_easy/o8466.json",
       "Github_easy/o8465.json",
       "Github_easy/o71309.json"
+    ],
+    "regressions": [
+      "Github_easy/o8466.json",
+      "Github_trivial/o25195.json"
     ]
   },
   "supported": [
@@ -2325,6 +2329,28 @@
         "$schema": "http://json-schema.org/draft-06/schema#",
         "type": "object",
         "minProperties": 1
+      }
+    },
+    {
+      "id": "Github_trivial/o25195.json",
+      "category": "Github_trivial",
+      "source_path": "data/Github_trivial/o25195.json",
+      "sha256": "9d2588841ad151b71e9fb384befb0a9108c73c04401d67a67e75c26839ec5871",
+      "canonical_bytes": 108,
+      "features": [
+        "multipleOf",
+        "properties",
+        "type"
+      ],
+      "unsupported_reasons": [],
+      "schema": {
+        "$schema": "http://json-schema.org/draft-06/schema#",
+        "properties": {
+          "bar": {
+            "type": "integer",
+            "multipleOf": 3
+          }
+        }
       }
     }
   ],

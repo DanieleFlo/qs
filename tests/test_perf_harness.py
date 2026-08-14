@@ -208,7 +208,8 @@ class PerfHarnessTests(unittest.TestCase):
             "parser_bytes_visited=5678 trie_nodes_visited=321 "
             "subtrees_pruned=77 trie_leaf_tokens_emitted=19 mask_cache_hit=0 "
             "mask_cache_miss=40 grammar_compile_ms=0.000 grammar_jit_ms=0.000 "
-            "constraint_state_checkpoint=9932800 constraint_state_rollback=9932800\n"
+            "constraint_state_checkpoint=9932800 constraint_state_rollback=9932800 "
+            "exhaustive_fallback_steps=3\n"
         )
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["mode"], "compare_new_vs_oracle")
@@ -219,6 +220,7 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(rows[0]["subtrees_pruned"], 77)
         self.assertEqual(rows[0]["trie_leaf_tokens_emitted"], 19)
         self.assertEqual(rows[0]["constraint_state_checkpoint"], 9932800)
+        self.assertEqual(rows[0]["exhaustive_fallback_steps"], 3)
         self.assertEqual(rows[0]["oracle_compare_calls"], 40)
         self.assertEqual(rows[0]["oracle_divergences"], 0)
 
@@ -232,6 +234,35 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(
             [item["id"] for item in workloads],
             ["dsml-required-enum-const", "json-nested-required-array"],
+        )
+
+    def test_constrained_dsml_json_fallback_suite_covers_both_param_kinds(self) -> None:
+        workloads = HARNESS.load_constrained_workloads(
+            ROOT / "performance" / "constrained-workloads.json", "dsml-json-fallback"
+        )
+        self.assertEqual(
+            [item["id"] for item in workloads],
+            ["dsml-required-enum-const", "dsml-json-const-enum"],
+        )
+        self.assertEqual(
+            [item["kind"] for item in workloads], ["dsml", "dsml"]
+        )
+
+    def test_internal_json_fixture_does_not_require_source_witness(self) -> None:
+        internal = [{"definition": {"kind": "json_schema", "source": None}}]
+        external = [{
+            "definition": {
+                "kind": "json_schema",
+                "source": {"witness_valid": False},
+            }
+        }]
+        external_missing_witness = [{
+            "definition": {"kind": "json_schema", "source": {}}
+        }]
+        self.assertTrue(HARNESS.constrained_source_witnesses_valid(internal))
+        self.assertFalse(HARNESS.constrained_source_witnesses_valid(external))
+        self.assertFalse(
+            HARNESS.constrained_source_witnesses_valid(external_missing_witness)
         )
         free_string = HARNESS.load_constrained_workloads(
             ROOT / "performance" / "constrained-workloads.json", "free-string"

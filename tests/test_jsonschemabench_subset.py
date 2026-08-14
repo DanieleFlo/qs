@@ -38,7 +38,7 @@ class JSONSchemaBenchSubsetTests(unittest.TestCase):
             self.record["source"]["hugging_face"], IMPORTER.SOURCE_DATASET
         )
         self.assertEqual(self.record["source"]["categories"], list(IMPORTER.CATEGORIES))
-        self.assertEqual(len(self.record["supported"]), 32)
+        self.assertEqual(len(self.record["supported"]), 33)
         self.assertEqual(len(self.record["unsupported"]), 16)
         self.assertTrue(all(
             not item["unsupported_reasons"] for item in self.record["supported"]
@@ -60,14 +60,18 @@ class JSONSchemaBenchSubsetTests(unittest.TestCase):
             coverage["examined_support_rate"],
             coverage["examined_supported"] / coverage["examined"],
         )
-        self.assertEqual(coverage["selection_supported_fraction"], 2 / 3)
+        self.assertEqual(coverage["selection_supported_fraction"], 33 / 49)
         self.assertNotIn("selected_support_rate", coverage)
         tiers = self.record["tiers"]
         self.assertEqual(len(tiers["smoke"]), 12)
         self.assertEqual(len(tiers["safety"]), 32)
+        self.assertEqual(
+            tiers["regressions"], list(IMPORTER.REGRESSION_IDS)
+        )
         supported_ids = {item["id"] for item in self.record["supported"]}
         self.assertTrue(set(tiers["smoke"]).issubset(supported_ids))
-        self.assertEqual(set(tiers["safety"]), supported_ids)
+        self.assertTrue(set(tiers["safety"]).issubset(supported_ids))
+        self.assertTrue(set(tiers["regressions"]).issubset(supported_ids))
         self.assertGreaterEqual(
             len({item["category"] for item in self.record["supported"]}), 9
         )

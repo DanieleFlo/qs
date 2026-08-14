@@ -33,12 +33,13 @@ DEFAULT_PROMPT = (
 )
 
 
-def make_agent(*, client: Client, workroot: Path) -> DeepAgent:
+def make_agent(*, client: Client, workroot: Path,
+               max_output_tokens: int) -> DeepAgent:
     """Build the packaged bootstrap-wiki graph used by the /agent frontend."""
     runtime = RuntimeConfigOverrides(
         model=ModelRequestConfigOverride(
             temperature=0.0,
-            max_output_tokens=1024,
+            max_output_tokens=max_output_tokens,
             thinking=False,
         ),
         loop=LoopConfigOverride(max_steps=4),
@@ -109,6 +110,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workroot", type=Path, required=True)
     parser.add_argument("--model", default="Qwen3.6-27B-Q4_K_S.gguf")
+    parser.add_argument(
+        "--experiment-id",
+        default="constraint-m5-agent-dsml-story-300-current-001",
+    )
+    parser.add_argument("--max-output-tokens", type=int, default=1024)
     parser.add_argument("--minimum-context", type=int, default=10_000)
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     args = parser.parse_args()
@@ -125,7 +131,12 @@ def main() -> int:
         timeout=900.0,
         max_retries=0,
     )
-    agent = make_agent(client=client, workroot=args.workroot.resolve())
+    if args.max_output_tokens <= 0:
+        raise SystemExit("max-output-tokens must be positive")
+    agent = make_agent(
+        client=client, workroot=args.workroot.resolve(),
+        max_output_tokens=args.max_output_tokens,
+    )
     offset = args.server_log.stat().st_size
     started = time.monotonic()
     result = agent.run(user_message=args.prompt)
@@ -157,7 +168,7 @@ def main() -> int:
     )
     record = {
         "schema_version": 1,
-        "experiment_id": "constraint-m5-agent-dsml-story-300-current-001",
+        "experiment_id": args.experiment_id,
         "created_at": perf_harness.utc_now(),
         "status": status,
         "hypothesis": (
@@ -171,6 +182,7 @@ def main() -> int:
             "model": args.model,
             "prompt": args.prompt,
             "workroot": str(args.workroot.resolve()),
+            "max_output_tokens": args.max_output_tokens,
         },
         "request_wall_ms": request_wall_ms,
         "minimum_context_tokens": args.minimum_context,

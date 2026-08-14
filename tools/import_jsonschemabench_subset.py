@@ -19,6 +19,10 @@ CATEGORIES = (
     "Github_hard", "Github_ultra", "JsonSchemaStore", "Kubernetes",
     "Snowplow", "WashingtonPost",
 )
+REGRESSION_IDS = (
+    "Github_easy/o8466.json",
+    "Github_trivial/o25195.json",
+)
 SEMANTIC_KEYS = {
     "type", "properties", "required", "additionalProperties", "items",
     "allOf", "anyOf", "oneOf", "enum", "const", "minLength", "maxLength",
@@ -283,6 +287,19 @@ def main() -> int:
     )
     examined_unsupported = len(candidates) - examined_supported
     supported = select_supported(candidates, args.supported_count)
+    candidate_by_id = {item["id"]: item for item in candidates}
+    try:
+        regressions = [candidate_by_id[item_id] for item_id in REGRESSION_IDS]
+    except KeyError as exc:
+        raise RuntimeError(f"missing pinned regression schema: {exc.args[0]}") from exc
+    if any(
+        not item["selection_eligible"] or item["unsupported_reasons"]
+        for item in regressions
+    ):
+        raise RuntimeError("pinned regression schemas must remain supported and eligible")
+    supported_all = supported + [
+        item for item in regressions if item not in supported
+    ]
     unsupported = select_unsupported(candidates, args.unsupported_count)
     if len(supported) != args.supported_count or len(unsupported) != args.unsupported_count:
         raise RuntimeError("not enough schemas for the requested deterministic subset")
@@ -310,17 +327,18 @@ def main() -> int:
             "examined_supported": examined_supported,
             "examined_unsupported": examined_unsupported,
             "examined_support_rate": examined_supported / len(candidates),
-            "selected_supported": len(supported),
+            "selected_supported": len(supported_all),
             "selected_unsupported": len(unsupported),
             "selection_supported_fraction": (
-                len(supported) / (len(supported) + len(unsupported))
+                len(supported_all) / (len(supported_all) + len(unsupported))
             ),
         },
         "tiers": {
             "smoke": [item["id"] for item in supported[:args.smoke_count]],
             "safety": [item["id"] for item in supported],
+            "regressions": [item["id"] for item in regressions],
         },
-        "supported": [public_entry(item) for item in supported],
+        "supported": [public_entry(item) for item in supported_all],
         "unsupported": [public_entry(item) for item in unsupported],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

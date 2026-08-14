@@ -416,16 +416,26 @@ Il parser stack e lo stato semantico devono essere strutture runtime persistenti
 - [x] Testare checkpoint/rollback profondi.
 - [x] Testare piece che aprono e chiudono più strutture nello stesso token.
 
+### 2.6 — Completare la transizione semantica DSML edge-local
+
+- [x] Rappresentare nello stato incrementale required/optional già consumati e ancora ammessi.
+- [ ] Rappresentare la frontiera semantica dei parametri JSON senza dipendere da `raw + piece`.
+- [ ] Esporre una transizione che consuma un singolo byte/edge e restituisce uno stato figlio riusabile per stati strutturali e stringhe DSML libere/`const`/`enum`.
+- [ ] Dimostrare che il traversal trie DSML non riesegue il simulatore semantico sul piece completo a ogni nodo.
+- [x] Conservare fallback fail-closed al simulatore/oracle per gli stati non ancora rappresentabili.
+- [x] Confrontare ogni mask DSML edge-local con l'oracle prima di abilitarla nel percorso predefinito.
+
 ## Criteri di uscita
 
 - [x] Il costo candidate-specifico non cresce linearmente con tutta la lunghezza dell'output già prodotto nei casi normali.
 - [x] Validation finale completa rimane presente.
 - [x] Stato incrementale e oracle concordano.
+- [ ] Il traversal DSML può propagare lo stato da un edge del trie al successivo senza rieseguire il simulatore semantico sul piece completo.
 
 ## Stato e retrospettiva — MACRO 2
 
-- **Stato:** 🟨 In corso (lexer JSON e frontier stringa DSML/JSON incrementali; semantica generale ancora ibrida)
-- **Data/commit di riferimento:** 2026-08-14, run `constraint-m2-jsonschemabench-001`
+- **Stato:** 🟨 In corso (bitmap required/optional promosso; prototipo state-per-edge ritirato; parametri JSON DSML protetti da fallback esaustivo)
+- **Data/commit di riferimento:** 2026-08-14, run `constraint-m2-jsonschemabench-001` e `constraint-m26-edge-compare-003`
 - **Costo parser prima/dopo:** stringa JSON libera: constraint 8,33→2,80 s (−66%); DSML testo libero: constraint −31,13%, parser bytes −41,44%.
 - **Memoria per stato/checkpoint:** stato lessicale JSON a dimensione fissa (stack limitato da `JSON_MAX_NESTING`) copiato per candidate; tracker DSML persistente già request-local.
 - **Cosa ha funzionato:** DFA JSON byte-level; fast path dentro la stessa stringa semanticamente illimitata; decisione DSML sulla proprietà attiva precomputata fuori dal callback vocabulary-wide.
@@ -433,7 +443,7 @@ Il parser stack e lo stato semantico devono essere strutture runtime persistenti
 - **Casi difficili trovati:** chiusura stringa, escape/Unicode, numeri incompleti, stop token con piece non vuoto e `minLength` verificato solo alla chiusura.
 - **Divergenze dall'oracle:** zero nei run compare; subset esterno candidato +32,699% tok/s pesati.
 - **Gate:** ☑ GO
-- **Note:** R15: i criteri di uscita sono soddisfatti per i normali hot path misurati; la migrazione semantica completa di required/optional/combinatori resta esplicitamente ibrida e continua a ricadere nel parser completo.
+- **Note:** R15: i criteri di uscita originari sono soddisfatti per i normali hot path misurati. Il bitmap fino a 64 proprietà consumate evita il reparse ordinario di required/optional. Il prototipo cache state-per-depth ha registrato 1.032 transizioni edge-local e zero divergenze, ma 4.216 fallback/risimulazioni soprattutto su tag parziali. Un nuovo workload DSML con parametri JSON ha trovato un token BPE `whitespace + } + </...>` non prefix-closed: `constraint-m26-edge-json-compare-001` è conservato con 16 divergenze e `...-002` con 2. Il percorso promosso seleziona l'analisi esaustiva in `DSML_TRACK_JSON_PARAM`; `...-003` ha zero divergenze e 10 fallback esaustivi per richiesta JSON. Poiché l'A/B state-per-edge è neutro entro rumore, il prototipo runtime e la relativa telemetria sono stati ritirati; il gate JSON-frontier resta aperto. Il run definitivo post-ritiro `constraint-final-dsml-json-fallback-compare-001` totalizza 46 confronti oracle in due ripetizioni, zero divergenze, output deterministici e 10 fallback per richiesta JSON.
 
 ---
 
@@ -525,6 +535,14 @@ Il trie deve essere costruito sui **piece reali del tokenizer**, non su stringhe
 - [x] testare stati molto permissivi, dove il trie può potare poco.
 - [x] testare stati molto restrittivi, dove il trie deve vincere molto.
 
+### 3.6 — Gate trie DSML edge-local
+
+- [ ] Propagare nel nodo figlio lo stato prodotto dall'edge corrente per gli stati coperti.
+- [ ] Condividere lo stato del prefisso fra fratelli con checkpoint immutabile per profondità.
+- [ ] Misurare separatamente transizioni edge-local e fallback semantici.
+- [x] Dimostrare zero divergenze su invoke, required/optional, stringhe libere e parametri JSON, usando fallback esaustivo dove il linguaggio non è prefix-closed.
+- [x] Promuovere il trie DSML solo se non regredisce rispetto al backend precedente; il risultato neutro ha mantenuto il backend precedente di default.
+
 ## Criteri di uscita
 
 - [x] Mask identiche all'oracle.
@@ -543,7 +561,7 @@ Il trie deve essere costruito sui **piece reali del tokenizer**, non su stringhe
 - **Cosa non ha funzionato:** negli stati permissivi la visita di tutti i nodi interni sarebbe più costosa della scansione token; tali stati vengono riconosciuti e inviati al percorso incrementale/esaustivo.
 - **Stati in cui il trie non aiuta:** private reasoning, body di stringa libera e frontier con più di 64 famiglie di primo byte ammesse.
 - **Gate:** ☑ GO
-- **Note:** 678 mask esterne + 42 canoniche confrontate, zero divergenze. R15: si procede perché tutti i criteri di uscita sono soddisfatti; edge-state sharing e fuzz casuale restano miglioramenti espliciti, coperti nel frattempo da test isolato e subset esterno.
+- **Note:** 678 mask esterne + 42 canoniche precedenti, 66 confronti direction e 92 confronti edge-local nei run sperimentali, zero divergenze nei run promuovibili. I contatori sperimentali hanno misurato la copertura prima del ritiro; `exhaustive_fallback_steps` resta nel percorso promosso. A/B slow iniziale, 7 ripetizioni + 2 warmup: DSML 25,28→25,23 tok/s e constraint CPU 960,71→961,66 ms. A/B misto finale: stringa 25,17→25,13 tok/s (CPU 979,81→976,91 ms), JSON-param 25,73→25,64 tok/s (CPU 1.224,78→1.228,96 ms). Tutte le differenze sono entro la soglia pratica del 2% (`NEED_MORE_DATA`), quindi il prototipo è stato ritirato. Il run post-ritiro `constraint-final-dsml-json-fallback-compare-001` conferma 46 confronti e zero divergenze. Il precedente GO resta valido per JSON response; 2.6/3.6 restano obbligatori prima della Macro 6.
 
 ---
 
@@ -719,31 +737,60 @@ Le catene di transizioni singole possono essere compresse in archi/path determin
 - [ ] Testare 1, 2, 4, 8, 16, 32, 64, 127, 128, 256 token.
 - [ ] Valutare una piccola lookup/crossover table per backend.
 
+### 5.6 — Gate reale DSML post-fix
+
+- [x] Ripetere il workload `/agent` `bootstrap-wiki` che forza una storia italiana nel campo `message` di `exit-with-info-tool` dopo la correzione `anyOf: [string, null]`.
+- [x] Ottenere almeno una tool call completa, parseabile e semanticamente valida senza saturare il limite di output.
+- [x] Eseguire una baseline unconstrained con lo stesso modello, seed, contesto occupato (~10,7k), lunghezza generata e impostazioni di sampling.
+- [x] Confrontare `eval_ms/token`, constraint CPU, decode wall, tok/s e quota di wall attribuibile al masking.
+- [x] Stabilire se il riferimento storico di ~40 tok/s era confrontabile: la baseline equivalente è 29,08 tok/s, quindi il riferimento non era comparabile.
+- [x] Conservare separatamente i run funzionalmente falliti; non usarli come conferma prestazionale.
+
+### 5.7 — Chiudere le regressioni JSONSchemaBench
+
+- [x] Ripetere isolatamente `Github_easy/o8466.json` e `Github_trivial/o25195.json` con warmup e ripetizioni sufficienti a separare rumore e regressione strutturale.
+- [x] Confrontare il backend candidato con il backend precedente usando stesso modello, tokenizer, seed, prefisso e numero di token.
+- [x] Se una regressione è strutturale, caratterizzare la classe di stato e selezionare adattivamente il backend precedente quando costa meno.
+- [x] Non forzare il trie su workload per i quali il lavoro visitato o il wall time superano il backend precedente.
+- [x] Ripetere il gate esterno e richiedere zero divergenze dall'oracle e nessuna regressione oltre la soglia dichiarata.
+
+### 5.8 — Release gate del test globale
+
+- [x] Ripetere `ds4_test` sul commit candidato con timeout sufficiente o suite segmentata e registrare un exit code conclusivo.
+- [x] Eseguire lo stesso comando sulla baseline precedente a `6371ae0` per stabilire se il timeout oltre 10 minuti è preesistente.
+- [x] Se il timeout è nuovo, trattarlo come regressione e isolarne il gruppo responsabile prima di modificare il default (non applicabile: il timeout è preesistente).
+- [x] Se il timeout è preesistente, documentare una procedura riproducibile con timeout corretto o gruppi separati; non lasciare il gate in stato indeterminato.
+
 ## Criteri di uscita
 
 - [ ] Discovery del determinismo non richiede normalmente una scansione completa del vocabolario.
 - [x] Nessuna scelta grammaticale reale viene collassata.
 - [x] Forced path produce gli stessi token ammessi dell'oracle.
+- [x] Il workload reale DSML post-fix completa una tool call valida ed è confrontato con una baseline unconstrained equivalente.
+- [x] Le due regressioni JSONSchemaBench sono classificate come rumore o gestite da una policy adattiva misurata.
+- [x] Il test globale ha un esito conclusivo sul candidato e sulla baseline comparabile.
 
 ## Stato e retrospettiva — MACRO 5
 
-- **Stato:** 🟨 In corso (shadow trie JSON promosso; gate esterno JSON chiuso con esito rosso; residuo DSML free-text identificato e corretto senza ancora ripetere il caso agente)
-- **Data/commit di riferimento:** 2026-08-14, run `constraint-m5-json-shadow-trie-slow-003`, `constraint-final-jsonschemabench-slow-001`, `constraint-m5-jsonschemabench-safety-prefix8-compare-002` e `constraint-m5-agent-dsml-story-300-current-001`
+- **Stato:** 🟨 In corso (gate 5.6–5.8 chiusi; shadow trie JSON con fallback adattivo promosso; shadow trie DSML ancora bloccato da 2.6/3.6)
+- **Data/commit di riferimento:** 2026-08-14, run `constraint-m56-agent-dsml-literal-story-postfix-001`, `constraint-m56-unconstrained-c10770-g147-001`, `constraint-m57-regressions-adaptive-003`, `constraint-m57-jsonschemabench-safety-prefix8-compare-001` e gate release segmentato baseline/candidato
 - **Token fast-forwardati medi:** workload canonico JSON: 39 token generati, 14 mask/decisioni iniziali; le catene shadow eliminano le scansioni intermedie prima dei 14 branch reali.
 - **Sampling step eliminati:** invariati rispetto al fast-forward preesistente; cambia il costo di discovery delle catene.
 - **Costo discovery:** JSON `forced_prefix_probe` 2.282,13→circa 6–7 ms; constraint CPU 2.286,20→10,61 ms.
 - **Costo sync:** resta misurato separatamente come `forced_sync_ms`; nessuna modifica a KV/model sync.
 - **Cosa ha funzionato:** JSON annidato 7,07→35,72 tok/s (+405% circa), vicino al decode non vincolato; 52 shadow mask canoniche confrontate nel prototipo, zero divergenze. Il gate correctness finale sul subset JSONSchemaBench originario totalizza 718 confronti oracle senza divergenze; il nuovo tier safety post-fix aggiunge 380 confronti su 32 schema, ancora zero divergenze, con validazione indipendente di 22 output completi e dei witness per tutti i 32 casi. I 16 esempi unsupported sono respinti con HTTP 400 prima dell'inferenza; questo gate ha trovato e fatto correggere l'accettazione precedente delle keyword sconosciute. Il free-text nullable `string | null` ora riusa conservativamente la mask statica solo quando esiste un'unica variante stringa semanticamente illimitata: la fixture mirata passa 80 confronti oracle senza divergenze e l'A/B migliora 26,76→29,02 tok/s (+8,46%), con constraint CPU 767,07→451,07 ms (−41,20%).
-- **Cosa non ha funzionato:** applicare lo stesso shadow trie a DSML regredisceva 7,9% perché il simulatore semantico non è ancora edge-local; run `constraint-m5-shadow-trie-slow-001` conservato e policy ritirata per DSML. Il gate prestazionale finale JSONSchemaBench è `REJECT_CANDIDATE`: media pesata +73,99%, ma `Github_easy/o8466.json` regredisce del 16,94% e `Github_trivial/o25195.json` del 2,44%, oltre la soglia per workload dominante.
+- **Cosa non ha funzionato:** applicare lo stesso shadow trie a DSML regredisceva 7,9% perché il simulatore semantico non è ancora interamente edge-local; run `constraint-m5-shadow-trie-slow-001` conservato e policy ritirata per DSML. Il vecchio gate JSON `REJECT_CANDIDATE` è stato isolato: `Github_easy/o8466.json` è una regressione strutturale del trie sulla frontiera `additionalProperties` aperta, mentre `Github_trivial/o25195.json` era rumore. La policy ora sceglie l'analisi esaustiva soltanto sulle frontiere di property-name/value non limitate e conserva il trie altrove.
 - **Profilo reale DSML free-text:** un solo tentativo con l'agente `/agent`, grafo `bootstrap-wiki`, contesto occupato 10.770 token e richiesta di una storia italiana di 300 parole nel campo `message` di `exit-with-info-tool`. La fase lunga genera 1.024 token a 16,25 tok/s: `eval_ms` pesa 58,68% del wall, `sampling_mask_build_ms` 40,59%, sampling filtrato 0,30%, forced probe 0,38% e residuo non attribuito 0,05%. L'output raggiunge il limite e fallisce la validazione del tool; il run è quindi conservato come `measured_failed_output`, non come successo funzionale.
-- **Nuovo residuo identificato:** lo schema reale di `message` è il nullable Pydantic `anyOf: [string, null]`. Il riconoscitore della stringa libera rifiutava ogni `anyOf`, producendo 1.022 cache miss e zero hit nella fase lunga: il 40,59% non era overhead inevitabile ma copertura mancante della mask statica. Dopo la correzione, il costo dominante atteso sul caso reale è l'eval del modello; per disposizione del profiling a tentativo unico il caso agente non è stato ripetuto e questo dato resta da confermare in un futuro gate autorizzato.
+- **Nuovo residuo identificato e chiuso:** lo schema reale di `message` è il nullable Pydantic `anyOf: [string, null]`. Il riconoscitore della stringa libera rifiutava ogni `anyOf`, producendo 1.022 cache miss e zero hit nella fase lunga. Il run post-fix con prompt originale da 300 parole resta fallito e saturato a 1.536 token; una fixture letterale non ambigua completa invece la tool call valida in 147 token a 26,71 tok/s, constraint CPU 571,84 ms (10,39% wall) ed eval 4.909,89 ms (89,20%). La baseline non vincolata stesso contesto 10.770/stessa lunghezza è 29,08 tok/s: overhead residuo end-to-end circa 8,17%, e il riferimento storico di ~40 tok/s non è comparabile.
+- **Gate regressioni esterne:** 7 ripetizioni + 2 warmup. Prima del fallback, `o8466` è 16,48 tok/s contro oracle 19,19 e 159,92 contro 115,30 ms di constraint CPU; `o25195` è invece 22,27 contro 21,20 tok/s. Con fallback adattivo: `o8466` 19,85 tok/s/111,13 ms e `o25195` 22,21 tok/s/82,04 ms. Il compare mirato esegue 20 confronti senza divergenze; il safety prefix8 aggiunge 332 confronti senza divergenze, witness/prefix validi e 16/16 unsupported respinti pre-inferenza. Il run definitivo `constraint-final-jsonschemabench-regressions-compare-001` ripete 20 confronti post-ripulitura con zero divergenze e output/schema/witness validi.
+- **Gate globale:** la suite è stata segmentata in `long-context`, `tool-call-quality + think-tool-recovery` e gruppi restanti. Baseline `4c31033`: 127,83 + 179,55 + 321,25 = 628,63 s; candidato finale: 128,58 + 173,57 + 322,66 = 624,81 s. Entrambi superano quindi 10 minuti e terminano con gli stessi 20 errori dei golden vector non corrispondenti al Qwen collegato come `ds4flash.gguf`; gli altri gruppi hanno esito identico. Il segmento tool/recovery è stato ripetuto dopo il ritiro del prototipo sulla build da committare: `EXIT=0` in 173,2 s. Il timeout è preesistente, non una regressione constrained-decoding.
 - **Problemi di tokenizzazione:** nessuna divergenza osservata; common-prefix forcing resta tokenizer-exact e si arresta sulle biforcazioni.
 - **Gate:** ☑ ITERATE / ☐ GO
-- **Note:** il gate JSON è concluso ma rosso, quindi non si lascia MACRO 5 e non si avvia MACRO 6. R15 non è ancora applicabile: occorre risolvere o spiegare con una conferma stabile le due regressioni esterne e chiudere un output reale DSML valido. DSML resta esplicitamente ibrido finché il parser semanticamente edge-local della Macro 2 non rende conveniente il trie shadow.
+- **Note:** i gate aggiunti 5.6–5.8 sono chiusi e il default JSON non conserva regressioni note. MACRO 5 resta `ITERATE` soltanto per il percorso shadow DSML: l'A/B edge-state iniziale è corretto ma neutro, quindi il prototipo è stato ritirato. Non avviare MACRO 6 finché JSON-param DSML e tag strutturali parziali non chiudono 2.6/3.6 con un vantaggio slow-suite misurato.
 
 ---
 
-# MACRO 6 — Decomporre DSML in grammatica statica + dispatch dinamico per tool/schema
+# MACRO 6 — Adattare XGrammar 2 alla grammatica agentica DSML
 
 ## Obiettivo
 
@@ -784,7 +831,16 @@ Fonte:
 
 Tool calling è precisamente un caso di grammatica dinamica: il protocollo resta quasi identico, mentre cambiano nomi tool e schemi. La compilazione deve riusare i frammenti invarianti.
 
+MACRO 6 parte soltanto dopo la chiusura dei gate 5.6–5.8 e del traversal DSML edge-local 2.6/3.6. TagDispatch è il candidato principale per DSML; Earley e repetition compression restano prototipi da promuovere solo se correggono un collo di bottiglia misurato e vincono l'A/B contro il backend trie corrente.
+
 ## Sottotask
+
+### 6.0 — Design review XGrammar 2
+
+- [ ] Mappare TagDispatch, JIT, cross-grammar caching, mask generation Earley e repetition compression sugli stati DSML/JSON realmente osservati.
+- [ ] Identificare per ogni tecnica il collo di bottiglia misurato, il costo di compilazione e il break-even atteso.
+- [ ] Documentare esplicitamente le tecniche non trasferibili a DS4, senza implementarle a sentimento.
+- [ ] Definire un A/B isolato contro il backend trie corrente e una modalità differenziale contro l'oracle.
 
 ### 6.1 — Normalizzazione dei frammenti
 
@@ -800,13 +856,15 @@ Tool calling è precisamente un caso di grammatica dinamica: il protocollo resta
 - [ ] Compilare primitive schema comuni.
 - [ ] Rendere immutabili/thread-safe le parti statiche.
 
-### 6.3 — Dynamic dispatch
+### 6.3 — TagDispatch reale
 
 - [ ] Dispatch su tool name.
 - [ ] Dispatch su property name.
 - [ ] Dispatch su schema node.
 - [ ] Dispatch su enum/const.
 - [ ] Non duplicare tutto il core per ogni tool.
+- [ ] Rappresentare esplicitamente i tag `<invoke name=...>` e `<parameter name=...>` come punti di dispatch, preservando dialect e tokenizzazione reali.
+- [ ] Misurare candidate, byte e nodi evitati rispetto al trie generico.
 
 ### 6.4 — Cross-grammar cache
 
@@ -826,11 +884,33 @@ Tool calling è precisamente un caso di grammatica dinamica: il protocollo resta
 - [ ] Misurare numero di frammenti compilati ma mai usati.
 - [ ] Valutare background compilation soltanto se l'architettura runtime lo consente senza bloccare la request critica.
 
+### 6.6 — Valutare mask generation Earley
+
+- [ ] Costruire un prototipo soltanto sugli stati dinamici/ambigui che il PDA/trie corrente gestisce con fallback costoso.
+- [ ] Confrontare coverage, memoria, compile/JIT time e mask latency con il backend trie corrente.
+- [ ] Se DSML non ne beneficia, conservare benchmark e motivazione del rigetto invece di promuovere il prototipo.
+
+### 6.7 — Valutare repetition compression
+
+- [ ] Identificare ripetizioni reali in array, sequenze di parametri o frammenti schema riusati.
+- [ ] Comprimere solo ripetizioni semanticamente equivalenti e con chiave cache completa.
+- [ ] Misurare compiled bytes, compile time, traversal time e break-even di riuso.
+- [ ] Ritirare la tecnica se il costo di compilazione/memoria supera il risparmio nel corpus misurato.
+
+### 6.8 — Gate A/B della XGrammar 2 adaptation
+
+- [ ] Confrontare separatamente TagDispatch, cache/JIT, Earley e repetition compression contro il backend trie corrente.
+- [ ] Richiedere mask bit-identiche all'oracle per ogni tecnica candidata.
+- [ ] Promuovere soltanto componenti con vantaggio riproducibile e nessuna regressione sui workload dominanti; mantenere selezione adattiva/fallback per gli altri.
+
 ## Criteri di uscita
 
 - [ ] Cambiare toolset non richiede ricompilare l'intero core.
 - [ ] Tool/schema ripetuti mostrano cache hit.
 - [ ] Compilation time è contabilizzato separatamente dal decode.
+- [ ] TagDispatch è misurato sui rami invoke/property reali.
+- [ ] Earley e repetition compression sono promossi con un A/B positivo oppure respinti con risultato negativo documentato.
+- [ ] La pipeline risultante non regredisce rispetto al trie corrente sui workload dominanti.
 
 ## Stato e retrospettiva — MACRO 6
 
@@ -1193,7 +1273,11 @@ MACRO 4  Static/dynamic masks + cache
    ↓
 MACRO 5  Jump-forward deterministico
    ↓
-MACRO 6  Dynamic grammar decomposition + cross-grammar JIT/cache
+MACRO 5.6/5.7/5.8  Gate agente reale + regressioni esterne + test globale
+   ↓
+MACRO 2.6/3.6  Stato e traversal DSML realmente edge-local
+   ↓
+MACRO 6  XGrammar 2 adaptation: TagDispatch + JIT/cache + valutazione Earley/repetition
    ↓
 MACRO 7  PSC sugli stati/schema ad alto riuso
    ↓
@@ -1202,7 +1286,7 @@ MACRO 8  Overlap + constrained MTP/speculation
 MACRO 9  Adaptive policy + hardening + production gates
 ```
 
-Non anticipare MACRO 7/8 se MACRO 2–4 non sono corretti e misurati: PSC e speculative decoding possono nascondere o moltiplicare un costo parser che dovrebbe essere eliminato alla radice.
+Non iniziare MACRO 6 finché i gate 5.6–5.8 e 2.6/3.6 non sono chiusi. Non anticipare MACRO 7/8 se MACRO 2–4 non sono corretti e misurati: PSC e speculative decoding possono nascondere o moltiplicare un costo parser che dovrebbe essere eliminato alla radice.
 
 ---
 
