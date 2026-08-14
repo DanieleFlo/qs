@@ -270,7 +270,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   full-attention/Gated DeltaNet CUDA e prefill layer-major a chunk. Espone il
   salvataggio/ripristino session-scoped su SSD dello stato ricorrente Qwen per
   le frontiere delle skill; per Qwen3.6 Q4_K_S il payload generale portabile
-  comprende inoltre timeline, logits, stato GDN, KV full-attention e stato MTP.
+  comprende inoltre timeline, logits, stato GDN, KV full-attention e stato MTP,
+  e rifiuta il restore quando payload e runtime non concordano sulla modalita'
+  MTP.
   Il fork Qwen in memoria resta escluso. Il profiler Qwen opzionale emette
   tempi strutturati attention/FFN per ogni layer di prefill e decode, consumati
   dal comando profile-network del performance harness.
@@ -357,8 +359,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   primitive comuni usate dallo streaming.
 - `ds4_kvstore.c`, `ds4_kvstore.h` — formato durevole dei checkpoint KV,
   validazione dell'envelope e del payload ABI, lookup, budget/eviction e
-  gestione dei file; per Qwen rende durevoli soltanto gli anchor
-  `agent-system`, limitati a 10 con LRU stretto. `ds4_server.c` conserva invece
+  gestione dei file, inclusa l'eliminazione delle entry che falliscono il
+  restore affinche' possano essere rigenerate; per Qwen rende durevoli soltanto
+  gli anchor `agent-system`, limitati a 10 con LRU stretto. `ds4_server.c` conserva invece
   una sola history HDS temporanea per slot (`.dsh`, cambio system prompt con
   chiamata child pendente) e checkpoint deep-skill temporanei per `call_id`
   (`.dsk`); entrambi vengono consumati al ritorno e non sopravvivono al server.
@@ -471,6 +474,12 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   e ripristino del payload generale fra oggetti sessione distinti.
 - `tests/run_agentic_checkpoint.sh` — runner riproducibile del gate precedente
   nelle varianti target-only e target con sidecar MTP, con report JSON e log.
+- `tests/test_agent_ssd_live.py`, `tests/run_agent_ssd_live.ps1` e
+  `tests/agent_ssd_live/ssd-canary.txt` — gate live sul runtime installato in
+  `/agent` e sul suo prompt `bootstrap-wiki` da oltre 10k token: matrice degli
+  anchor SSD target-only/MTP nelle due direzioni, regressione con un vecchio
+  anchor BOS da un token e save/restore request-local dei checkpoint HDS
+  `.dsh` e deep-skill `.dsk` in un workroot isolato.
 - `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py`,
   `tests/test_qwen36_numerics.py` — schema, staging, checksum, metriche/gate e
   classificazione sintetica dell'inviluppo numerico Qwen3.6.

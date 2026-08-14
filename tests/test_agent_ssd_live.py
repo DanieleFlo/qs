@@ -3,7 +3,14 @@
 Run once against an empty cache (``--phase cold``), restart ds4-server, then
 run against the same cache (``--phase warm``).  The companion PowerShell runner
 performs that sequence.  These tests intentionally use the packaged DeepAgent
-runtime rather than synthesizing HTTP payloads.
+runtime and its real ``bootstrap-wiki`` graph rather than synthesizing HTTP
+payloads or short system messages.
+
+For the durable system anchor the runner covers the compatibility matrix:
+target-only -> target-only and MTP -> MTP must load, while either mode change
+must rebuild.  HDS and regular-skill checkpoints are request-local, so their
+live cases verify save/restore in the active server mode rather than reuse
+across a server restart.
 """
 
 from __future__ import annotations
@@ -12,23 +19,25 @@ import argparse
 import json
 import re
 import time
-from dataclasses import replace
+import urllib.request
 from pathlib import Path
 
 from agent_wiki.backend.core.agent.deep_agent import DeepAgent
 from agent_wiki.backend.core.client import Client
 from agent_wiki.backend.core.config.hds_config import HDSGraphConfig, HDSNodeConfig
 from agent_wiki.configs.runtime import (
-    CheckpointConfigOverride,
     LoopConfigOverride,
     ModelRequestConfigOverride,
     RuntimeConfigOverrides,
 )
 from agent_wiki.configs.settings import SystemConfig
+from agent_wiki.wiki import WikiGraphNodeConfig
 
 
-HERE = Path(__file__).resolve().parent
-WORKROOT = HERE / "agent_ssd_live"
+MIN_SYSTEM_TOKENS = 8_000
+SYSTEM_RESPONSE = "SYSTEM_AGENT_WIKI_OK"
+HDS_RESPONSE = "HDS_AGENT_WIKI_OK"
+SKILL_CANARY = "AGENT_WIKI_SKILL_SSD_OK"
 
 
 def runtime_overrides() -> RuntimeConfigOverrides:
@@ -39,45 +48,19 @@ def runtime_overrides() -> RuntimeConfigOverrides:
             thinking=False,
         ),
         loop=LoopConfigOverride(max_steps=10),
-        checkpoint=CheckpointConfigOverride(enabled=False),
     )
 
 
-def system_config() -> SystemConfig:
-    defaults = SystemConfig()
-    return SystemConfig(
-        config=replace(defaults.config, inject_capability_summaries=False)
-    )
-
-
-def make_agent(
-    *,
-    client: Client,
-    root: str,
-    children: tuple[str, ...] = (),
-    root_tool_choice: str = "auto",
-    child_tool_choice: str = "auto",
-) -> DeepAgent:
-    child_nodes = [
-        HDSNodeConfig(
-            name=name,
-            client=client,
-            workroot=WORKROOT,
-            runtime=runtime_overrides(),
-            preserve_history=False,
-            tool_choice=child_tool_choice,
-        )
-        for name in children
-    ]
+def make_agent(*, client: Client, workroot: Path) -> DeepAgent:
+    """Build the same packaged graph used by /agent's bootstrap frontend."""
     graph = HDSGraphConfig(
-        system_config=system_config(),
+        system_config=SystemConfig.load_default(),
         main=HDSNodeConfig(
-            name=root,
+            name="bootstrap-wiki",
             client=client,
-            workroot=WORKROOT,
+            workroot=workroot,
             runtime=runtime_overrides(),
-            children=child_nodes,
-            tool_choice=root_tool_choice,
+            children=[WikiGraphNodeConfig()],
         ),
     )
     return DeepAgent(node_config=graph)
@@ -111,10 +94,69 @@ def run_scenario(log_path: Path, name: str, action) -> tuple[str, str]:
     return response, segment
 
 
-def assert_system_cache(segment: str, phase: str, name: str) -> None:
+def seed_short_agent_anchor(base_url: str, log_path: Path) -> None:
+    """Create the one-token system anchor that previously masked long prompts."""
+    payload = json.dumps(
+        {
+            "model": "Qwen3.6-27B-Q4_K_S.gguf",
+            "messages": [{"role": "user", "content": "Reply SEED_OK."}],
+            "max_tokens": 16,
+            "temperature": 0.0,
+            "think": False,
+        }
+    ).encode("utf-8")
+    offset = log_path.stat().st_size if log_path.exists() else 0
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=300.0) as response:
+        response.read()
+    segment = read_log_from(log_path, offset)
+    if not re.search(
+        r"kv cache stored tokens=1 .*reason=agent-system", segment
+    ):
+        raise AssertionError("failed to seed the one-token agent-system anchor")
+
+
+def assert_system_cache(
+    segment: str, phase: str, name: str, warm_cache: str
+) -> None:
+    boundary_token_counts = [
+        int(value)
+        for value in re.findall(
+            r"agent-system boundary system_tokens=(\d+)", segment
+        )
+    ]
+    cache_token_counts = [
+        int(value)
+        for value in re.findall(
+            r"kv cache hit text(?: RESPPROTO)? tokens=(\d+)", segment
+        )
+    ]
+    system_token_counts = boundary_token_counts + cache_token_counts
+    if not system_token_counts:
+        raise AssertionError(f"{name}: server did not identify or load a system prompt")
+    if max(system_token_counts) < MIN_SYSTEM_TOKENS:
+        raise AssertionError(
+            f"{name}: expected /agent's long system prompt (at least "
+            f"{MIN_SYSTEM_TOKENS} tokens), got {system_token_counts}"
+        )
     if phase == "cold":
         if not re.search(r"kv cache stored .*reason=agent-system", segment):
             raise AssertionError(f"{name}: cold run did not store a system prompt")
+    elif warm_cache == "refresh":
+        stored = re.search(r"kv cache stored .*reason=agent-system", segment)
+        if stored is None:
+            raise AssertionError(
+                f"{name}: MTP mode change did not refresh the system prompt"
+            )
+        first_hit = segment.find("kv cache hit text")
+        if first_hit >= 0 and first_hit < stored.start():
+            raise AssertionError(
+                f"{name}: MTP mode change loaded an incompatible system prompt"
+            )
     else:
         if "kv cache hit text" not in segment:
             raise AssertionError(f"{name}: warm run did not load a system prompt")
@@ -137,73 +179,87 @@ def assert_short_return(segment: str, marker: str, name: str) -> None:
         )
 
 
-def run_system_cases(client: Client, log_path: Path, phase: str) -> list[dict[str, str]]:
-    reports: list[dict[str, str]] = []
-    for suffix in ("a", "b"):
-        root = f"ssd-root-{suffix}"
-        expected = f"SYSTEM_{suffix.upper()}_OK"
-        agent = make_agent(client=client, root=root)
-        response, segment = run_scenario(
-            log_path,
-            root,
-            lambda agent=agent: agent.run(user_message="Answer now.").response,
-        )
-        assert_response(response, expected)
-        assert_system_cache(segment, phase, root)
-        reports.append({"case": root, "response": response})
-    return reports
+def run_system_cases(
+    client: Client,
+    base_url: str,
+    workroot: Path,
+    log_path: Path,
+    phase: str,
+    warm_cache: str,
+) -> list[dict[str, str]]:
+    if phase == "cold":
+        seed_short_agent_anchor(base_url, log_path)
+    agent = make_agent(client=client, workroot=workroot)
+    response, segment = run_scenario(
+        log_path,
+        "bootstrap-wiki-system",
+        lambda: agent.run(
+            user_message=(
+                "This is a deterministic live test. Follow the configured root "
+                "exit procedure now and return exactly "
+                f"{SYSTEM_RESPONSE}. Do not inspect or modify files."
+            )
+        ).response,
+    )
+    assert_response(response, SYSTEM_RESPONSE)
+    assert_system_cache(segment, phase, "bootstrap-wiki-system", warm_cache)
+    return [{"case": "bootstrap-wiki-system", "response": response}]
 
 
-def run_hds_cases(client: Client, log_path: Path, phase: str) -> list[dict[str, str]]:
-    reports: list[dict[str, str]] = []
-    agent = make_agent(
-        client=client,
-        root="ssd-hds-root",
-        children=("ssd-child-a", "ssd-child-b"),
+def run_hds_cases(
+    client: Client,
+    workroot: Path,
+    log_path: Path,
+    phase: str,
+    warm_cache: str,
+) -> list[dict[str, str]]:
+    agent = make_agent(client=client, workroot=workroot)
+    response, segment = run_scenario(
+        log_path,
+        "agent-wiki-hds",
+        lambda: agent.run(
+            user_message=(
+                "Delegate once to the direct child HDS agent-wiki. Tell the child "
+                "this is a read-only checkpoint test: it must immediately use its "
+                "configured exit procedure and return HDS_CHILD_DONE without using "
+                "file tools. After the child returns, use the root exit procedure "
+                f"and return exactly {HDS_RESPONSE}."
+            )
+        ).response,
     )
-    assert_response(
-        agent.run(user_message="Initialize history only.").response,
-        "READY_OK",
-    )
-    for suffix in ("a", "b"):
-        expected = f"HDS_CHILD_{suffix.upper()}_OK"
-        response, segment = run_scenario(
-            log_path,
-            f"hds-{suffix}",
-            lambda agent=agent, suffix=suffix: agent.run(
-                user_message=f"Run CHILD_{suffix.upper()} now."
-            ).response,
-        )
-        assert_response(response, expected)
-        if "HDS_CHECKPOINT" not in segment:
-            raise AssertionError(f"hds-{suffix}: parent history was not saved")
-        assert_short_return(segment, "HDS_RETURN", f"hds-{suffix}")
-        assert_system_cache(segment, phase, f"hds-{suffix}-child-system")
-        reports.append({"case": f"hds-{suffix}", "response": response})
-    return reports
+    assert_response(response, HDS_RESPONSE)
+    if "HDS_CHECKPOINT" not in segment:
+        raise AssertionError("agent-wiki-hds: parent history was not saved")
+    assert_short_return(segment, "HDS_RETURN", "agent-wiki-hds")
+    assert_system_cache(segment, phase, "agent-wiki-hds", warm_cache)
+    return [{"case": "agent-wiki-hds", "response": response}]
 
 
 def run_skill_cases(
-    client: Client, log_path: Path, phase: str
+    client: Client,
+    workroot: Path,
+    log_path: Path,
+    phase: str,
+    warm_cache: str,
 ) -> list[dict[str, str]]:
-    reports: list[dict[str, str]] = []
-    for suffix in ("a", "b"):
-        expected = f"SKILL_PARENT_{suffix.upper()}_OK"
-        agent = make_agent(client=client, root=f"ssd-skill-root-{suffix}")
-        response, segment = run_scenario(
-            log_path,
-            f"skill-{suffix}",
-            lambda agent=agent, suffix=suffix: agent.run(
-                user_message=f"Run SKILL_{suffix.upper()} now."
-            ).response,
-        )
-        assert_response(response, expected)
-        if "SKILL_CHECKPOINT" not in segment:
-            raise AssertionError(f"skill-{suffix}: skill frontier was not saved")
-        assert_short_return(segment, "SKILL_RETURN", f"skill-{suffix}")
-        assert_system_cache(segment, phase, f"skill-{suffix}-system")
-        reports.append({"case": f"skill-{suffix}", "response": response})
-    return reports
+    agent = make_agent(client=client, workroot=workroot)
+    response, segment = run_scenario(
+        log_path,
+        "how-read-file-skill",
+        lambda: agent.run(
+            user_message=(
+                "Use the configured how-read-file deep skill to read ssd-canary.txt. "
+                "Do not use any write capability. After the skill returns, use the "
+                "root exit procedure and include the exact file contents."
+            )
+        ).response,
+    )
+    assert_response(response, SKILL_CANARY)
+    if "SKILL_CHECKPOINT" not in segment:
+        raise AssertionError("how-read-file-skill: skill frontier was not saved")
+    assert_short_return(segment, "SKILL_RETURN", "how-read-file-skill")
+    assert_system_cache(segment, phase, "how-read-file-skill", warm_cache)
+    return [{"case": "how-read-file-skill", "response": response}]
 
 
 def main() -> None:
@@ -211,25 +267,48 @@ def main() -> None:
     parser.add_argument("--phase", choices=("cold", "warm"), required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:18082/v1")
     parser.add_argument("--server-log", type=Path, required=True)
+    parser.add_argument("--workroot", type=Path, required=True)
     parser.add_argument(
-        "--group", choices=("all", "system", "hds", "skill"), default="all"
+        "--warm-cache", choices=("hit", "refresh"), default="hit"
+    )
+    parser.add_argument(
+        "--group", choices=("all", "system", "hds", "skill"),
+        default="all",
     )
     args = parser.parse_args()
+
+    workroot = args.workroot.resolve()
+    if not workroot.is_dir():
+        raise ValueError(f"isolated Agent Wiki workroot does not exist: {workroot}")
+    canary = workroot / "ssd-canary.txt"
+    if canary.read_text(encoding="utf-8").strip() != SKILL_CANARY:
+        raise ValueError(f"unexpected skill canary contents: {canary}")
 
     client = Client.agentic_openai(
         model="Qwen3.6-27B-Q4_K_S.gguf",
         api_key="ds4-live-test",
         base_url=args.base_url,
-        timeout=180.0,
+        timeout=900.0,
         max_retries=1,
     )
     report: dict[str, object] = {"phase": args.phase}
     if args.group in ("all", "system"):
-        report["system"] = run_system_cases(client, args.server_log, args.phase)
+        report["system"] = run_system_cases(
+            client,
+            args.base_url,
+            workroot,
+            args.server_log,
+            args.phase,
+            args.warm_cache,
+        )
     if args.group in ("all", "hds"):
-        report["hds"] = run_hds_cases(client, args.server_log, args.phase)
+        report["hds"] = run_hds_cases(
+            client, workroot, args.server_log, args.phase, args.warm_cache
+        )
     if args.group in ("all", "skill"):
-        report["skill"] = run_skill_cases(client, args.server_log, args.phase)
+        report["skill"] = run_skill_cases(
+            client, workroot, args.server_log, args.phase, args.warm_cache
+        )
     print("AGENT_SSD_LIVE_REPORT " + json.dumps(report, ensure_ascii=False))
 
 

@@ -51703,7 +51703,11 @@ static int qwen_session_load_payload(ds4_session *s, FILE *fp,
         if (qwen35_layer_is_recurrent(il)) want_recurrent++;
         else want_full++;
     }
+    ds4_qwen_gpu_graph *g = &s->qwen_graph;
     const bool saved_mtp = (h[9] & DS4_QWEN_SESSION_PAYLOAD_FLAG_MTP) != 0;
+    /* Target KV cannot reconstruct the draft frontier (pending hidden, logits,
+     * and MTP KV).  A mode change therefore requires a full prompt rebuild. */
+    const bool runtime_mtp = g->mtp_ready;
     const uint64_t model_bytes = (uint64_t)h[10] | ((uint64_t)h[11] << 32);
     const uint64_t declared_bytes = (uint64_t)h[14] | ((uint64_t)h[15] << 32);
     if (h[0] != DS4_QWEN_SESSION_PAYLOAD_MAGIC ||
@@ -51715,6 +51719,7 @@ static int qwen_session_load_payload(ds4_session *s, FILE *fp,
         (h[9] & ~(DS4_QWEN_SESSION_PAYLOAD_FLAG_MTP |
                   DS4_QWEN_SESSION_PAYLOAD_FLAG_MTP_DRAFT)) != 0 ||
         ((h[9] & DS4_QWEN_SESSION_PAYLOAD_FLAG_MTP_DRAFT) && !saved_mtp) ||
+        saved_mtp != runtime_mtp ||
         h[13] > h[5] || model_bytes != s->engine->model.size ||
         declared_bytes != payload_bytes || h[16] != DS4_N_VOCAB ||
         h[17] != DS4_N_HEAD_KV || h[18] != DS4_N_HEAD_DIM ||
@@ -51725,7 +51730,6 @@ static int qwen_session_load_payload(ds4_session *s, FILE *fp,
         payload_set_err(err, errlen, "incompatible Qwen persistent session payload");
         return 1;
     }
-    ds4_qwen_gpu_graph *g = &s->qwen_graph;
     if (saved_mtp && (!g->mtp_ready || !g->mtp_pending_h ||
                       !g->mtp_key_cache || !g->mtp_value_cache || !s->mtp_logits)) {
         payload_set_err(err, errlen, "Qwen persistent session requires MTP state");

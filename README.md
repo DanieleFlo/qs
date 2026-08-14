@@ -148,7 +148,9 @@ the model name in clients connected to `ds4-server`:
 Qwen MTP is off unless `--mtp` is present. That flag automatically loads
 `gguf/mtp-Qwen3.6-27B-Q4_0.gguf`; `--mtp-model FILE` overrides the support
 GGUF when an explicit path is needed. Qwen defaults to draft depth two and is
-hard-capped at depth four. On the RTX 3090 Q4_K_S validation, a simple repeated
+hard-capped at depth four. On the local 24 GB RTX 3090, Qwen3.6 Q4_K_S plus MTP
+must use `--ctx 30000` or less so dynamic workspace and driver allocations keep
+enough VRAM headroom. On the RTX 3090 Q4_K_S validation, a simple repeated
 copy measured 1.52x in the CLI and 1.62x generation throughput through the
 server. With the normal sampled defaults (`temperature=1`, `top_p=1`,
 `min_p=0.05`), a fixed-seed CLI run measured 1.54x and remained token-identical

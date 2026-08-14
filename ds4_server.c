@@ -15270,9 +15270,15 @@ static void generate_job(server *s, server_slot *slot, job *j) {
     ds4_session_set_display_progress(slot->session, server_progress_cb, &progress);
 
     bool cold_store_is_system = false;
-    const int cold_store_len = cached == 0 ?
-        kv_cache_cold_store_target_request(s, &j->req, prompt_for_sync,
-                                           &cold_store_is_system) : 0;
+    int cold_store_len = 0;
+    if (cached == 0 || s->qwen_session_cache) {
+        const int candidate = kv_cache_cold_store_target_request(
+            s, &j->req, prompt_for_sync, &cold_store_is_system);
+        /* A legacy or generic agent-system entry may contain only the BOS.
+         * Extend it to the exact rendered system boundary before any tool
+         * checkpoint needs to reconstruct the request. */
+        if (candidate > cached) cold_store_len = candidate;
+    }
     int suppressed_continued_last = -1;
     if (cold_store_len >= s->kv.opt.min_tokens) {
         /* A cold checkpoint can land exactly on the continued-checkpoint

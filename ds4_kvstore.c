@@ -1379,6 +1379,7 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
     }
     char err[160] = {0};
     int loaded = 0;
+    bool discard_failed = false;
     if (header_ok &&
         ds4_session_load_payload(session, fp, hdr.payload_bytes, err, sizeof(err)) == 0)
     {
@@ -1409,6 +1410,7 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
         }
     } else {
         if (header_ok) ds4_session_invalidate(session);
+        discard_failed = true;
         kv_logf(kc, DS4_KVSTORE_LOG_KVCACHE,
                 "%s: kv cache load failed%s%s %s: %s load=%.1f ms",
                 kv_log_name(kc),
@@ -1419,6 +1421,14 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
                 (kv_now_sec() - load_t0) * 1000.0);
     }
     fclose(fp);
+    if (discard_failed && (unlink(path) == 0 || errno == ENOENT)) {
+        kv_logf(kc, DS4_KVSTORE_LOG_KVCACHE,
+                "%s: kv cache discarded failed text-prefix payload%s%s %s",
+                kv_log_name(kc),
+                responses_protocol ? " " : "",
+                responses_protocol ? "RESPPROTO" : "",
+                path);
+    }
 
     if (loaded > 0) {
         const double load_ms = (kv_now_sec() - load_t0) * 1000.0;
