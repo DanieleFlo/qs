@@ -150,47 +150,55 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `CONTRIBUTING.md` — regole di sviluppo, build, test e contributi.
 - `STRIXHALO.md` — note operative per build ed esecuzione ROCm su Strix Halo.
 - `PROJECT_INDEX.md` — questo indice e ordine della spiegazione tecnica.
-- `docs/qwen36-drift-hypotheses.md` — registro vivo delle ipotesi sul drift
+- `docs/INDEX.md` — indice madre della wiki tecnica, con tassonomia, regole di
+  costruzione e accesso agli indici semantici di ogni macro-argomento.
+- `docs/performance/qwen36-drift-hypotheses.md` — registro vivo delle ipotesi sul drift
   Qwen3.6, con evidenze, esperimenti ordinati e gate dei 32 token.
-- `docs/qwen36-numerics-lab.md` — banco differenziale per distinguere errori
+- `docs/performance/qwen36-numerics-lab.md` — banco differenziale per distinguere errori
   semantici, roundoff CPU/CUDA e policy aritmetiche Q4_K/Q8_K; include l'audit
   del percorso Ollama/llama.cpp senza eseguire Ollama.
-- `docs/qwen36-performance-experiments-2026-08-05.md` — registro riproducibile
+- `docs/performance/qwen36-performance-experiments-2026-08-05.md` — registro riproducibile
   dei test prestazionali Qwen CUDA, inclusi candidati scartati, confronto locale
   con LM Studio, gate 500/15 e verifiche numeriche associate.
-- `docs/qwen36-performance-ledger.md` — registro canonico e compatto delle
+- `docs/performance/qwen36-performance-ledger.md` — registro canonico e compatto delle
   ottimizzazioni Qwen CUDA mantenute, scartate o ancora da confermare; unifica
   le decisioni disperse nei documenti datati e conserva il ciclo sperimentale.
 - `docs/research/cuda/` — componente della knowledge base dedicato a toolchain,
   profiling, SASS/resource usage, primitive Ampere `sm_86` e mappa delle
   prossime ipotesi CUDA falsificabili per DS4.
-- `docs/qwen36-lmstudio-decoding-analysis-2026-08-06.md` — guida didattica al
+- `docs/performance/qwen36-lmstudio-decoding-analysis-2026-08-06.md` — guida didattica al
   decoding LM Studio/llama.cpp su RTX 3090: MMVQ Q8_1, caratteristiche GPU,
   implementazioni DS4 riuscite o scartate, risultati dei gate e piano per
   replicare il percorso veloce senza quantizzare la KV cache.
-- `docs/qwen36-cuda-optimization-progression.md` — checklist ordinata delle
+- `docs/performance/qwen36-cuda-optimization-progression.md` — checklist ordinata delle
   ottimizzazioni CUDA Qwen3.6 Q4_K_S ancora da sviluppare: ricerca upstream e
   letteratura, gate numerici/prestazionali, budget RTX 3090 da 24 GB, policy di
   rollback e confronto CPU obbligatoriamente finale.
-- `docs/qwen36-mtp-design.md` — progetto di supporto Qwen3.6 MTP: audit dei
+- `docs/architecture/qwen36-mtp-design.md` — progetto di supporto Qwen3.6 MTP: audit dei
   repository LM Studio/Unsloth/llama.cpp e del GGUF NextN, semantica del kernel,
   allineamento token-hidden, modello prestazionale, verifier target microbatch,
   rollback Gated DeltaNet, scheduling adattivo, fallback e gate di test per il
   target CUDA Q4_K_S/Q4_K_M.
-- `docs/agent-api.md` — contratto dell'estensione Responses `agentic`: registry
+- `docs/architecture/qwen38-compatibility.md` — audit pinning del target
+  Qwen3.8-27B-UD-Q4_K_S e del relativo MTP: shape, inventario quantizzato,
+  integrazione CLI/server e formati CUDA ancora necessari.
+- `docs/agentic/agent-api.md` — contratto dell'estensione Responses `agentic`: registry
   statico, capability tool/skill disgiunte, checkpoint SSD gerarchici e
   semantica di `return` senza full prefill del parent.
-- `docs/agentic-checkpoint-validation-2026-08-07.md` — gate CUDA Q4_K_S dei
+- `docs/agentic/agentic-checkpoint-validation-2026-08-07.md` — gate CUDA Q4_K_S dei
   task 10–11: equivalenza bit-exact, casi lunghi 10k, rollback MTP, metriche
   SSD/GPU e copertura della suite HTTP agentica.
-- `docs/constrained-json-decoding-plan.md` — checklist e criteri di completamento
+- `docs/roadmaps/constrained-json-decoding-plan.md` — checklist e criteri di completamento
   per simulatore DSML, JSON Schema, masking dei logits e output strutturati.
-- `docs/todo-agentic-server-performance.md` — diario misurabile degli interventi
+- `docs/roadmaps/todo-agentic-server-performance.md` — diario misurabile degli interventi
   su sampling vincolato DSML/JSON, telemetria server e piccoli suffissi, senza
   modifiche ai kernel CUDA.
-- `docs/agent_performance_contract.md` — gate operativo per gli esperimenti CUDA:
+- `docs/performance/agent_performance_contract.md` — gate operativo per gli esperimenti CUDA:
   baseline, ipotesi falsificabile, correttezza, statistica e verdetto.
-- `docs/todo-harness.md` — roadmap completa del GPU kernel engineering harness.
+- `docs/roadmaps/todo-harness.md` — roadmap completa del GPU kernel engineering harness.
+- `docs/roadmaps/qwen38-implementation-roadmap.md` — registro vivo
+  dell'integrazione Qwen3.8 UD-Q4_K_S: kernel GGML mancanti, parita' CLI/server,
+  MTP, checkpoint SSD, doppi gate Qwen3.6/Qwen3.8, decisioni e risultati.
 - `docs/hardware/` — inventario della macchina RTX 3090 e note di riferimento
   su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
@@ -252,6 +260,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/research/INDEX.md` — ingresso alla knowledge base locale: paper HTML
   archiviati e hashati, schede delle piattaforme, fork RTX 3090, guide tematiche
   e indici gerarchici con intervalli di riga.
+- `docs/research/forks/syv-ai-qwen38-27b-rtx3090.md` — analisi storica del
+  serving Qwen3.8 su RTX 3090, con separazione fra ottimizzazioni pure, drift
+  numerico, trade-off di qualità e failure di correttezza.
 - `docs/research/papers/manifest.json`, `corpus-lock.json` — selezione motivata
   dei paper e provenance esatta degli artefatti scaricati.
 - `docs/research/sources-lock.json` — commit fissati e grado di evidenza dei
@@ -260,8 +271,12 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   dichiarato e genera il testo semantico locale.
 - `tools/build_research_indexes.py` — rigenera catalogo e indici con range di
   riga calcolati dal contenuto effettivo.
+- `tools/build_docs_indexes.py` — rigenera l'indice madre, gli indici tematici
+  e il catalogo machine-readable dell'intera wiki.
 - `tests/test_research_corpus.py` — verifica completezza, SHA, range, indici e
   limite dei link esterni nelle schede repository.
+- `tests/test_docs_wiki.py` — blocca link interni rotti, range falsi e documenti
+  Markdown orfani o lasciati nella radice di `docs`.
 - `ds4_eval.c` — harness di valutazione end-to-end su piccoli set di domande,
   con rendering, inferenza reale ed estrazione/valutazione delle risposte.
 - `ds4_help.c`, `ds4_help.h` — testo e rendering condiviso dell'help dei binari.

@@ -7934,6 +7934,319 @@
               "summary": "Usarlo come controllo di configurazione GGUF solo dopo aver fissato release, parent commit e flag CUDA; non considerarlo un oracle indipendente da llama.cpp se condivide lo stesso codice numerico."
             }
           ]
+        },
+        {
+          "path": "docs/research/forks/syv-ai-qwen38-27b-rtx3090.md",
+          "sections": [
+            {
+              "title": "Analisi tecnica di `syv-ai/qwen38-27b-rtx3090`: da dove viene la velocità e quanto costa in qualità",
+              "level": 1,
+              "start": 1,
+              "end": 42,
+              "summary": "**Fonte primaria:** `syv-ai/qwen38-27b-rtx3090`."
+            },
+            {
+              "title": "Provenienza e perimetro",
+              "level": 2,
+              "start": 3,
+              "end": 20,
+              "summary": "**Fonte primaria:** `syv-ai/qwen38-27b-rtx3090`."
+            },
+            {
+              "title": "Conclusione principale",
+              "level": 2,
+              "start": 21,
+              "end": 42,
+              "summary": "La cosa più importante da capire è questa:"
+            },
+            {
+              "title": "La mia classificazione",
+              "level": 3,
+              "start": 31,
+              "end": 42,
+              "summary": "---"
+            },
+            {
+              "title": "1. Prima di tutto: cosa significano davvero 1.000, 381 e 132 tok/s",
+              "level": 1,
+              "start": 43,
+              "end": 62,
+              "summary": "I numeri più appariscenti della repo non devono essere messi sullo stesso piano."
+            },
+            {
+              "title": "2. Le innovazioni, ordinate per qualità",
+              "level": 1,
+              "start": 63,
+              "end": 169,
+              "summary": "Questa è probabilmente una delle idee migliori dell'intera repo."
+            },
+            {
+              "title": "1. Quantizzazione del solo drafter MTP — Classe A",
+              "level": 2,
+              "start": 65,
+              "end": 76,
+              "summary": "Questa è probabilmente una delle idee migliori dell'intera repo."
+            },
+            {
+              "title": "2. Quantizzazione INT4 del drafter DFlash2 — Classe A",
+              "level": 2,
+              "start": 77,
+              "end": 88,
+              "summary": "Stesso principio."
+            },
+            {
+              "title": "3. Draft vocabulary costruito sugli output del modello — Classe A",
+              "level": 2,
+              "start": 89,
+              "end": 100,
+              "summary": "Il drafter non proietta più sul vocabolario completo da ~248k token, ma su circa 40k token scelti osservando ciò che Qwen stesso tende a generare."
+            },
+            {
+              "title": "4. Speculative decoding MTP — Classe A come algoritmo",
+              "level": 2,
+              "start": 101,
+              "end": 119,
+              "summary": "Qwen3.8-27B ha MTP nativo; l'architettura ufficiale ha 64 layer, 48 Gated DeltaNet + 16 attention layer e MTP addestrato nativamente."
+            },
+            {
+              "title": "5. DFlash2 — Classe A per il principio, A− per questa integrazione custom",
+              "level": 2,
+              "start": 120,
+              "end": 135,
+              "summary": "DFlash2 propone un intero blocco di 7 token con un solo passaggio anziché concatenare quattro predizioni MTP."
+            },
+            {
+              "title": "6. Context lookup drafting — Classe A",
+              "level": 2,
+              "start": 136,
+              "end": 149,
+              "summary": "Questa è l'idea dietro i 260-381 tok/s quando il modello copia o modifica materiale presente nel prompt."
+            },
+            {
+              "title": "7. Prefix caching dello stato ibrido KV + GDN — Classe A/A−",
+              "level": 2,
+              "start": 150,
+              "end": 161,
+              "summary": "Su una conversazione con documento da 24k token, il follow-up passa da circa 23 secondi a circa **0,85-1,15 s TTFT**, riusando sia KV sia stato recurrente dal confine del blocco cached."
+            },
+            {
+              "title": "8. Correzione dei gruppi KV ibridi e contabilizzazione CUDA graph — Classe A",
+              "level": 2,
+              "start": 162,
+              "end": 169,
+              "summary": "DFlash2 introduceva spreco di KV pool perché vLLM paddingava i gruppi di layer in modo sfavorevole."
+            },
+            {
+              "title": "3. Ottimizzazioni “quasi pure”, ma che cambiano l'aritmetica",
+              "level": 1,
+              "start": 170,
+              "end": 202,
+              "summary": "È un kernel Triton progettato specificamente per il multi-query verify dello speculative decoding."
+            },
+            {
+              "title": "9. Split-KV attention per il verify step — Classe A−",
+              "level": 2,
+              "start": 172,
+              "end": 190,
+              "summary": "È un kernel Triton progettato specificamente per il multi-query verify dello speculative decoding."
+            },
+            {
+              "title": "10. Sampler small-top-k / sort-free — Classe A−",
+              "level": 2,
+              "start": 191,
+              "end": 202,
+              "summary": "Invece di ordinare l'intero vocab da ~248k elementi, usa un percorso specializzato quando `top-k <= 64`, più una softmax parallelizzata."
+            },
+            {
+              "title": "4. FP16 recurrent state: probabilmente il miglior trade-off numericamente lossy — Classe B",
+              "level": 1,
+              "start": 203,
+              "end": 224,
+              "summary": "Questo punto è particolarmente interessante per Qwen3.8."
+            },
+            {
+              "title": "5. Quantizzare `embed_tokens` e `lm_head` INT8 — Classe B",
+              "level": 1,
+              "start": 225,
+              "end": 245,
+              "summary": "Qui invece il target cambia senza ambiguità."
+            },
+            {
+              "title": "6. `lm_head` GPTQ INT4 — Classe B/C",
+              "level": 1,
+              "start": 246,
+              "end": 261,
+              "summary": "Nella variante single-user più veloce anche il `lm_head` del **target** diventa INT4 GPTQ."
+            },
+            {
+              "title": "7. INT8 delle attivazioni: qui inizia il vero quality-for-speed",
+              "level": 1,
+              "start": 262,
+              "end": 298,
+              "summary": "La tabella della repo è molto istruttiva."
+            },
+            {
+              "title": "Gate/up INT8: B",
+              "level": 3,
+              "start": 273,
+              "end": 278,
+              "summary": "+0,9% PPL per un buon aumento di throughput."
+            },
+            {
+              "title": "Intero MLP INT8: C",
+              "level": 3,
+              "start": 279,
+              "end": 286,
+              "summary": "È il default batch della repo: circa **942 tok/s e2e**, ma PPL sale del **2,2%**."
+            },
+            {
+              "title": "Tutte le lineari INT8: C−",
+              "level": 3,
+              "start": 287,
+              "end": 298,
+              "summary": "Arriva a ~1.042 tok/s e2e / ~1.222 steady decode, ma PPL è **+3,7%**."
+            },
+            {
+              "title": "8. KV cache quantizzata: il punto su cui concordo maggiormente con la tua osservazione",
+              "level": 1,
+              "start": 299,
+              "end": 331,
+              "summary": "Qui bisogna correggere una possibile lettura del README."
+            },
+            {
+              "title": "Quindi la mia classificazione è:",
+              "level": 3,
+              "start": 322,
+              "end": 331,
+              "summary": "**BF16 KV fast:** preferibile se 64k bastano."
+            },
+            {
+              "title": "9. KVarN K4V2 e cache 4/2 bit — Classe C per fidelity, ottima solo se serve context estremo",
+              "level": 1,
+              "start": 332,
+              "end": 352,
+              "summary": "KVarN consente di spingere la capacità molto più in alto: la repo riporta 262k che entrano con margine e needle test corretti fino a 240k."
+            },
+            {
+              "title": "10. Il prerequisito nascosto: il body è già W4A16",
+              "level": 1,
+              "start": 353,
+              "end": 371,
+              "summary": "Prima ancora delle innovazioni della repo, il modello caricato è il checkpoint **Qwen3.8-27B-W4A16-AutoRound**, non il BF16 ufficiale."
+            },
+            {
+              "title": "11. I casi realmente problematici: Classe D",
+              "level": 1,
+              "start": 372,
+              "end": 405,
+              "summary": "Questi non sono “quantizzazione con lieve drift”."
+            },
+            {
+              "title": "W4A8 Marlin con negative scales non corretto",
+              "level": 3,
+              "start": 376,
+              "end": 383,
+              "summary": "Il percorso originale di vLLM interpretava come unsigned scale requantizzate che potevano essere negative; il risultato era **output garbage pur mostrando benchmark eccellenti**."
+            },
+            {
+              "title": "DFlash2 backport senza semantic fix della temperatura",
+              "level": 3,
+              "start": 384,
+              "end": 391,
+              "summary": "Come detto prima, senza la patch si verificavano draft contro una `q` sbagliata per temperature intermedie."
+            },
+            {
+              "title": "FlashInfer/FP8 con k=4",
+              "level": 3,
+              "start": 392,
+              "end": 397,
+              "summary": "La repo segnala un **illegal memory access** quando una richiesta termina mentre un'altra è ancora in generazione; per questo `CTX=long` usa tre draft anziché quattro."
+            },
+            {
+              "title": "Sticky long-verify in batch",
+              "level": 3,
+              "start": 398,
+              "end": 405,
+              "summary": "Il soak test della repo ha trovato che il contatore globale del long-block poteva far dipendere la lunghezza del verify dalle altre richieste del batch; cambiando block size cambia anche l'ordine floating-point e in un c…"
+            },
+            {
+              "title": "12. Dove DS4 è più rigoroso della suite di questa repo",
+              "level": 1,
+              "start": 406,
+              "end": 442,
+              "summary": "Questo è probabilmente l'aspetto più importante per valutare quanto fidarsi delle affermazioni di qualità."
+            },
+            {
+              "title": "13. Come rivaluterei i test della repo usando il metro DS4",
+              "level": 1,
+              "start": 443,
+              "end": 497,
+              "summary": "**Evidenza syv:** ottima PPL, differenza nulla a tre decimali."
+            },
+            {
+              "title": "FP16 recurrent state",
+              "level": 3,
+              "start": 445,
+              "end": 452,
+              "summary": "**Evidenza syv:** ottima PPL, differenza nulla a tre decimali."
+            },
+            {
+              "title": "INT8 `embed_tokens` e `lm_head`",
+              "level": 3,
+              "start": 453,
+              "end": 462,
+              "summary": "**Evidenza syv:** Frobenius error + PPL/task benchmark."
+            },
+            {
+              "title": "INT8 activations",
+              "level": 3,
+              "start": 463,
+              "end": 470,
+              "summary": "Qui la PPL mostra già il danno."
+            },
+            {
+              "title": "KV FP8/INT8/KVarN",
+              "level": 3,
+              "start": 471,
+              "end": 482,
+              "summary": "Qui un test DS4 è particolarmente necessario."
+            },
+            {
+              "title": "Speculative decoding",
+              "level": 3,
+              "start": 483,
+              "end": 497,
+              "summary": "Qui la teoria è molto più forte."
+            },
+            {
+              "title": "14. Ranking finale delle innovazioni",
+              "level": 1,
+              "start": 498,
+              "end": 520,
+              "summary": "Se le ordinassi per rapporto **speed / fidelity**, la mia lista sarebbe:"
+            },
+            {
+              "title": "15. Qual è, quindi, la vera innovazione della repo?",
+              "level": 1,
+              "start": 521,
+              "end": 543,
+              "summary": "Non è principalmente “quantizzare tutto”."
+            },
+            {
+              "title": "16. Le configurazioni che sceglierei",
+              "level": 1,
+              "start": 544,
+              "end": 557,
+              "summary": "**Massima fedeltà possibile sulla 3090:** terrei BF16 KV (`CTX=fast`), speculative decoding, drafter quantizzato, draft vocabulary, split-KV, sampler ottimizzato e prefix cache."
+            },
+            {
+              "title": "17. Il test che manca per poter certificare queste conclusioni alla maniera di DS4",
+              "level": 1,
+              "start": 558,
+              "end": 577,
+              "summary": "Per portare questa repo allo standard di evidenza DS4, farei un'unica matrice Qwen “golden” con **lo stesso checkpoint, tokenizer, template, prompt e hardware**, registrando per ogni configurazione:"
+            }
+          ]
         }
       ]
     },
@@ -8070,7 +8383,7 @@
               "title": "Qwen3.6 MTP: workflow llama.cpp, confronto DS4 e audit CUDA",
               "level": 1,
               "start": 1,
-              "end": 305,
+              "end": 396,
               "summary": "Questa scheda descrive il percorso MTP realmente eseguito per Qwen3.6, dal"
             },
             {
@@ -8084,161 +8397,175 @@
               "title": "Fonti primarie",
               "level": 2,
               "start": 15,
-              "end": 33,
+              "end": 36,
               "summary": "integrazione MTP, context target/draft separati, hidden NextN e rollback"
             },
             {
               "title": "Semantica NextN",
               "level": 2,
-              "start": 34,
-              "end": 51,
+              "start": 37,
+              "end": 54,
               "summary": "Il trunk target espone `h_nextn` dopo `output_norm`."
             },
             {
               "title": "Workflow llama.cpp",
               "level": 2,
-              "start": 52,
-              "end": 103,
+              "start": 55,
+              "end": 112,
               "summary": "Il context target conserva logits, KV e memoria ricorrente."
             },
             {
               "title": "Prefill e frontiera",
               "level": 3,
-              "start": 54,
-              "end": 60,
+              "start": 57,
+              "end": 63,
               "summary": "Il context target conserva logits, KV e memoria ricorrente."
             },
             {
               "title": "Draft",
               "level": 3,
-              "start": 61,
-              "end": 66,
+              "start": 64,
+              "end": 69,
               "summary": "Il token appena campionato non e' ancora nel target state."
             },
             {
               "title": "Verifica target",
               "level": 3,
-              "start": 67,
-              "end": 79,
+              "start": 70,
+              "end": 82,
               "summary": "Il server costruisce un unico batch:"
             },
             {
               "title": "Accept e rollback",
               "level": 3,
-              "start": 80,
-              "end": 88,
+              "start": 83,
+              "end": 91,
               "summary": "`process()` conserva tutti gli hidden target in `verify_h`."
             },
             {
               "title": "Pseudocodice",
               "level": 3,
-              "start": 89,
-              "end": 103,
-              "summary": "sampled = argmax(target_logits)"
+              "start": 92,
+              "end": 112,
+              "summary": "sampled = target_sampler(target_logits)"
             },
             {
               "title": "DS4 prima dell'audit",
               "level": 2,
-              "start": 104,
-              "end": 115,
+              "start": 113,
+              "end": 131,
               "summary": "Il vecchio ciclo eseguiva `target_seed(1)` e poi `verify(drafts)`."
             },
             {
               "title": "DS4 finale",
               "level": 2,
-              "start": 116,
-              "end": 136,
+              "start": 132,
+              "end": 173,
               "summary": "Con `--mtp`, il percorso predefinito e':"
+            },
+            {
+              "title": "Sampling, masking e doppio controllo",
+              "level": 3,
+              "start": 156,
+              "end": 173,
+              "summary": "La soluzione segue `common_sampler_sample_and_accept_n` del llama.cpp locale di"
             },
             {
               "title": "Problemi trovati e ritorno a llama.cpp",
               "level": 2,
-              "start": 137,
-              "end": 154,
+              "start": 174,
+              "end": 192,
               "summary": "Il bug lane 1 e' il caso piu' importante."
             },
             {
               "title": "Audit dei kernel MTP",
               "level": 2,
-              "start": 155,
-              "end": 190,
+              "start": 193,
+              "end": 228,
               "summary": "Il verifier usa attivazioni Q8_1 piu' un secondo residuo Q8_1."
             },
             {
               "title": "Target Q4_K/Q5_K/Q6_K",
               "level": 3,
-              "start": 157,
-              "end": 176,
+              "start": 195,
+              "end": 214,
               "summary": "Il verifier usa attivazioni Q8_1 piu' un secondo residuo Q8_1."
             },
             {
               "title": "Sidecar Q4_0",
               "level": 3,
-              "start": 177,
-              "end": 183,
+              "start": 215,
+              "end": 221,
               "summary": "Il shared head usa Q4_0 x Q8_1+R8 con DP4A e otto output rows per CTA."
             },
             {
               "title": "Rollback GDN",
               "level": 3,
-              "start": 184,
-              "end": 190,
+              "start": 222,
+              "end": 228,
               "summary": "Le 48 convolution state e recurrent state vengono snapshotate direttamente"
             },
             {
               "title": "Esperimenti scartati",
               "level": 2,
-              "start": 191,
-              "end": 201,
+              "start": 229,
+              "end": 239,
               "summary": "qualita' fallita; non presente nel percorso finale."
             },
             {
               "title": "Validazione finale",
               "level": 2,
-              "start": 202,
-              "end": 289,
+              "start": 240,
+              "end": 380,
               "summary": "Comando:"
             },
             {
               "title": "Suite model-backed",
               "level": 3,
-              "start": 204,
-              "end": 229,
+              "start": 242,
+              "end": 268,
               "summary": "Comando:"
             },
             {
               "title": "CLI Q4_K_S",
               "level": 3,
-              "start": 230,
-              "end": 242,
+              "start": 269,
+              "end": 291,
               "summary": "Context 768, prefill chunk 16, 128 token, greedy:"
             },
             {
               "title": "Confronto locale llama.cpp",
               "level": 3,
-              "start": 243,
-              "end": 267,
+              "start": 292,
+              "end": 316,
               "summary": "Il binario CUDA upstream al commit auditato e' stato eseguito sulla stessa RTX"
             },
             {
               "title": "Server reale",
               "level": 3,
-              "start": 268,
-              "end": 289,
+              "start": 317,
+              "end": 359,
               "summary": "Quattro richieste `/v1/chat/completions`, una warm-up e tre misurate, 180 token"
+            },
+            {
+              "title": "Correzione VRAM 24 GiB",
+              "level": 3,
+              "start": 360,
+              "end": 380,
+              "summary": "Il vecchio report `15.02 GiB planned` era incompleto: trattava il KV Qwen come"
             },
             {
               "title": "Nota vLLM",
               "level": 2,
-              "start": 290,
-              "end": 297,
+              "start": 381,
+              "end": 388,
               "summary": "L'assunzione che vLLM non implementi Qwen MTP non e' piu' valida."
             },
             {
               "title": "Limiti dell'evidenza",
               "level": 2,
-              "start": 298,
-              "end": 305,
+              "start": 389,
+              "end": 396,
               "summary": "Il workflow e l'audit CUDA llama.cpp sono fissati al commit indicato."
             }
           ]

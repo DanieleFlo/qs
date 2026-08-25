@@ -19,10 +19,11 @@ OSSERVA → MISURA → CLASSIFICA → RECUPERA CONOSCENZA → FORMULA IPOTESI
 `KEEP` richiede correttezza della primitiva, logits/argmax pertinenti, benchmark
 fuori dal profiler e conferma slow con almeno cinque ripetizioni. `DIRECTION`
 e `NEED_MORE_DATA` non rendono predefinito un percorso. Le fonti principali
-sono `docs/qwen36-performance-experiments-2026-08-05.md`,
-`docs/qwen36-lmstudio-decoding-analysis-2026-08-06.md`,
-`docs/qwen36-cuda-optimization-progression.md`,
-`docs/qwen36-numerics-lab.md` e `docs/qwen36-drift-hypotheses.md`.
+sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
+`docs/performance/qwen36-lmstudio-decoding-analysis-2026-08-06.md`,
+`docs/performance/qwen36-cuda-optimization-progression.md`,
+`docs/performance/qwen36-numerics-lab.md` e
+`docs/performance/qwen36-drift-hypotheses.md`.
 
 ## Stato corrente
 

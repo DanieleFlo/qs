@@ -1,6 +1,6 @@
 # TODO — Prestazioni del server agentico e constrained decoding
 
-Ultimo aggiornamento: 2026-08-12
+Ultimo aggiornamento: 2026-08-25
 
 ## Scopo e vincoli
 
@@ -86,6 +86,33 @@ La baseline ha contato 9,932,800 candidati esaminati per risposta, solo 994
 accettati e 73,846,280 byte di piece decodificati. La GPU/eval non era il collo
 di bottiglia dominante: filtro e forced-prefix assorbivano circa 2.45 s.
 
+### Confronto Qwen3.8/Qwen3.6 dopo la correzione ChatML
+
+Il confronto del 2026-08-25 usa lo stesso binario, RTX 3090, contesto 32768,
+modalita' trie, un warm-up e cinque ripetizioni misurate. Entrambi gli artifact
+producono output semantico corretto e deterministico. Il workload DSML richiesto
+genera 76 token in entrambi i modelli.
+
+| Mediana, DSML required | Qwen3.8 UD-Q4_K_S | Qwen3.6 Q4_K_S | Lettura |
+|---|---:|---:|---|
+| Sampling mask build | 355,826 ms | 357,851 ms | 3.8 circa 0,57% piu' rapido |
+| Constraint CPU totale | 1.004,302 ms | 999,680 ms | parita' pratica; 3.8 +0,46% |
+| Eval modello | 2.144,873 ms | 1.757,448 ms | 3.8 +22,0% |
+| Decode wall | 3.982,537 ms | 3.439,630 ms | 3.8 +15,8% |
+| Output throughput | 19,083 tok/s | 22,095 tok/s | 3.8 -13,6% |
+
+Sul workload JSON Schema annidato il constraint CPU e' ancora in parita'
+(11,338 contro 11,318 ms), mentre il throughput e' 25,286 contro 30,864 tok/s.
+Quindi il requisito di parita' del masking e' soddisfatto e la costruzione della
+maschera DSML e' marginalmente piu' rapida sul 3.8; non e' invece corretto
+dichiarare il modello 3.8 piu' veloce end-to-end. Il gap misurato e' dominato
+dall'eval dei pesi UD.
+
+Artifact:
+
+- `performance-results/qwen38-chatml-dsml-trie-20260825-002/experiment.json`;
+- `performance-results/qwen36-chatml-dsml-trie-20260825/experiment.json`.
+
 ## Punto 1 — Strumentazione e benchmark ripetibile
 
 ### Telemetria da aggiungere
@@ -163,16 +190,19 @@ allocazioni nel filtro a regime pari a zero; riduzione misurabile di
 
 #### 2B — Ridurre i candidati visitati
 
-- [ ] Costruire un trie byte-level dei piece tokenizzati una sola volta per
+- [x] Costruire un trie byte-level dei piece tokenizzati una sola volta per
   engine/vocabolario.
-- [ ] Esporre dal simulatore DSML transizioni incrementali sufficienti a potare
+- [x] Esporre dal simulatore DSML transizioni incrementali sufficienti a potare
   interi rami del trie appena il prefisso diventa invalido.
-- [ ] Confrontare scansione completa e trie su stati: wrapper, nome tool, chiavi,
+- [x] Confrontare scansione completa e trie su stati: wrapper, nome tool, chiavi,
   numero, stringa libera/escaped e marker di chiusura.
-- [ ] Misurare nodi visitati e token finali verificati, non solo wall time.
+- [x] Misurare nodi visitati e token finali verificati, non solo wall time.
 
 Gate 2B: insieme esatto dei token ammessi uguale alla scansione esaustiva su un
 corpus di stati e fuzz differenziale; nessuna falsa accettazione o esclusione.
+Il gate e' coperto da `ds4_test --constraint-trie`, dalla suite live Qwen3.8 in
+`compare_new_vs_oracle` (nessuna divergenza osservata) e dagli artifact a cinque
+ripetizioni sopra; il fallback esaustivo resta fail-closed.
 
 #### 2C — Cache adattiva per stato e schemi dinamici
 
@@ -220,7 +250,7 @@ i logits.
 - [x] Ricostruire le modifiche che hanno introdotto il crossover a 512 token e
   il fast-forward DSML (`git log`, `git blame`, diff e test associati).
 - [x] Rileggere e collegare i tentativi già annotati in
-  `docs/qwen36-performance-experiments-2026-08-05.md`, nel piano constrained e
+  `docs/performance/qwen36-performance-experiments-2026-08-05.md`, nel piano constrained e
   nei ledger performance.
 - [x] Elencare i casi di non equivalenza: ordine delle riduzioni, posizioni/KV,
   chunk boundary, resume di una sessione lunga e output head sull'ultima riga.

@@ -67,6 +67,8 @@ If you are looking for very specific things, we have other
 sub-README files. Otherwise for normal usage keep reading the
 next sections.
 
+- [docs/INDEX.md](docs/INDEX.md): wiki tecnica navigabile per macro-argomenti,
+  con indici semantici e riferimenti agli intervalli di righe.
 - [CONTRIBUTING.md](CONTRIBUTING.md): correctness and speed regression testing
   guide for contributors. **Read this before sending a pull request**.
 - [QA_BEFORE_RELEASES.md](QA_BEFORE_RELEASES.md): the complete release test
@@ -88,8 +90,8 @@ next sections.
 
 ## Model Weights
 
-This implementation only works with the audited DeepSeek V4, Qwen3.6 27B, and
-GLM 5.2 GGUFs listed below. It is not a general GGUF loader, and arbitrary GGUF
+This implementation only works with the audited DeepSeek V4, Qwen3.6/Qwen3.8
+27B, and GLM 5.2 GGUFs listed below. It is not a general GGUF loader, and arbitrary GGUF
 files will not have
 the tensor layout, quantization mix, metadata, or optional MTP state expected by
 the engine. The 2 bit quantizations provided here are verified to be actually
@@ -155,8 +157,23 @@ copy measured 1.52x in the CLI and 1.62x generation throughput through the
 server. With the normal sampled defaults (`temperature=1`, `top_p=1`,
 `min_p=0.05`), a fixed-seed CLI run measured 1.54x and remained token-identical
 to target-only sampling; lower draft acceptance gives a smaller gain. See the
-[MTP design](docs/qwen36-mtp-design.md) and the
+[MTP design](docs/architecture/qwen36-mtp-design.md) and the
 [llama.cpp control-flow/kernel audit](docs/research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md).
+
+The pinned Qwen3.8 target and matching MTP sidecar can be downloaded together:
+
+```sh
+./download_model.sh qwen38-q4-mtp
+./ds4 -m gguf/Qwen3.8-27B-UD-Q4_K_S.gguf
+./ds4 -m gguf/Qwen3.8-27B-UD-Q4_K_S.gguf --mtp
+```
+
+DS4 audits its 65-block target layout, embedded NextN block, tokenizer, dynamic
+quant inventory, and the mixed Q3_K/Q4_K/Q6_K MTP layout. The current CUDA
+backend deliberately stops before allocating the model because this Unsloth UD
+artifact also uses Q3_K, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, and IQ4_XS;
+dedicated CUDA matvec kernels for those formats are still required. See the
+[Qwen3.8 compatibility audit](docs/architecture/qwen38-compatibility.md).
 
 GLM 5.2 support is limited to the GGUF files tested by this branch:
 
@@ -204,7 +221,8 @@ make cpu              # CPU-only diagnostics build
 
 `./ds4flash.gguf` is the default model path used by both binaries. Pass `-m` to
 select another supported GGUF from `./gguf/`. The Qwen variants are exposed as
-`Qwen3.6-27B-Q4_K_S.gguf` and `Qwen3.6-27B-Q4_K_M.gguf`. Run `./ds4 --help` and
+`Qwen3.6-27B-Q4_K_S.gguf`, `Qwen3.6-27B-Q4_K_M.gguf`, and
+`Qwen3.8-27B-UD-Q4_K_S.gguf`. Run `./ds4 --help` and
 `./ds4-server --help` for the full flag list.
 
 ## DSpark Speculative Decoding
@@ -1041,6 +1059,7 @@ Supported endpoints:
 - `GET /v1/models/deepseek-v4-pro`
 - `GET /v1/models/Qwen3.6-27B-Q4_K_S.gguf`
 - `GET /v1/models/Qwen3.6-27B-Q4_K_M.gguf`
+- `GET /v1/models/Qwen3.8-27B-UD-Q4_K_S.gguf`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/completions`
@@ -1371,8 +1390,9 @@ re-processing if it was written to the disk KV cache. In other words, memory
 cache handles the active session; disk cache is the resume mechanism for
 different sessions.
 
-For the audited Qwen3.6 27B Q4_K_S model this cache is enabled automatically at
-`~/.ds4/qwen36-q4ks-kv`. Its default budget is 8192 MiB and its hard ceiling is
+For audited Qwen Q4_K_S targets this cache is enabled automatically at a
+generation-specific path: `~/.ds4/qwen36-q4ks-kv` or
+`~/.ds4/qwen38-ud-q4ks-kv`. Its default budget is 8192 MiB and its hard ceiling is
 9216 MiB, keeping the complete managed cache below 10 GB decimal. The budget
 also reserves space for active hierarchical skill checkpoints. Its default
 minimum checkpoint length is one token, so short sessions are preserved too;

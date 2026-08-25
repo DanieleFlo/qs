@@ -1,7 +1,7 @@
 # Agent Notes
 
 Before starting any task, read `PROJECT_INDEX.md`. Before CUDA
-kernel engineering also read `docs/agent_performance_contract.md` and enter the
+kernel engineering also read `docs/performance/agent_performance_contract.md` and enter the
 local research corpus through `docs/research/INDEX.md`. Search the problem map,
 platform cards and RTX 3090 fork cards before proposing a new kernel; record the
 source and the reason an existing solution does or does not transfer to DS4. Keep

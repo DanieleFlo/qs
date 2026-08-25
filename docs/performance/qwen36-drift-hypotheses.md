@@ -1,7 +1,7 @@
 # Registro delle ipotesi sul drift Qwen3.6
 
 > Questo file conserva la diagnosi del drift. Le decisioni sulle ottimizzazioni
-> di inferenza sono consolidate in `docs/qwen36-performance-ledger.md`.
+> di inferenza sono consolidate in `docs/performance/qwen36-performance-ledger.md`.
 
 Questo documento e' il registro operativo per portare Qwen3.6 27B Q4_K_M a
 generare almeno 32 token greedy coerenti e ripetibili. llama.cpp sullo stesso

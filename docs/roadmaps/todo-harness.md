@@ -47,7 +47,7 @@ condizione di completamento.
   `perf_harness.py workflow`; aggiunte direction a 10.666 e slow residente
   8K/12K/16K. Le
   decisioni Qwen mantenute e respinte confluiscono nel ledger canonico
-  `docs/qwen36-performance-ledger.md`.
+  `docs/performance/qwen36-performance-ledger.md`.
 - Split-K32 è KEEP e default automatico da 96 token dopo la bisezione comune
   target-only/MTP del 2026-08-13. La matrice completa residente
   2K–30K usa due run/punto, richiede almeno 20 tok/s a ogni frontiera e
@@ -93,7 +93,7 @@ OSSERVA
 
 ## Sottotask
 
-* [x] Creare `docs/agent_performance_contract.md`.
+* [x] Creare `docs/performance/agent_performance_contract.md`.
 * [x] Definire formalmente che l'obiettivo finale non è:
 
   * occupancy massima;

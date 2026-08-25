@@ -1385,8 +1385,8 @@ Il risultato desiderato è sapere, con evidenza riproducibile:
 
 Questa nota registra l'esecuzione effettiva del piano sopra. I dettagli estesi,
 i comandi e gli artefatti restano nel registro canonico
-`docs/qwen36-performance-ledger.md`; le ipotesi H15–H21 sono aggiornate in
-`docs/qwen36-drift-hypotheses.md`.
+`docs/performance/qwen36-performance-ledger.md`; le ipotesi H15–H21 sono aggiornate in
+`docs/performance/qwen36-drift-hypotheses.md`.
 
 ## FIN DOVE SI È ARRIVATI
 

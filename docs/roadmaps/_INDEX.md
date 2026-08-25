@@ -1,0 +1,459 @@
+# Indice: roadmaps
+
+Indice generato; non modificare a mano.
+
+## [TODO Roadmap — Constrained Decoding DSML/JSON ad alte prestazioni](DS4_constrained_decoding_TODO_roadmap.md)
+
+Queste regole sono vincolanti per tutti i macro-task.
+
+- righe 9–35: **REGOLE DI ESECUZIONE** — Queste regole sono vincolanti per tutti i macro-task.
+- righe 36–52: **DEFINIZIONE DI DONE GLOBALE** — Il progetto può essere considerato completato quando:
+- righe 53–106: **ARCHITETTURA TARGET** — request: tools / JSON Schema
+- righe 107–234: **MACRO 0 — Costruire baseline, oracle e benchmark differenziale** — Prima di cambiare l'algoritmo, rendere misurabile in modo riproducibile:
+- righe 109–119: **Obiettivo** — Prima di cambiare l'algoritmo, rendere misurabile in modo riproducibile:
+- righe 120–137: **Letteratura di riferimento** — Estratto chiave dall'abstract:
+  - righe 122–133: **JSONSchemaBench — Geng et al., 2025** — Estratto chiave dall'abstract:
+  - righe 134–137: **Perché è rilevante per DS4** — Una micro-suite costruita solo sui casi che DS4 gestisce bene rischia di ottimizzare il benchmark invece dell'algoritmo.
+- righe 138–211: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 140–148: **0.1 — Congelare l'oracle** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 149–161: **0.2 — Estendere il profiling** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 162–180: **0.3 — Costruire la suite DSML** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 181–201: **0.4 — Costruire la suite JSON Schema** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 202–211: **0.5 — Aggiungere benchmark esterno** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 212–218: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 219–234: **Stato e retrospettiva — MACRO 0** — ---
+- righe 235–318: **MACRO 1 — Eliminare il doppio lavoro tra forced-prefix e costruzione della mask** — Fare una sola analisi dell'insieme dei token validi quando il decoder deve decidere se:
+- righe 237–245: **Obiettivo** — Fare una sola analisi dell'insieme dei token validi quando il decoder deve decidere se:
+- righe 246–260: **Letteratura di riferimento** — Estratto chiave:
+  - righe 248–256: **Efficient Guided Generation — Willard & Louf, 2023 / Outlines** — Estratto chiave:
+  - righe 257–260: **Interpretazione per DS4** — La decisione “token valido?”, la mask e l'eventuale determinismo devono derivare dalla stessa rappresentazione dell'insieme ammesso, non da passate vocabulary-wide indipendenti.
+- righe 261–297: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 263–273: **1.1 — Definire un risultato unico dell'analisi** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 274–281: **1.2 — Condividere il risultato** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 282–289: **1.3 — Correttezza** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 290–297: **1.4 — Performance** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 298–303: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 304–318: **Stato e retrospettiva — MACRO 1** — ---
+- righe 319–449: **MACRO 2 — Rendere DSML e JSON Schema realmente incrementali** — Smettere di ricostruire o ri-parsare il prefisso per ogni candidate.
+- righe 321–347: **Obiettivo** — Smettere di ricostruire o ri-parsare il prefisso per ogni candidate.
+- righe 348–362: **Letteratura di riferimento** — Estratto chiave:
+  - righe 350–358: **XGrammar — Dong et al., 2024** — Estratto chiave:
+  - righe 359–362: **Interpretazione per DS4** — Il parser stack e lo stato semantico devono essere strutture runtime persistenti.
+- righe 363–427: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 365–380: **2.1 — Disegnare `constraint_state`** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 381–391: **2.2 — API incrementale** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 392–401: **2.3 — Migrare DSML** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 402–411: **2.4 — Migrare structured JSON output** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 412–418: **2.5 — Validazione differenziale** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 419–427: **2.6 — Completare la transizione semantica DSML edge-local** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 428–434: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 435–449: **Stato e retrospettiva — MACRO 2** — ---
+- righe 450–567: **MACRO 3 — Precomputare i piece e costruire un trie byte-level del vocabolario** — Smettere di eseguire:
+- righe 452–468: **Obiettivo** — Smettere di eseguire:
+- righe 469–489: **Letteratura di riferimento** — Estratto chiave:
+  - righe 471–479: **DOMINO — Beurer-Kellner, Fischer, Vechev, 2024** — Estratto chiave:
+  - righe 480–485: **Outlines — Willard & Louf, 2023** — Riferimento concettuale:
+  - righe 486–489: **Interpretazione per DS4** — Il trie deve essere costruito sui **piece reali del tokenizer**, non su stringhe teoriche della grammatica.
+- righe 490–545: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 492–500: **3.1 — Token piece table** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 501–509: **3.2 — Trie** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 510–518: **3.3 — Traversal con parser incrementale** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 519–526: **3.4 — Differential mode** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 527–537: **3.5 — Benchmark** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 538–545: **3.6 — Gate trie DSML edge-local** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 546–551: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 552–567: **Stato e retrospettiva — MACRO 3** — ---
+- righe 568–670: **MACRO 4 — Separare token context-independent e context-dependent; introdurre mask precompilate** — Evitare di interpretare dinamicamente token la cui validità è già determinabile dalla parte statica dello stato grammaticale.
+- righe 570–581: **Obiettivo** — Evitare di interpretare dinamicamente token la cui validità è già determinabile dalla parte statica dello stato grammaticale.
+- righe 582–605: **Letteratura di riferimento** — Estratto chiave:
+  - righe 584–592: **XGrammar — Dong et al., 2024** — Estratto chiave:
+  - righe 593–601: **SynCode — Ugare et al., 2024** — Estratto chiave:
+  - righe 602–605: **Interpretazione per DS4** — La struttura DSML statica, la sintassi JSON e molte transizioni locali possono essere trasformate in mask riusabili.
+- righe 606–648: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 608–615: **4.1 — Classificare lo stato** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 616–624: **4.2 — Static mask store** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 625–631: **4.3 — Dynamic frontier** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 632–639: **4.4 — Mask representation** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 640–648: **4.5 — Cache** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 649–654: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 655–670: **Stato e retrospettiva — MACRO 4** — ---
+- righe 671–792: **MACRO 5 — Trasformare il forced-prefix in vero jump-forward deterministico** — Quando la grammatica determina una sequenza di byte/token senza lasciare scelte semantiche al modello, evitarne il normale ciclo mask → sample ripetuto.
+- righe 673–678: **Obiettivo** — Quando la grammatica determina una sequenza di byte/token senza lasciare scelte semantiche al modello, evitarne il normale ciclo mask → sample ripetuto.
+- righe 679–696: **Letteratura di riferimento** — Estratto chiave:
+  - righe 681–692: **SGLang — Zheng et al., 2023** — Estratto chiave:
+  - righe 693–696: **Interpretazione per DS4** — Le catene di transizioni singole possono essere compresse in archi/path deterministici.
+- righe 697–763: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 699–706: **5.1 — Definire determinismo grammaticale** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 707–715: **5.2 — Estrarre deterministic path** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 716–723: **5.3 — Tokenizzazione corretta** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 724–731: **5.4 — Sync modello** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 732–739: **5.5 — Dispatch micro-suffix** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 740–748: **5.6 — Gate reale DSML post-fix** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 749–756: **5.7 — Chiudere le regressioni JSONSchemaBench** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 757–763: **5.8 — Release gate del test globale** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 764–772: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 773–792: **Stato e retrospettiva — MACRO 5** — ---
+- righe 793–930: **MACRO 6 — Adattare XGrammar 2 alla grammatica agentica DSML** — Evitare di ricompilare un enorme automa monolitico per ogni richiesta.
+- righe 795–816: **Obiettivo** — Evitare di ricompilare un enorme automa monolitico per ogni richiesta.
+- righe 817–835: **Letteratura di riferimento** — Estratto chiave:
+  - righe 819–829: **XGrammar 2 — Li et al., 2026** — Estratto chiave:
+  - righe 830–835: **Interpretazione per DS4** — Tool calling è precisamente un caso di grammatica dinamica: il protocollo resta quasi identico, mentre cambiano nomi tool e schemi.
+- righe 836–905: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 838–844: **6.0 — Design review XGrammar 2** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 845–851: **6.1 — Normalizzazione dei frammenti** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 852–858: **6.2 — Static core** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 859–868: **6.3 — TagDispatch reale** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 869–878: **6.4 — Cross-grammar cache** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 879–886: **6.5 — JIT** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 887–892: **6.6 — Valutare mask generation Earley** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 893–899: **6.7 — Valutare repetition compression** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 900–905: **6.8 — Gate A/B della XGrammar 2 adaptation** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 906–914: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 915–930: **Stato e retrospettiva — MACRO 6** — ---
+- righe 931–1031: **MACRO 7 — Implementare Parser Stack Classification (PSC) per gli stati ad alto riuso** — Per stati/sottogrammatiche sufficientemente stabili, eliminare anche il costo runtime residuo proporzionale alla dimensione del vocabolario o al numero di candidate dinamici.
+- righe 933–948: **Obiettivo** — Per stati/sottogrammatiche sufficientemente stabili, eliminare anche il costo runtime residuo proporzionale alla dimensione del vocabolario o al numero di candidate dinamici.
+- righe 949–965: **Letteratura di riferimento** — Estratto chiave:
+  - righe 951–961: **Efficient Grammar-Constrained Decoding via Parser Stack Classification — Li et al., 2026** — Estratto chiave:
+  - righe 962–965: **Nota critica** — PSC è molto recente.
+- righe 966–1008: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 968–976: **7.1 — Identificare candidati PSC** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 977–984: **7.2 — Costruire classifier prototype** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 985–992: **7.3 — Break-even** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 993–1000: **7.4 — Hybrid selection** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1001–1008: **7.5 — Validazione** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1009–1014: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1015–1031: **Stato e retrospettiva — MACRO 7** — ---
+- righe 1032–1125: **MACRO 8 — Sovrapporre constraint computation e inferenza; integrare speculative decoding solo dopo** — Una volta ridotto il costo algoritmico del constraint engine, togliere dal critical path la quota CPU residua sovrapponendola all'eval GPU quando possibile.
+- righe 1034–1039: **Obiettivo** — Una volta ridotto il costo algoritmico del constraint engine, togliere dal critical path la quota CPU residua sovrapponendola all'eval GPU quando possibile.
+- righe 1040–1059: **Letteratura di riferimento** — Il paper descrive il co-design fra grammar engine e inference engine per sovrapporre il grammar processing all'esecuzione GPU.
+  - righe 1042–1048: **XGrammar — Dong et al., 2024** — Il paper descrive il co-design fra grammar engine e inference engine per sovrapporre il grammar processing all'esecuzione GPU.
+  - righe 1049–1055: **DOMINO — Beurer-Kellner et al., 2024** — DOMINO combina pre-computation, allineamento subword e speculative decoding.
+  - righe 1056–1059: **Interpretazione per DS4** — Non usare MTP per nascondere un constraint engine ancora inefficiente: prima ridurre il lavoro; poi sovrapporlo e infine speculare.
+- righe 1060–1103: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1062–1069: **8.1 — Overlap CPU/GPU** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1070–1077: **8.2 — Double buffering** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1078–1085: **8.3 — Speculative prerequisites** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1086–1095: **8.4 — Constrained MTP** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1096–1103: **8.5 — Benchmark** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1104–1109: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1110–1125: **Stato e retrospettiva — MACRO 8** — ---
+- righe 1126–1260: **MACRO 9 — Hardening, adaptive policy e rimozione del full-scan dal percorso normale** — Integrare i backend sviluppati in una policy adattiva e dimostrare che la scansione completa del vocabolario è diventata un fallback eccezionale.
+- righe 1128–1153: **Obiettivo** — Integrare i backend sviluppati in una policy adattiva e dimostrare che la scansione completa del vocabolario è diventata un fallback eccezionale.
+- righe 1154–1166: **Letteratura di riferimento** — Questa macro-task sintetizza i risultati di:
+- righe 1167–1233: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1169–1178: **9.1 — Adaptive backend selection** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1179–1191: **9.2 — Safety** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1192–1207: **9.3 — End-to-end regression suite** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1208–1222: **9.4 — Performance gate** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1223–1233: **9.5 — Cleanup** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1234–1241: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1242–1260: **Stato e retrospettiva — MACRO 9** — ---
+- righe 1261–1292: **ORDINE VINCOLANTE CONSIGLIATO** — MACRO 0 Baseline + oracle
+- righe 1293–1338: **METRICHE DA MANTENERE FINO ALLA FINE** — ---
+- righe 1295–1303: **Correttezza** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1304–1317: **Constraint engine** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1318–1325: **Compilation** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1326–1338: **Inference end-to-end** — ---
+- righe 1339–1370: **FONTI PRINCIPALI** — 1.
+- righe 1371–1413: **TEMPLATE REPORT FINALE** — Da compilare al termine di MACRO 9.
+- righe 1375–1390: **Risultato complessivo** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1391–1405: **Contributo di ogni macro-task** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1406–1413: **Conclusioni** — Sezione strutturale; consultare il contenuto locale indicato.
+
+## [Constrained JSON e DSML: piano di completamento](constrained-json-decoding-plan.md)
+
+**Completato quando:** un singolo token puo attraversare apertura tool, invoke,
+
+- righe 7–18: **1. Simulatore incrementale del candidate DSML** — **Completato quando:** un singolo token puo attraversare apertura tool, invoke,
+- righe 19–28: **2. Stato incrementale senza tail arbitrario** — **Completato quando:** il filtro riparte dallo stato persistente e dal primo byte
+- righe 29–43: **3. Parser JSON incrementale e JSON Schema** — **Completato quando:** ogni chiusura di un valore JSON viene ammessa soltanto se
+- righe 44–60: **4. Tool call vincolate end-to-end** — **Completato quando:** nome tool, nomi parametri, forma JSON e schema completo
+- righe 61–75: **5. Output JSON Schema vincolati** — **Completato quando:** Chat Completions `response_format` e Responses
+- righe 76–89: **6. Robustezza, regressioni e verifica** — **Completato quando:** la suite server passa senza regressioni e i casi limite
+- righe 90–103: **7. Thinking con output e tool call strict** — **Completato quando:** il reasoning resta libero e separato fino al primo
+- righe 104–125: **8. Fast-forward deterministico dei token vincolati** — **Completato quando:** chiavi, separatori, chiusure, `const`, rami enum gia
+- righe 126–138: **Limiti intenzionali** — al primo `</think>`; subito dopo deve iniziare il documento JSON, senza whitespace
+- righe 139–145: **Ultima verifica model-backed** — Chat e Responses con thinking, tool senza argomenti e tentativi adversariali
+
+## [Roadmap di integrazione Qwen3.8 27B UD-Q4_K_S](qwen38-implementation-roadmap.md)
+
+Portare `Qwen3.8-27B-UD-Q4_K_S.gguf` allo stesso livello funzionale del target
+
+- righe 3–19: **Obiettivo e criterio di completamento** — Portare `Qwen3.8-27B-UD-Q4_K_S.gguf` allo stesso livello funzionale del target
+- righe 20–35: **Stato sintetico** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 36–53: **Fase 0 — Baseline, fonti e invarianti** — knowledge base e la scheda RTX 3090.
+- righe 54–88: **Fase 1 — Kernel indispensabili per il target UD** — Formati mancanti, rilevati dall'inventario pinned:
+- righe 89–104: **Fase 2 — Target Qwen3.8 end-to-end** — indipendente alla revisione llama.cpp fissata; 32/32 greedy identici.
+- righe 105–153: **Fase 3 — Parita' funzionale con Qwen3.6** — perplexity e dump diagnostici.
+  - righe 107–113: **CLI** — perplexity e dump diagnostici.
+  - righe 114–129: **Server** — constrained output e batching/multi-sessione nei percorsi applicabili.
+  - righe 130–145: **MTP** — registrata a contesti brevi e lunghi.
+  - righe 146–153: **SSD e agentic** — con MTP, usando il model ID Qwen3.8.
+- righe 154–168: **Fase 4 — Regressione Qwen3.6** — Le fixture predefinite dichiaratamente DeepSeek e Metal Flash sono saltate
+- righe 169–190: **Fase 5 — Ottimizzazioni opzionali comuni** — Valutare soltanto dopo la parita' funzionale del 3.8:
+- righe 191–227: **Registro breve di decisioni e risultati** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 228–249: **Comandi e risultati da compilare durante il lavoro** — Sezione strutturale; consultare il contenuto locale indicato.
+
+## [TODO — Prestazioni del server agentico e constrained decoding](todo-agentic-server-performance.md)
+
+Questo diario separa il lavoro sulle prestazioni del server agentico dal lavoro
+
+- righe 5–24: **Scopo e vincoli** — Questo diario separa il lavoro sulle prestazioni del server agentico dal lavoro
+- righe 25–36: **Stato sintetico** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 37–115: **Baseline iniziale ricavata dai log** — Questi numeri sono osservazioni preliminari, non ancora un benchmark controllato.
+  - righe 70–88: **Baseline controllata del server** — Payload fisso: Qwen3.6-27B Q4_K_S, contesto 32768, tool
+  - righe 89–115: **Confronto Qwen3.8/Qwen3.6 dopo la correzione ChatML** — Il confronto del 2026-08-25 usa lo stesso binario, RTX 3090, contesto 32768,
+- righe 116–149: **Punto 1 — Strumentazione e benchmark ripetibile** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
+  - righe 118–135: **Telemetria da aggiungere** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
+  - righe 136–149: **Matrice minima di misura** — build/commit, flags, modello, hardware e correttezza.
+- righe 150–225: **Punto 2 — Rendere efficiente il constrained decoding DSML/JSON** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
+  - righe 152–173: **Risultato della ricerca in letteratura** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
+  - righe 174–225: **Sequenza sperimentale** — massima invece di richiamare e ricopiare il testo per ogni sampling.
+    - righe 176–190: **2A — Eliminare lavoro ripetuto senza cambiare l'algoritmo** — massima invece di richiamare e ricopiare il testo per ogni sampling.
+    - righe 191–206: **2B — Ridurre i candidati visitati** — engine/vocabolario.
+    - righe 207–215: **2C — Cache adattiva per stato e schemi dinamici** — schema dinamici, seguendo l'idea di cache cross-grammar.
+    - righe 216–225: **2D — Parallelismo e tecniche più invasive, solo se ancora necessarie** — token appena committato: le dipendenze lo permettono, ma serve un protocollo
+- righe 226–308: **Punto 3 — Sincronizzazione efficiente dei piccoli suffissi** — Questo punto resta deliberatamente dopo la telemetria e il primo intervento
+  - righe 233–247: **Requisito esplicito per sessioni live e MTP** — Per preparare il percorso MTP, un prefill live di **2 token o più** deve essere
+  - righe 248–259: **Audit storico completato prima del codice** — il fast-forward DSML (`git log`, `git blame`, diff e test associati).
+  - righe 260–267: **Matrice di crossover da misurare** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 268–287: **Misure mirate del crossover live a contesto 8k** — La prima variante, che selezionava il percorso in base al solo `suffix_len`, ha
+  - righe 288–308: **Gate finali eseguiti** — normale roundoff del probe.
+- righe 309–333: **Ledger degli esperimenti e dei tentativi** — Stati ammessi:
+- righe 334–369: **Registro cronologico** — 27.08 tok/s a 16k.
+  - righe 336–348: **2026-08-12 — Apertura** — 27.08 tok/s a 16k.
+  - righe 349–369: **2026-08-12 — Implementazione e chiusura del ciclo** — DSML controllato è passato da circa 12.47 a circa 22.3 tok/s.
+- righe 370–376: **Prossima azione** — Il ciclo corrente è chiuso.
+
+## [TODO — GPU Kernel Engineering Harness per DS4 / Qwen 3.6 27B](todo-harness.md)
+
+I checkbox completati sotto indicano funzionalità presenti e testate; i
+
+- righe 5–91: **Stato verificato dell'incremento iniziale (2026-08-11)** — I checkbox completati sotto indicano funzionalità presenti e testate; i
+- righe 92–145: **[x] 1. Creare il manifesto operativo dell'agente** — * [x] Creare `docs/performance/agent_performance_contract.md`.
+- righe 94–139: **Sottotask** — * [x] Creare `docs/performance/agent_performance_contract.md`.
+- righe 140–145: **Condizione di completamento** — Il macro-task è completo quando esiste un documento letto automaticamente dall'agente prima di ogni sessione di kernel engineering e l'harness **rifiuta un esperimento** privo di baseline, ipotesi, workload target, corre…
+- righe 146–215: **[ ] 2. Costruire il rilevatore hardware della GPU** — * [x] Implementare `hardware_probe()`.
+- righe 148–209: **Sottotask** — * [x] Implementare `hardware_probe()`.
+- righe 210–215: **Condizione di completamento** — Il macro-task è completo quando una sola chiamata restituisce un `hardware_profile.json` sufficientemente completo da impedire all'agente di proporre una tecnica non supportata dall'hardware senza segnalarlo esplicitamen…
+- righe 216–290: **[ ] 3. Creare il modello teorico dei costi del modello** — * [x] Implementare `model_cost()`.
+- righe 218–284: **Sottotask** — * [x] Implementare `model_cost()`.
+- righe 285–290: **Condizione di completamento** — Il macro-task è completo quando, dato un workload reale, il sistema può produrre per ogni operazione principale una stima verificabile di **FLOP, minimum bytes, arithmetic intensity e limite teorico memoria/compute**.
+- righe 291–327: **[ ] 4. Definire la suite canonica dei workload** — * [x] Creare `workloads.yaml`.
+- righe 293–321: **Sottotask** — * [x] Creare `workloads.yaml`.
+- righe 322–327: **Condizione di completamento** — Il macro-task è completo quando ogni esperimento può essere riprodotto sulla stessa matrice di workload e nessuna dichiarazione “questo kernel è più veloce” può essere emessa senza specificare **batch, context, fase e sh…
+- righe 328–371: **[ ] 5. Implementare il benchmark end-to-end affidabile** — * [x] Implementare `benchmark_model()`.
+- righe 330–365: **Sottotask** — * [x] Implementare `benchmark_model()`.
+- righe 366–371: **Condizione di completamento** — Il macro-task è completo quando due esecuzioni consecutive della suite producono risultati statisticamente sufficientemente stabili da permettere di distinguere in modo affidabile una regressione o un miglioramento reale…
+- righe 372–416: **[ ] 6. Inserire una gerarchia NVTX nel runtime** — * [ ] Annotare con NVTX:
+- righe 374–398: **Sottotask** — * [ ] Annotare con NVTX:
+- righe 399–416: **Condizione di completamento** — Il macro-task è completo quando è possibile isolare automaticamente, per esempio:
+- righe 417–466: **[ ] 7. Costruire il sistema di tracing con Nsight Systems** — * [ ] Implementare `trace_model()`.
+- righe 419–460: **Sottotask** — * [ ] Implementare `trace_model()`.
+- righe 461–466: **Condizione di completamento** — Il macro-task è completo quando l'agente riceve automaticamente una classifica dei kernel/range responsabili di almeno il **90–95% del tempo GPU osservato** e può distinguere kernel bottleneck da launch/runtime bottlenec…
+- righe 467–526: **[ ] 8. Costruire il profiler dettagliato con Nsight Compute** — * [ ] Implementare `profile_kernel()`.
+- righe 469–520: **Sottotask** — * [ ] Implementare `profile_kernel()`.
+- righe 521–526: **Condizione di completamento** — Il macro-task è completo quando un kernel selezionato produce automaticamente una scheda strutturata sufficiente a diagnosticare **bandwidth, latency, compute, occupancy, register pressure, shared-memory pressure, insuff…
+- righe 527–597: **[ ] 9. Implementare l'analisi del traffico memoria** — * [ ] Calcolare per ogni kernel:
+- righe 529–579: **Sottotask** — * [ ] Calcolare per ogni kernel:
+- righe 580–597: **Condizione di completamento** — Il macro-task è completo quando l'agente può distinguere chiaramente fra:
+- righe 598–658: **[ ] 10. Implementare il classificatore automatico dei bottleneck** — * [ ] Creare `diagnosis_engine.py`.
+- righe 600–652: **Sottotask** — * [ ] Creare `diagnosis_engine.py`.
+- righe 653–658: **Condizione di completamento** — Il macro-task è completo quando almeno una suite di kernel noti può essere classificata correttamente nei principali tipi di bottleneck e ogni diagnosi contiene **evidenze, contro-evidenze e prossimo test consigliato**.
+- righe 659–702: **[ ] 11. Creare il sistema di ispezione della compilazione** — * [ ] Implementare `inspect_kernel()`.
+- righe 661–696: **Sottotask** — * [ ] Implementare `inspect_kernel()`.
+- righe 697–702: **Condizione di completamento** — Il macro-task è completo quando ogni modifica kernel genera un diff automatico delle risorse hardware e delle principali classi di istruzione prodotte dal compilatore.
+- righe 703–738: **[ ] 12. Costruire il framework di microbenchmark dei kernel** — * [ ] Implementare `benchmark_kernel()`.
+- righe 705–732: **Sottotask** — * [ ] Implementare `benchmark_kernel()`.
+- righe 733–738: **Condizione di completamento** — Il macro-task è completo quando qualsiasi kernel candidato può essere confrontato in modo riproducibile con reference e baseline su tutte le shape rilevanti.
+- righe 739–776: **[ ] 13. Creare il framework di correctness e numerical validation** — * [x] Implementare `correctness_test()`.
+- righe 741–770: **Sottotask** — * [x] Implementare `correctness_test()`.
+- righe 771–776: **Condizione di completamento** — Il macro-task è completo quando nessun kernel può entrare nel ramo `accepted` senza aver superato automaticamente correctness unitario e almeno un controllo end-to-end.
+- righe 777–842: **[ ] 14. Creare la Knowledge Base — fondamenti GPU** — * [ ] Creare struttura:
+- righe 779–836: **Sottotask** — * [ ] Creare struttura:
+- righe 837–842: **Condizione di completamento** — Il macro-task è completo quando esistono almeno **50 card GPU atomiche e operative**, ognuna recuperabile tramite sintomo, metrica, tecnica o architettura.
+- righe 843–887: **[ ] 15. Creare la Knowledge Base — pattern di ottimizzazione** — * [ ] Creare card su:
+- righe 845–881: **Sottotask** — * [ ] Creare card su:
+- righe 882–887: **Condizione di completamento** — Il macro-task è completo quando a ogni principale classe di bottleneck corrispondono almeno **3 strategie concrete**, corredate da metriche che permettono di verificare se hanno funzionato.
+- righe 888–932: **[ ] 16. Creare la Knowledge Base — anti-pattern e failure modes** — * [ ] Creare card specifiche per:
+- righe 890–926: **Sottotask** — * [ ] Creare card specifiche per:
+- righe 927–932: **Condizione di completamento** — Il macro-task è completo quando il retrieval può fornire all'agente **non soltanto idee da provare ma anche ragioni tecniche per cui l'idea proposta potrebbe peggiorare il kernel**.
+- righe 933–987: **[ ] 17. Creare la Knowledge Base — LLM inference** — * [ ] Creare sezione specifica:
+- righe 935–975: **Sottotask** — * [ ] Creare sezione specifica:
+- righe 976–987: **Condizione di completamento** — Il macro-task è completo quando l'agente può ricevere una diagnosi come:
+- righe 988–1023: **[ ] 18. Creare la Knowledge Base per architettura GPU** — * [ ] Creare:
+- righe 990–1017: **Sottotask** — * [ ] Creare:
+- righe 1018–1023: **Condizione di completamento** — Il macro-task è completo quando l'agente non propone come azione primaria un meccanismo hardware assente dalla GPU installata senza marcarlo come incompatibile.
+- righe 1024–1079: **[ ] 19. Implementare il sistema di retrieval della Knowledge Base** — * [ ] Creare metadata strutturati per ogni card.
+- righe 1026–1073: **Sottotask** — * [ ] Creare metadata strutturati per ogni card.
+- righe 1074–1079: **Condizione di completamento** — Il macro-task è completo quando, dato un report strutturato di un kernel, il sistema restituisce automaticamente un piccolo set di conoscenze **specifiche, compatibili con l'hardware e pertinenti al bottleneck** più un s…
+- righe 1080–1121: **[ ] 20. Implementare il motore di generazione delle ipotesi** — * [ ] Creare schema obbligatorio:
+- righe 1082–1115: **Sottotask** — * [ ] Creare schema obbligatorio:
+- righe 1116–1121: **Condizione di completamento** — Il macro-task è completo quando l'agente non può modificare un kernel senza aver prodotto prima una previsione falsificabile degli effetti hardware e prestazionali.
+- righe 1122–1172: **[ ] 21. Creare il sistema di esperimenti e memoria tecnica** — * [ ] Implementare `experiment_log()`.
+- righe 1124–1166: **Sottotask** — * [ ] Implementare `experiment_log()`.
+- righe 1167–1172: **Condizione di completamento** — Il macro-task è completo quando l'agente può recuperare automaticamente la storia tecnica delle precedenti ottimizzazioni e non deve “riscoprire” continuamente gli stessi risultati.
+- righe 1173–1207: **[ ] 22. Implementare il comparatore automatico degli esperimenti** — * [x] Implementare `compare_experiment()`.
+- righe 1175–1201: **Sottotask** — * [x] Implementare `compare_experiment()`.
+- righe 1202–1207: **Condizione di completamento** — Il macro-task è completo quando il sistema può decidere automaticamente se una modifica è globalmente utile rispetto agli obiettivi dichiarati, senza basarsi su una singola misura.
+- righe 1208–1254: **[ ] 23. Implementare una pipeline specifica per kernel memory-bound** — * [ ] Quando classificato memory-bound, calcolare:
+- righe 1210–1248: **Sottotask** — * [ ] Quando classificato memory-bound, calcolare:
+- righe 1249–1254: **Condizione di completamento** — Il macro-task è completo quando ogni kernel memory-bound viene analizzato automaticamente distinguendo **saturazione della banda** da **traffico evitabile**.
+- righe 1255–1284: **[ ] 24. Implementare una pipeline specifica per kernel latency-bound** — * [ ] Analizzare:
+- righe 1257–1278: **Sottotask** — * [ ] Analizzare:
+- righe 1279–1284: **Condizione di completamento** — Il macro-task è completo quando il sistema sa proporre esperimenti diversi per `memory latency` e `memory bandwidth`, giustificando la distinzione con metriche osservate.
+- righe 1285–1312: **[ ] 25. Implementare una pipeline specifica per compute-bound** — * [ ] Analizzare:
+- righe 1287–1306: **Sottotask** — * [ ] Analizzare:
+- righe 1307–1312: **Condizione di completamento** — Il macro-task è completo quando un kernel compute-bound viene trattato con strategie di utilizzo delle pipeline di calcolo e non erroneamente con ottimizzazioni orientate alla DRAM.
+- righe 1313–1342: **[ ] 26. Implementare pipeline register/shared-memory/occupancy** — * [ ] Monitorare automaticamente registers/thread.
+- righe 1315–1336: **Sottotask** — * [ ] Monitorare automaticamente registers/thread.
+- righe 1337–1342: **Condizione di completamento** — Il macro-task è completo quando il sistema sa spiegare **perché** l'occupancy è limitata e se quella limitazione è realmente correlata alle prestazioni osservate.
+- righe 1343–1373: **[ ] 27. Implementare pipeline per quantizzazione** — * [ ] Distinguere sempre:
+- righe 1345–1367: **Sottotask** — * [ ] Distinguere sempre:
+- righe 1368–1373: **Condizione di completamento** — Il macro-task è completo quando l'agente può determinare se una quantizzazione accelera realmente il workload oppure trasferisce il costo dalla memoria a unpack/dequant/compute inefficiente.
+- righe 1374–1402: **[ ] 28. Implementare pipeline specifica attention/KV-cache** — * [ ] Calcolare dimensione KV cache per workload.
+- righe 1376–1396: **Sottotask** — * [ ] Calcolare dimensione KV cache per workload.
+- righe 1397–1402: **Condizione di completamento** — Il macro-task è completo quando l'harness può spiegare perché l'attention cambia comportamento al crescere del context e proporre strategie diverse per prefill e decode.
+- righe 1403–1426: **[ ] 29. Implementare pipeline per launch overhead e runtime** — * [ ] Analizzare timeline Nsight Systems.
+- righe 1405–1420: **Sottotask** — * [ ] Analizzare timeline Nsight Systems.
+- righe 1421–1426: **Condizione di completamento** — Il macro-task è completo quando il sistema può riconoscere un workload launch-bound e impedire all'agente di perdere tempo ottimizzando l'aritmetica di kernel già molto brevi.
+- righe 1427–1462: **[ ] 30. Creare il kernel workspace controllato** — * [ ] Creare:
+- righe 1429–1456: **Sottotask** — * [ ] Creare:
+- righe 1457–1462: **Condizione di completamento** — Il macro-task è completo quando un agente può creare, compilare, testare, confrontare e scartare un kernel senza modificare manualmente lo stato stabile di DS4.
+- righe 1463–1498: **[ ] 31. Creare l'interfaccia tool-facing per l'agente** — * [ ] Esporre tool ad alto livello:
+- righe 1465–1492: **Sottotask** — * [ ] Esporre tool ad alto livello:
+- righe 1493–1498: **Condizione di completamento** — Il macro-task è completo quando Qwen può svolgere un ciclo completo di profiling e ottimizzazione attraverso tool strutturati senza dover interpretare direttamente migliaia di righe di output Nsight.
+- righe 1499–1560: **[ ] 32. Creare il report sintetico standard di un kernel** — * [ ] Definire uno schema simile:
+- righe 1501–1554: **Sottotask** — * [ ] Definire uno schema simile:
+- righe 1555–1560: **Condizione di completamento** — Il macro-task è completo quando l'agente può capire la situazione principale di un kernel leggendo un singolo oggetto strutturato di dimensioni limitate.
+- righe 1561–1584: **[ ] 33. Creare la pipeline automatica “hotspot → proposta”** — * [ ] Benchmark iniziale.
+- righe 1563–1578: **Sottotask** — * [ ] Benchmark iniziale.
+- righe 1579–1584: **Condizione di completamento** — Il macro-task è completo quando il sistema può partire da un'inferenza DS4 non ottimizzata e arrivare autonomamente a una **specifica tecnica di modifica di un kernel**, accompagnata da evidenze e previsione quantitativa…
+- righe 1585–1612: **[ ] 34. Creare la pipeline automatica “proposta → verdict”** — * [ ] Compilare candidate.
+- righe 1587–1606: **Sottotask** — * [ ] Compilare candidate.
+- righe 1607–1612: **Condizione di completamento** — Il macro-task è completo quando una modifica può attraversare autonomamente l'intero percorso dal codice candidato a un verdetto basato su correttezza, microbenchmark, profiler ed end-to-end.
+- righe 1613–1642: **[ ] 35. Creare un sistema di apprendimento dagli esperimenti** — * [ ] Dopo ogni esperimento generare:
+- righe 1615–1636: **Sottotask** — * [ ] Dopo ogni esperimento generare:
+- righe 1637–1642: **Condizione di completamento** — Il macro-task è completo quando il sistema migliora progressivamente la propria conoscenza locale e può usare esperimenti precedenti come evidenza nelle decisioni future.
+- righe 1643–1671: **[ ] 36. Costruire benchmark di validazione dell'intero harness** — Creare piccoli kernel artificiali con bottleneck intenzionali:
+- righe 1645–1665: **Sottotask** — Creare piccoli kernel artificiali con bottleneck intenzionali:
+- righe 1666–1671: **Condizione di completamento** — Il macro-task è completo quando l'harness supera una suite di casi con **bottleneck conosciuto a priori** e dimostra che la catena misurazione → diagnosi → retrieval → esperimento funziona correttamente.
+- righe 1672–1717: **[ ] 37. Eseguire la prima caratterizzazione completa di Qwen su DS4** — * [ ] Congelare una baseline.
+- righe 1674–1711: **Sottotask** — * [ ] Congelare una baseline.
+- righe 1712–1717: **Condizione di completamento** — Il macro-task è completo quando esiste un report quantitativo che identifica **dove DS4/Qwen passa il tempo, perché e quali 3–5 interventi hanno il miglior rapporto potenziale/costo** sulla GPU installata.
+- righe 1718–1742: **[ ] 38. Ottimizzare il primo kernel reale end-to-end** — * [ ] Selezionare il primo hotspot sulla base dei dati.
+- righe 1720–1736: **Sottotask** — * [ ] Selezionare il primo hotspot sulla base dei dati.
+- righe 1737–1742: **Condizione di completamento** — Il macro-task è completo quando almeno una modifica reale di un kernel DS4 produce un miglioramento end-to-end statisticamente verificabile **senza regressione di correttezza**, e l'intero processo è stato eseguito attra…
+- righe 1743–1766: **[ ] 39. Ottimizzare separatamente prefill e decode** — * [ ] Costruire una classifica hotspot prefill.
+- righe 1745–1760: **Sottotask** — * [ ] Costruire una classifica hotspot prefill.
+- righe 1761–1766: **Condizione di completamento** — Il macro-task è completo quando DS4 può selezionare strategie/kernel differenti per workload significativamente diversi invece di utilizzare un'unica implementazione “media”.
+- righe 1767–1794: **[ ] 40. Implementare dispatch e autotuning controllato** — * [ ] Identificare le dimensioni rilevanti:
+- righe 1769–1788: **Sottotask** — * [ ] Identificare le dimensioni rilevanti:
+- righe 1789–1794: **Condizione di completamento** — Il macro-task è completo quando DS4 può scegliere automaticamente la configurazione kernel migliore per classi di workload rappresentative usando risultati misurati e persistenti.
+- righe 1795–1832: **[ ] 41. Integrare tutto nel ciclo operativo dell'agente** — * [ ] Creare prompt/system contract per il kernel agent.
+- righe 1797–1826: **Sottotask** — * [ ] Creare prompt/system contract per il kernel agent.
+- righe 1827–1832: **Condizione di completamento** — Il macro-task è completo quando un agente può condurre autonomamente più cicli consecutivi di kernel engineering e ogni decisione importante è ancorata a dati, conoscenza recuperata e risultati sperimentali.
+- righe 1833–1887: **[ ] 42. Definition of Done dell'intero progetto** — Il progetto è completo soltanto quando **tutte** le condizioni seguenti sono vere:
+- righe 1867–1887: **Condizione finale di successo** — Un agente che non possiede preventivamente una conoscenza profonda
+
+## [PROTOCOLLO DEFINITIVO — CUDA Q8_1 / MMVQ, PARITY LLAMA.CPP E OTTIMIZZAZIONE QWEN3.6 27B](todo-performance.md)
+
+Agisci come un senior CUDA/LLM inference engineer con competenza specifica in:
+
+- righe 3–32: **RUOLO** — Agisci come un senior CUDA/LLM inference engineer con competenza specifica in:
+- righe 33–73: **TARGET** — Modello:
+- righe 74–101: **RIFERIMENTO LLAMA.CPP** — Il riferimento prestazionale e comportamentale è il commit esatto:
+- righe 102–141: **STATO PRESTAZIONALE DS4 GIÀ OSSERVATO** — Baseline F32:
+- righe 142–173: **EVIDENZA Q6_K GIÀ DISPONIBILE** — È stato eseguito un test nel quale:
+- righe 174–196: **FATTI GIÀ DIMOSTRATI DAL CODICE DS4** — Sono già presenti:
+- righe 176–196: **Q8_1 / MMVQ esiste già** — Sono già presenti:
+- righe 197–242: **`ds.y`: COSA SAPPIAMO E COSA NON SAPPIAMO** — Nel MMVQ decode DS4 Q4_K/Q5_K:
+- righe 243–272: **PRINCIPIO EPISTEMOLOGICO** — Distinguere sempre:
+- righe 247–250: **Causa sufficiente** — Una modifica da sola è capace di produrre il problema.
+- righe 251–254: **Causa necessaria** — Senza quella modifica il problema non può verificarsi.
+- righe 255–272: **Causa esclusiva** — Non esiste nessun'altra discrepanza rilevante.
+- righe 273–330: **PHASE 0D — ACTUAL LLAMA.CPP DISPATCH VERIFICATION** — Questa fase deve precedere l'interpretazione delle parity cross-backend.
+- righe 307–319: **Metodo consigliato** — Usare una o più delle seguenti tecniche:
+- righe 320–330: **Output Phase 0D** — Produrre una tabella:
+- righe 331–361: **PHASE 0 — ESPERIMENTO A/B/C SUL VERO FALLIMENTO** — Riprodurre il greedy step 3 problematico tramite teacher forcing.
+- righe 337–340: **A — DS4 F32** — Percorso baseline corretto.
+- righe 341–344: **B — DS4 Q8_1** — Percorso ~34.5 tok/s.
+- righe 345–361: **C — llama.cpp `1a064ab09`** — Con il kernel/dispatcher reale identificato nella Phase 0D.
+- righe 362–381: **DUE LIVELLI DI A/B/C** — Per evitare di confondere propagazione dello stato e singola proiezione, eseguire quando possibile due confronti.
+- righe 366–371: **A/B/C end-to-end teacher-forced** — Ogni engine calcola normalmente il proprio stato fino al passo critico, forzando gli stessi token precedenti.
+- righe 372–381: **A/B/C frozen-input** — Catturare lo STESSO hidden vector F32 immediatamente prima della proiezione critica e fornirlo ai primitive candidati.
+- righe 382–432: **LOGGING OBBLIGATORIO DEI LOGITS** — Per i due token critici registrare:
+- righe 433–474: **INTERPRETAZIONE A/B/C** — `B ≈ C != A`
+- righe 435–450: **Caso 1** — `B ≈ C != A`
+- righe 451–464: **Caso 2** — `C ≈ A != B`
+- righe 465–474: **Caso 3** — A/B/C tutti significativamente differenti
+- righe 475–499: **PHASE 1 — PRIMITIVE PARITY CON Q8 PREQUANTIZZATO IDENTICO** — Eliminare il quantizzatore come variabile.
+- righe 500–516: **AUDIT Q4_K/Q5_K** — Verificare:
+- righe 517–554: **AUDIT Q6_K DEDICATO** — Q6_K merita un controllo dedicato perché:
+- righe 555–594: **FMA E REDUCTION TOPOLOGY** — Non imporre `--fmad=false` come ground truth.
+- righe 595–626: **RIDUZIONI FP32** — Confrontare:
+- righe 613–618: **Mapping error** — Gli stessi termini non vengono sommati.
+- righe 619–626: **Reduction-order difference** — Gli stessi termini vengono sommati in ordine differente.
+- righe 627–654: **OUTPUT PHASE 1** — Per primitive:
+- righe 655–674: **PHASE 2 — QUANTIZER PARITY BYTE-PER-BYTE** — Confrontare il quantizzatore DS4 contro quello REALMENTE utilizzato dal percorso llama.cpp del commit `1a064ab09`.
+- righe 675–709: **ROUNDING** — Verificare esattamente quale operazione usa il commit storico:
+- righe 710–723: **RANGE E CAST** — Non assumere che un cast verso `int8_t` sia saturating.
+- righe 724–743: **`qsum` E `ds.y`** — Verificare direttamente:
+- righe 744–766: **PHASE 3 — ABLAZIONE PURA DELLA SCALA FP16** — Non usare semplicemente:
+- righe 767–811: **ESPERIMENTO `d_float` VS `d_half`** — Quantizzare una sola volta.
+- righe 789–792: **Variante A** — usa `d_float`
+- righe 793–811: **Variante B** — usa `d_half`
+- righe 812–827: **DECISIONE DOPO PHASE 3** — Se il solo `d_float -> d_half` spiega una quota dominante dell'errore differenziale critico:
+- righe 828–861: **PHASE 4 — LOCALIZZAZIONE Q4 / Q5 / Q6** — Aggiungere, se necessario, flag diagnostici temporanei per eseguire:
+- righe 862–893: **PHASE 5 — PRECISION STAIRCASE** — Usare le rappresentazioni diagnostiche già disponibili:
+- righe 894–913: **NOTA SU UN PRECEDENTE TEST FMA/KAHAN** — Esistono già test diagnostici in cui:
+- righe 914–948: **PHASE 6 — Q8_1-32-LSQ OFFLINE** — Solo dopo parity.
+- righe 949–968: **METRICHE LSQ** — Non giudicare LSQ soltanto da MAE/L2.
+- righe 969–991: **DECISIONE LSQ** — Se LSQ offline NON migliora significativamente il margine critico:
+- righe 992–1008: **COSTO LSQ** — Misurare separatamente:
+- righe 1009–1058: **PHASE 7 — RAPPRESENTAZIONI SUCCESSIVE SOLO DATA-DRIVEN** — Se LSQ non basta, studiare la distribuzione degli errori.
+- righe 1017–1026: **CASO A — ERRORE DOMINATO DALLA GRANULARITÀ** — Provare:
+- righe 1027–1040: **CASO B — POCHI ELEMENTI DOMINANO IL RESIDUO** — Provare:
+- righe 1041–1058: **CASO C — RESIDUO DIFFUSO** — Provare:
+- righe 1059–1076: **REGOLA PER OGNI NUOVO FORMATO** — Prima:
+- righe 1077–1098: **PHASE 8 — W4A16 / MARLIN-LIKE** — Se nessuna rappresentazione Q8 permette contemporaneamente:
+- righe 1099–1136: **PROFILING OBBLIGATORIO** — Per ogni candidato CUDA che supera la simulazione numerica:
+- righe 1137–1166: **OTTIMIZZAZIONE DEL QUANTIZZATORE — SOLO DOPO LA PARITY** — Il quantizzatore DS4 Q8_1 contiene lavoro apparentemente inutile per il decode MMVQ:
+- righe 1167–1190: **DIVIETI METODOLOGICI** — NON:
+- righe 1191–1288: **DECISION TREE RIASSUNTIVO** — Verifica actual llama dispatch.
+- righe 1193–1198: **STEP 1** — Verifica actual llama dispatch.
+- righe 1199–1220: **STEP 2** — A/B/C sul vero step 3.
+  - righe 1205–1210: **Se `B≈C!=A`** — Il port Q8 è probabilmente corretto.
+  - righe 1211–1214: **Se `C≈A!=B`** — Correggere DS4.
+  - righe 1215–1220: **Se ambiguo** — Primitive parity.
+- righe 1221–1236: **STEP 3** — Frozen Q8 primitive parity.
+  - righe 1227–1230: **Se fallisce** — Correggere kernel/mapping/reduction.
+  - righe 1231–1236: **Se passa** — Non toccare MMVQ.
+- righe 1237–1252: **STEP 4** — Quantizer byte parity.
+  - righe 1243–1246: **Se produce qs differenti** — Localizzare rounding/arithmetic/compiler semantics.
+  - righe 1247–1252: **Se produce qs equivalenti** — Passare alle ablazioni numeriche.
+- righe 1253–1258: **STEP 5** — `d_float` vs `d_half`.
+- righe 1259–1264: **STEP 6** — Precision staircase + Q4/Q5/Q6 sensitivity.
+- righe 1265–1270: **STEP 7** — LSQ offline.
+- righe 1271–1276: **STEP 8** — LSQ CUDA se GO.
+- righe 1277–1282: **STEP 9** — G16 → A1/A2 → R8.
+- righe 1283–1288: **STEP 10** — W4A16 solo se necessario.
+- righe 1289–1310: **OUTPUT RICHIESTO** — Per ogni fase produrre:
+- righe 1311–1343: **AGGIORNAMENTO DELLA DOCUMENTAZIONE** — Aggiornare il markdown di avanzamento dopo ogni risultato significativo con:
+- righe 1328–1331: **FATTO DIMOSTRATO** — supportato direttamente da codice/test.
+- righe 1332–1335: **INFERENZA** — fortemente suggerita ma non provata.
+- righe 1336–1343: **IPOTESI** — ancora da testare.
+- righe 1344–1361: **PRIMO COMPITO DELLA SESSIONE** — Prima di modificare il codice:
+- righe 1362–1383: **PRINCIPIO GUIDA** — **Una variabile alla volta.**
+- righe 1384–1473: **NOTA DI AVANZAMENTO — 2026-08-12** — Questa nota registra l'esecuzione effettiva del piano sopra.
+- righe 1391–1408: **FIN DOVE SI È ARRIVATI** — Completati STEP 1–9, inclusi Phase 0D, triangolazione A/B/C, primitive parity,
+- righe 1409–1444: **FATTI DIMOSTRATI** — 1.
+- righe 1445–1458: **RISULTATO PRESTAZIONALE MANTENUTO** — Direction sweep residente, warm-up esplicito, baseline F32 e candidato finale:
+- righe 1459–1468: **CANDIDATI RESPINTI DOPO R8** — `32,26→31,18 tok/s` a 128 e `14,93→14,48` a 2K, −3,18% medio.
+- righe 1469–1473: **HARNESS AGGIUNTO** — `tools/perf_harness.py` ora evita gli script ad hoc ripetuti:
+- righe 1474–1476: **Parity dei blocchi Q8_1: ds.x/qs/qsum consumati, ds.y auditato a parte** — python3 tools/perf_harness.py q8-1-parity LEFT.bin RIGHT.bin
+- righe 1477–1480: **Confronto di una riga full-vocabulary tra run A/B/C** — python3 tools/perf_harness.py qwen-logits-row --run A=...
+- righe 1481–1577: **Gate completo di sequenze e argmax greedy/teacher** — python3 tools/perf_harness.py qwen-argmax-gate \
+- righe 1491–1502: **PATCH MANTENUTE E STATO GIT** — profiler opt-in `DS4_CUDA_QWEN_DECODE_Q8_1_R8_PROFILE=1`.
+- righe 1503–1521: **COSA RIMANE DA FARE** — 1.
+- righe 1522–1577: **AGGIORNAMENTO 2026-08-12 — VISIBILITÀ DEL CLIENT E TRASFERIMENTO vLLM** — 1.

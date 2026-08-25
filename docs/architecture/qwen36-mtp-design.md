@@ -21,7 +21,7 @@ The implementation never widens depth adaptively and hard-caps Qwen at four.
 
 The full upstream audit, source links, rejected experiments, and benchmark
 evidence are in
-[`research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md`](research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md).
+[`../research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md`](../research/guides/qwen36-mtp-llamacpp-ds4-control-flow.md).
 
 ## GGUF and NextN semantics
 

@@ -1,7 +1,7 @@
 # Laboratorio numerico Qwen3.6
 
 > I risultati numerici dettagliati restano qui; i verdetti prestazionali
-> canonici sono consolidati in `docs/qwen36-performance-ledger.md`.
+> canonici sono consolidati in `docs/performance/qwen36-performance-ledger.md`.
 
 Questo laboratorio serve a separare tre fenomeni che non devono essere
 confusi: un errore semantico del kernel, il normale errore floating point del

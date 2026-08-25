@@ -2,7 +2,7 @@
 
 > Registro storico. Le decisioni `KEEP/REJECT/NEED_MORE_DATA`, incluse quelle
 > provenienti dagli altri documenti Qwen, sono consolidate in
-> `docs/qwen36-performance-ledger.md`.
+> `docs/performance/qwen36-performance-ledger.md`.
 
 Data: 2026-08-05
 

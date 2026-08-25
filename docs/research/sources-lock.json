@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "audited_at": "2026-08-11",
+  "audited_at": "2026-08-24",
   "repositories": [
     {"name": "llama.cpp", "repository": "ggml-org/llama.cpp", "commit": "2468576f241235452013308597e6de1b78866996", "class": "upstream", "evidence": "A"},
     {"name": "vLLM", "repository": "vllm-project/vllm", "commit": "87668ab69b3e2c849a607ece36e8a43bde7c7ee5", "class": "upstream", "evidence": "A"},
@@ -15,6 +15,7 @@
     {"name": "KoboldCpp", "repository": "LostRuins/koboldcpp", "commit": "bf9b9bd45512209a2438851d4afecc82032cefc7", "class": "llama-fork-distribution", "evidence": "B-runtime/C-kernels"},
     {"name": "club-3090", "repository": "noonghunna/club-3090", "commit": "3701bd7421a250371d381864c90da8509bf800ef", "class": "hardware-recipes", "evidence": "B-operational"},
     {"name": "club3090 llama.cpp MoE cache", "repository": "noonghunna/llama.cpp", "commit": "e0a20894906a79dad7016cb3c12a237a8c5230b3", "class": "llama-fork-ampere", "evidence": "B-specialized"},
-    {"name": "Genesis vLLM patches", "repository": "Sandermage/genesis-vllm-patches", "commit": "34e269301cc3df71ae4b0da00a0a159b16b4e5d8", "class": "vllm-runtime-overlay", "evidence": "B-operational/C-unreproduced"}
+    {"name": "Genesis vLLM patches", "repository": "Sandermage/genesis-vllm-patches", "commit": "34e269301cc3df71ae4b0da00a0a159b16b4e5d8", "class": "vllm-runtime-overlay", "evidence": "B-operational/C-unreproduced"},
+    {"name": "syv-ai Qwen3.8 RTX 3090", "repository": "syv-ai/qwen38-27b-rtx3090", "commit": "00210159df4366704b98b178258b3f618005611a", "class": "vllm-rtx3090-serving-recipe", "evidence": "B-operational/C-historical-snapshot-unpinned"}
   ]
 }
