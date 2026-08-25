@@ -364,7 +364,7 @@ tests CPU-like Q8_K activation quantization and Q4_K integer grouping.
 to FP16. Neither changes the default path; do not combine them unless the
 experiment explicitly calls for two variables, and do not promote either on
 the basis of lower MAE alone. The 2026-08-05 experiments did not fix the greedy
-top-1. The decision log is `docs/qwen36-drift-hypotheses.md`.
+top-1. The decision log is `docs/performance/qwen36-drift-hypotheses.md`.
 
 `run_qwen36_context_matrix.py --execute` is blocked unless
 `--performance-report` names a `ds4-qwen36-speed-v1` JSON report for the same
@@ -373,3 +373,46 @@ model SHA-256, backend and hardware. The report records `engine_commit`,
 `decode_tokens`, both measured token/s values and `peak_memory_mib`. The runner
 refuses missing/non-comparable measurements, prefill below 500 token/s, or
 decode below 20 token/s before starting a long-context model process.
+
+## 8. Qwen3.8 Generation-Isolated Quality Path
+
+Qwen3.8 reuses the audited Qwen input corpus, never Qwen3.6 continuations or
+logits. Its manifest, staging marker, run format, thresholds, snapshots and
+same-GGUF oracle namespace are all `ds4-qwen38-*`:
+
+```sh
+python3 gguf-tools/quality-testing/validate_qwen38.py \
+  gguf-tools/quality-testing/data/qwen38-27b/manifest.json
+make -C gguf-tools quality-qwen38-test
+```
+
+The generation-aware tools have explicit Qwen3.8 entrypoints:
+
+```sh
+python3 gguf-tools/quality-testing/generate_qwen38_oracle.py \
+  --manifest gguf-tools/quality-testing/data/qwen38-27b/manifest.json \
+  --oracle llama.cpp --artifact-path target=gguf/Qwen3.8-27B-UD-Q4_K_S.gguf \
+  --staging-dir /path/to/qwen38-staging --run-id llama-qwen38-001 \
+  --steps 32 --top-k 20 --context 8192 --n-gpu-layers -1 \
+  --engine-commit COMMIT --build-flags FLAGS --backend CUDA \
+  --hardware HARDWARE --dtype "GGUF UD-Q4_K_S"
+
+python3 gguf-tools/quality-testing/verify_qwen38_run.py \
+  /path/to/qwen38-staging/llama-qwen38-001 \
+  --manifest gguf-tools/quality-testing/data/qwen38-27b/manifest.json
+
+python3 gguf-tools/quality-testing/compare_qwen38_equivalence.py \
+  --manifest gguf-tools/quality-testing/data/qwen38-27b/manifest.json \
+  --mode ds4-vs-llama --left-run /path/to/llama-run \
+  --right-run /path/to/ds4-run --report /path/to/report.json --top-k 20
+```
+
+`generate_qwen38_score.py` and `generate_qwen38_prompt.py` package DS4 scorer
+output and long inputs using the same Qwen3.8-only staging contract. The
+Qwen3.8 speed-report formats are `ds4-qwen38-speed-v1/v2`; they retain the same
+production minimums of 500 prefill and 15 decode tokens/s. Runtime numerical
+and speed execution is enabled because every quant format in the pinned UD
+artifact now has a CUDA path. Use `DS4_TEST_QWEN38_LIVE=1 make test-qwen38` for
+the target/MTP CLI gate and `DS4_TEST_QWEN38_SHA=1` for the separate 16.7 GB
+checksum gate. A generated oracle remains `NOT_VERIFIED` until its full corpus
+and provenance are reviewed; a one-case diagnostic is not a promotion.

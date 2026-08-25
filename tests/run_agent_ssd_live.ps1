@@ -21,6 +21,7 @@ $WslRepo = (wsl.exe -e wslpath -a $Repo).Trim()
 $WslCache = (wsl.exe -e wslpath -a $Cache).Trim()
 $WslPid = (wsl.exe -e wslpath -a $PidFile).Trim()
 $MtpArgs = ""
+$ModelId = [System.IO.Path]::GetFileName($Model)
 if ($MtpModel) {
     $MtpPath = if ([System.IO.Path]::IsPathRooted($MtpModel)) {
         $MtpModel
@@ -110,7 +111,8 @@ try {
                     $MtpPhase -ne "all") { @("--warm-cache", "refresh") } else { @() }
                 & $Python $Test --phase $phase `
                     --base-url "http://127.0.0.1:$Port/v1" --server-log $Log `
-                    --workroot $Workroot --group $runGroup @WarmCacheArgs
+                    --workroot $Workroot --group $runGroup --model-id $ModelId `
+                    @WarmCacheArgs
                 if ($LASTEXITCODE -ne 0) {
                     throw "Agent SSD live phase failed: $runGroup/$phase"
                 }

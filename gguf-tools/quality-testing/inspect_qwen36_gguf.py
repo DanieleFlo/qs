@@ -31,6 +31,7 @@ GGML_TYPES = {
 }
 
 SNAPSHOT_FORMAT = "ds4-qwen36-gguf-snapshot-v1"
+QWEN38_SNAPSHOT_FORMAT = "ds4-qwen38-gguf-snapshot-v1"
 SEMANTIC_PREFIXES = ("general.", "qwen35.", "tokenizer.ggml.")
 SEMANTIC_KEYS = {
     "tokenizer.ggml.model", "tokenizer.ggml.bos_token_id",
@@ -173,8 +174,13 @@ def inspect_gguf(path: Path, *, include_artifact_sha256: bool = True) -> dict:
             tokenizer_metadata, ensure_ascii=False, sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
+        snapshot_format = (
+            QWEN38_SNAPSHOT_FORMAT
+            if metadata.get("general.name") == "Qwen3.8-27B"
+            else SNAPSHOT_FORMAT
+        )
         return {
-            "format": SNAPSHOT_FORMAT,
+            "format": snapshot_format,
             "artifact": {
                 "filename": path.name,
                 "size_bytes": reader.size,

@@ -6,6 +6,8 @@ GLM_ANTIREZ_REPO="antirez/GLM-5.2-GGUF"
 QWEN36_REPO="ggml-org/Qwen3.6-27B-GGUF"
 QWEN36_UNSLOTH_REPO="unsloth/Qwen3.6-27B-GGUF"
 QWEN36_REVISION="8a7ee08e8b9bfb857107ecc25a5599d2f38b76f8"
+QWEN38_REPO="unsloth/Qwen3.8-27B-GGUF"
+QWEN38_REVISION="4ca720788d1e01f1bff70c033e0d0028fd02e502"
 REPO="antirez/deepseek-v4-gguf"
 Q2_IMATRIX_FILE="DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix.gguf"
 Q4_IMATRIX_FILE="DeepSeek-V4-Flash-Q4KExperts-F16HC-F16Compressor-F16Indexer-Q8Attn-Q8Shared-Q8Out-chat-v2-imatrix.gguf"
@@ -27,6 +29,11 @@ QWEN36_Q4_SHA256="65b753ea835627f7b511143c6ceb976525c7f21f5df8c664bc0a9c23d1c499
 QWEN36_Q4_S_SHA256="ff857ba9f2184d8be408e8cabda12c89ba5adb202fddc1a88b3774d7bb232aca"
 QWEN36_MTP_FILE="mtp-Qwen3.6-27B-Q4_0.gguf"
 QWEN36_MTP_SHA256="3d593f9e2788d59bb30d6024706b1efd5219fea466b6397c46159e3540937173"
+QWEN38_Q4_S_FILE="Qwen3.8-27B-UD-Q4_K_S.gguf"
+QWEN38_Q4_S_SHA256="75bc9c8adba2842e72f0ab5201aaa07133c5010b566305c09187fcbdcd364017"
+QWEN38_MTP_REMOTE_FILE="MTP/mtp-Qwen3.8-27B-Q4_0.gguf"
+QWEN38_MTP_FILE="mtp-Qwen3.8-27B-Q4_0.gguf"
+QWEN38_MTP_SHA256="50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e"
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT_DIR=${DS4_GGUF_DIR:-"$ROOT/gguf"}
@@ -55,8 +62,12 @@ Usage:
   ./download_model.sh glm-antirez-q2 [--token TOKEN]
   ./download_model.sh glm-antirez-q4 [--token TOKEN]
   ./download_model.sh qwen36-q4 [--token TOKEN]
+  ./download_model.sh qwen36-q4-s [--token TOKEN]
   ./download_model.sh qwen36-mtp [--token TOKEN]
   ./download_model.sh qwen36-q4-mtp [--token TOKEN]
+  ./download_model.sh qwen38-q4-s [--token TOKEN]
+  ./download_model.sh qwen38-mtp [--token TOKEN]
+  ./download_model.sh qwen38-q4-mtp [--token TOKEN]
 
 Targets:
 
@@ -129,6 +140,17 @@ Targets:
   qwen36-q4-mtp
        Downloads both Qwen3.6 files, verifies their SHA-256 checksums, and
        links ./ds4flash.gguf to the Q4_K_M target model.
+
+  qwen38-q4-s
+       Qwen3.8 27B Unsloth dynamic UD-Q4_K_S target GGUF, about 15.4 GB.
+
+  qwen38-mtp
+       Matching Qwen3.8 27B MTP sidecar, about 1.4 GB. Enable it with --mtp;
+       the generation-specific path is selected from the target metadata.
+
+  qwen38-q4-mtp
+       Downloads both pinned Qwen3.8 artifacts, verifies their SHA-256
+       checksums, and links ./ds4flash.gguf to the target model.
 
 Options:
   --token TOKEN  Hugging Face token. Otherwise HF_TOKEN or the local HF token
@@ -233,6 +255,28 @@ case "$MODEL" in
         MODEL_FILE=$QWEN36_Q4_FILE
         MODEL_FILES="$QWEN36_Q4_FILE $QWEN36_MTP_FILE"
         FORCE_HF_DOWNLOAD=1
+        ;;
+    qwen38-q4-s)
+        REPO=$QWEN38_REPO
+        HF_REVISION=$QWEN38_REVISION
+        MODEL_FILE=$QWEN38_Q4_S_FILE
+        FORCE_HF_DOWNLOAD=1
+        ;;
+    qwen38-mtp)
+        REPO=$QWEN38_REPO
+        HF_REVISION=$QWEN38_REVISION
+        MODEL_FILE=$QWEN38_MTP_REMOTE_FILE
+        FORCE_HF_DOWNLOAD=1
+        FLATTEN_DOWNLOADS=1
+        LINK_MODEL=0
+        ;;
+    qwen38-q4-mtp)
+        REPO=$QWEN38_REPO
+        HF_REVISION=$QWEN38_REVISION
+        MODEL_FILE=$QWEN38_Q4_S_FILE
+        MODEL_FILES="$QWEN38_Q4_S_FILE $QWEN38_MTP_REMOTE_FILE"
+        FORCE_HF_DOWNLOAD=1
+        FLATTEN_DOWNLOADS=1
         ;;
     -h|--help|help)
         usage
@@ -366,6 +410,8 @@ verify_sha256() {
         "$QWEN36_Q4_FILE") expected=$QWEN36_Q4_SHA256 ;;
         "$QWEN36_Q4_S_FILE") expected=$QWEN36_Q4_S_SHA256 ;;
         "$QWEN36_MTP_FILE") expected=$QWEN36_MTP_SHA256 ;;
+        "$QWEN38_Q4_S_FILE") expected=$QWEN38_Q4_S_SHA256 ;;
+        "$QWEN38_MTP_FILE") expected=$QWEN38_MTP_SHA256 ;;
         *) return 0 ;;
     esac
 
@@ -450,6 +496,10 @@ elif [ "$MODEL" = "dspark-support" ]; then
 elif [ "$MODEL" = "qwen36-mtp" ]; then
     echo
     echo "Qwen3.6 MTP downloaded to $OUT_DIR/$QWEN36_MTP_FILE."
+    echo "Enable it with ./ds4 --mtp or ./ds4-server --mtp."
+elif [ "$MODEL" = "qwen38-mtp" ]; then
+    echo
+    echo "Qwen3.8 MTP downloaded to $OUT_DIR/$QWEN38_MTP_FILE."
     echo "Enable it with ./ds4 --mtp or ./ds4-server --mtp."
 elif [ "$MODEL" = "pro-q4-layers00-30" ] || [ "$MODEL" = "pro-q4-layers31-output" ] || [ "$MODEL" = "pro-q4-split" ]; then
     echo

@@ -1805,8 +1805,10 @@ static cli_config parse_options(int argc, char **argv) {
         } else if (!strcmp(arg, "-m") || !strcmp(arg, "--model")) {
             c.engine.model_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--mtp")) {
-            c.engine.mtp_path = DS4_QWEN36_DEFAULT_MTP_PATH;
+            c.engine.mtp_auto = true;
+            c.engine.mtp_path = NULL;
         } else if (!strcmp(arg, "--mtp-model")) {
+            c.engine.mtp_auto = false;
             c.engine.mtp_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--mtp-draft")) {
             c.engine.mtp_draft_tokens = parse_int(need_arg(&i, argc, argv, arg), arg);

@@ -51,11 +51,13 @@
     "long-context-slow": ["decode-b1-c8k-long", "decode-b1-c12k", "decode-b1-c16k-long"],
     "context-curve-full": ["decode-b1-c2k-curve", "decode-b1-c4k-curve", "decode-b1-c6k-curve", "decode-b1-c8k-curve", "decode-b1-c10k-curve", "decode-b1-c12k-curve", "decode-b1-c14k-curve", "decode-b1-c16k-curve", "decode-b1-c18k-curve", "decode-b1-c20k-curve", "decode-b1-c22k-curve", "decode-b1-c24k-curve", "decode-b1-c26k-curve", "decode-b1-c28k-curve", "decode-b1-c30k-curve"],
     "mtp-context-curve": ["decode-b1-c0-mtp-curve", "decode-b1-c2k-curve", "decode-b1-c4k-curve", "decode-b1-c6k-curve", "decode-b1-c8k-curve", "decode-b1-c10k-curve", "decode-b1-c12k-curve", "decode-b1-c14k-curve", "decode-b1-c16k-curve", "decode-b1-c18k-curve", "decode-b1-c20k-curve", "decode-b1-c22k-curve", "decode-b1-c24k-curve", "decode-b1-c26k-curve", "decode-b1-c28k-curve"],
+    "mtp-short-regression": ["decode-b1-c0-mtp-curve"],
     "mtp-depth-crossover": ["decode-b1-c4k-curve", "decode-b1-c8k-curve", "decode-b1-c12k-curve"],
     "mtp-depth-2k": ["decode-b1-c2k-curve"],
     "mtp-depth-boundary": ["decode-b1-c0-mtp-curve", "decode-b1-c2k-curve", "decode-b1-c4k-curve"],
     "mtp-weakest-confirm": ["decode-b1-c24k-curve"],
     "mtp-long-context-smoke": ["decode-b1-c16k-curve", "decode-b1-c28k-curve"],
+    "mtp-depth-28k": ["decode-b1-c28k-curve"],
     "mtp-threshold-search": ["decode-b1-c64-mtp-threshold", "decode-b1-c125-mtp-threshold", "decode-b1-c250-mtp-threshold", "decode-b1-c500-mtp-threshold", "decode-b1-c1k-mtp-threshold"],
     "mtp-threshold-midpoint": ["decode-b1-c96-mtp-threshold"],
     "exhaustive": ["decode-b1-c2k", "decode-b1-c8k", "decode-b1-c16k", "decode-b1-c32k", "prefill-b1-c512", "prefill-b1-c2k", "prefill-b1-c8k", "throughput-b4-c2k"]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare audited full-vocabulary Qwen3.6 runs.
+"""Compare audited full-vocabulary Qwen3.x runs within one generation.
 
 The large arrays stay in the task-2 float32-le files.  This tool validates the
 run inventories before mapping them and writes only compact per-position and
@@ -16,7 +16,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from qwen36_fixtures import FixtureError, inventory_files, load_json, validate_manifest, write_json
+from qwen36_fixtures import (
+    FixtureError,
+    inventory_files,
+    load_json,
+    validate_manifest as validate_qwen36_manifest,
+    write_json,
+)
 
 try:
     import numpy as np
@@ -26,6 +32,24 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment hosts
 
 REPORT_FORMAT = "ds4-qwen36-equivalence-report-v1"
 RUN_FORMAT = "ds4-qwen36-oracle-v1"
+
+
+def validate_generation_manifest(path: Path) -> tuple[dict, dict]:
+    raw = load_json(path)
+    if raw.get("schema_version") == "ds4-qwen38-fixture-manifest-v1":
+        from qwen38_fixtures import validate_oracle_manifest
+
+        return validate_oracle_manifest(path)
+    return validate_qwen36_manifest(path)
+
+
+def select_generation_formats(manifest: dict) -> None:
+    global REPORT_FORMAT, RUN_FORMAT
+    RUN_FORMAT = manifest["output_format"]["version"]
+    if manifest.get("schema_version") == "ds4-qwen38-fixture-manifest-v1":
+        REPORT_FORMAT = "ds4-qwen38-equivalence-report-v1"
+    else:
+        REPORT_FORMAT = "ds4-qwen36-equivalence-report-v1"
 
 
 @dataclass
@@ -629,7 +653,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         require(args.top_k > 0, "--top-k must be positive")
-        manifest, corpus = validate_manifest(args.manifest)
+        manifest, corpus = validate_generation_manifest(args.manifest)
+        select_generation_formats(manifest)
         report, exit_code = compare_runs(
             load_run(args.left_run), load_run(args.right_run), manifest,
             args.mode, args.top_k, args.diagnostic, suite=args.suite, corpus=corpus,

@@ -5350,7 +5350,8 @@ static bool test_logprob_vector_case_disabled(const char *path,
 
 static void test_official_logprob_vectors_run(const char *case_filter) {
     const char *path = getenv("DS4_TEST_VECTOR_FILE");
-    if (!path || !path[0]) path = "tests/test-vectors/official.vec";
+    const bool using_default_fixture = !path || !path[0];
+    if (using_default_fixture) path = "tests/test-vectors/official.vec";
     FILE *fp = fopen(path, "rb");
     TEST_ASSERT(fp != NULL);
     if (!fp) return;
@@ -5367,6 +5368,17 @@ static void test_official_logprob_vectors_run(const char *case_filter) {
     }
     ds4_engine *engine = test_open_engine(false);
     if (!engine) {
+        test_restore_canonical_streaming_prefill(saved_canonical_streaming_prefill);
+        test_restore_env("DS4_METAL_DISABLE_METAL4", saved_disable_metal4);
+        test_restore_env("DS4_METAL_PREFILL_CHUNK", saved_prefill_chunk);
+        fclose(fp);
+        return;
+    }
+    if (using_default_fixture && ds4_engine_is_qwen_q4_k_s(engine)) {
+        fprintf(stderr,
+                "ds4-test: official DeepSeek logprob vectors skipped "
+                "for a Qwen model\n");
+        ds4_engine_close(engine);
         test_restore_canonical_streaming_prefill(saved_canonical_streaming_prefill);
         test_restore_env("DS4_METAL_DISABLE_METAL4", saved_disable_metal4);
         test_restore_env("DS4_METAL_PREFILL_CHUNK", saved_prefill_chunk);
@@ -5627,7 +5639,8 @@ static void test_local_golden_case_run(ds4_engine *engine,
 
 static void test_local_golden_vectors(void) {
     const char *path = getenv("DS4_TEST_LOCAL_GOLDEN_FILE");
-    if (!path || !path[0]) path = "tests/test-vectors/local-golden.vec";
+    const bool using_default_fixture = !path || !path[0];
+    if (using_default_fixture) path = "tests/test-vectors/local-golden.vec";
     FILE *fp = fopen(path, "rb");
     TEST_ASSERT(fp != NULL);
     if (!fp) return;
@@ -5643,6 +5656,18 @@ static void test_local_golden_vectors(void) {
 
     ds4_engine *engine = test_open_engine(false);
     if (!engine) {
+        test_restore_canonical_streaming_prefill(saved_canonical_streaming_prefill);
+        test_restore_env("DS4_METAL_MOE_TILE_MAX", saved_moe_tile_max);
+        test_restore_env("DS4_METAL_DISABLE_METAL4", saved_disable_metal4);
+        test_restore_env("DS4_METAL_PREFILL_CHUNK", saved_prefill_chunk);
+        fclose(fp);
+        return;
+    }
+    if (using_default_fixture && ds4_engine_is_qwen_q4_k_s(engine)) {
+        fprintf(stderr,
+                "ds4-test: local Metal Flash golden vectors skipped "
+                "for a Qwen model\n");
+        ds4_engine_close(engine);
         test_restore_canonical_streaming_prefill(saved_canonical_streaming_prefill);
         test_restore_env("DS4_METAL_MOE_TILE_MAX", saved_moe_tile_max);
         test_restore_env("DS4_METAL_DISABLE_METAL4", saved_disable_metal4);

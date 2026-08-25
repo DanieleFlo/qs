@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate generated Qwen3.6 oracle candidates without promoting them."""
+"""Validate generation-specific Qwen3.x oracle candidates without promotion."""
 
 from __future__ import annotations
 
@@ -7,12 +7,27 @@ import argparse
 import json
 from pathlib import Path
 
-from qwen36_fixtures import FixtureError, inventory_files, load_json, sha256_file, validate_manifest
+from qwen36_fixtures import (
+    FixtureError,
+    inventory_files,
+    load_json,
+    sha256_file,
+    validate_manifest as validate_qwen36_manifest,
+)
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise FixtureError(message)
+
+
+def validate_generation_manifest(path: Path) -> tuple[dict, dict]:
+    raw = load_json(path)
+    if raw.get("schema_version") == "ds4-qwen38-fixture-manifest-v1":
+        from qwen38_fixtures import validate_oracle_manifest
+
+        return validate_oracle_manifest(path)
+    return validate_qwen36_manifest(path)
 
 
 def decode_hex_bytes(value: object, where: str) -> bytes:
@@ -52,7 +67,11 @@ def verify_logits(run: Path, case_id: str, info: dict, steps: int) -> None:
 def verify_run(run: Path, manifest_path: Path, allow_partial: bool) -> dict:
     run = run.resolve()
     index = load_json(run / "index.json")
-    require(index.get("format") == "ds4-qwen36-oracle-v1", f"{run}: unsupported index format")
+    manifest, corpus = validate_generation_manifest(manifest_path)
+    require(index.get("format") == manifest["output_format"]["version"],
+            f"{run}: unsupported index format")
+    require(index.get("manifest_model", manifest["model"]["id"]) ==
+            manifest["model"]["id"], f"{run}: manifest model mismatch")
     environment = index.get("environment", {})
     review_status = environment.get("review_status")
     require(review_status in ("generated_unreviewed", "reviewed"), f"{run}: invalid review status")
@@ -61,7 +80,6 @@ def verify_run(run: Path, manifest_path: Path, allow_partial: bool) -> dict:
         require(isinstance(review, dict), f"{run}: reviewed run is missing review metadata")
         require(isinstance(review.get("date"), str) and review["date"], f"{run}: reviewed run is missing review date")
         require(isinstance(review.get("basis"), str) and review["basis"], f"{run}: reviewed run is missing review basis")
-    _, corpus = validate_manifest(manifest_path)
     cases_by_id = {case["id"]: case for case in corpus["cases"]}
     listed = index.get("cases", [])
     ids = [case.get("id") for case in listed]

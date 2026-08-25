@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate unreviewed Qwen3.6 oracle data into a marked staging directory.
+"""Generate generation-specific unreviewed Qwen3.x oracle data.
 
 This command deliberately has no promotion or acceptance operation.  It uses
 the pinned upstream tokenizer/chat template to render messages for every
@@ -21,19 +21,44 @@ from urllib.parse import urlparse
 
 from qwen36_fixtures import (
     FixtureError,
-    ensure_staging,
+    ensure_staging as ensure_qwen36_staging,
     find_case,
     inventory_files,
     materialize_case,
     platform_provenance,
     sha256_file,
     validate_context_profile,
-    validate_manifest,
+    validate_manifest as validate_qwen36_manifest,
     write_json,
 )
 
 
 _DLL_HANDLES = []
+
+
+def validate_generation_manifest(path: Path) -> tuple[dict, dict]:
+    """Dispatch without ever translating outputs between model generations."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("schema_version") == "ds4-qwen38-fixture-manifest-v1":
+        from qwen38_fixtures import validate_oracle_manifest
+
+        return validate_oracle_manifest(path)
+    return validate_qwen36_manifest(path)
+
+
+def ensure_generation_staging(path: Path, manifest: dict) -> Path:
+    if manifest.get("schema_version") == "ds4-qwen38-fixture-manifest-v1":
+        from qwen38_fixtures import ensure_staging
+
+        return ensure_staging(path)
+    return ensure_qwen36_staging(path)
+
+
+def target_quantization(manifest: dict) -> str:
+    for artifact in manifest.get("artifacts", []):
+        if artifact.get("role") == "target":
+            return str(artifact.get("quantization", "the target GGUF quantization"))
+    return "the target GGUF quantization"
 
 
 def activate_nvidia_dll_dirs() -> None:
@@ -222,7 +247,7 @@ def resolve_artifact_paths(manifest: dict, overrides: list[tuple[str, Path]]) ->
     result: dict[str, Path] = {}
     for role, artifact in declared.items():
         raw_path = supplied.get(role)
-        if raw_path is None and artifact["local_path"] is not None:
+        if raw_path is None and artifact.get("local_path") is not None:
             raw_path = Path(artifact["local_path"])
         if raw_path is None:
             continue
@@ -435,7 +460,7 @@ def generate_transformers(
         "target_difference": {
             "model_identity": "same pinned upstream model family and revision",
             "weights": "upstream Transformers weights, not the target GGUF payload",
-            "precision": f"{dtype}, not GGUF Q4_K_M",
+            "precision": f"{dtype}, not GGUF {target_quantization(manifest)}",
             "numeric_equivalence_expected": False,
         },
     }
@@ -505,7 +530,7 @@ def generate_vllm(
         "target_difference": {
             "model_identity": "same pinned upstream model family and revision",
             "weights": "upstream vLLM weights, not the target GGUF payload",
-            "precision": f"{dtype}, not GGUF Q4_K_M",
+            "precision": f"{dtype}, not GGUF {target_quantization(manifest)}",
             "numeric_equivalence_expected": False,
         },
     }
@@ -553,7 +578,7 @@ def main() -> int:
             raise FixtureError("--steps must be at least 32")
         if args.top_k < 1:
             raise FixtureError("--top-k must be positive")
-        manifest, corpus = validate_manifest(args.manifest)
+        manifest, corpus = validate_generation_manifest(args.manifest)
         context_profile = validate_context_profile(args.context_profile) if args.context_profile else None
         if context_profile is not None:
             if args.context > context_profile["context_limit"]:
@@ -568,7 +593,7 @@ def main() -> int:
         if args.oracle == "llama.cpp" and "target" not in artifact_paths:
             raise FixtureError("llama.cpp oracle requires --artifact-path target=PATH or artifacts[target].local_path")
         tokenizer = load_renderer(manifest)
-        staging = ensure_staging(args.staging_dir)
+        staging = ensure_generation_staging(args.staging_dir, manifest)
         run_dir = staging / args.run_id
         if run_dir.exists():
             raise FixtureError(f"run already exists: {run_dir}")
@@ -650,11 +675,12 @@ def main() -> int:
                 "upstream_model": upstream_model_id(manifest),
                 "upstream_revision": manifest["model"]["source_revision"],
                 "weights_differ": True,
-                "precision_differ": args.dtype != "GGUF Q4_K_M",
+                "precision_differ": args.dtype !=
+                                    f"GGUF {target_quantization(manifest)}",
                 "numeric_equivalence_expected": False,
             }
         index = {
-            "format": "ds4-qwen36-oracle-v1",
+            "format": manifest["output_format"]["version"],
             "manifest": str(args.manifest.resolve()),
             "manifest_model": manifest["model"]["id"],
             "run_id": args.run_id,

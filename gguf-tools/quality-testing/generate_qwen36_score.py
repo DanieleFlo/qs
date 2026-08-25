@@ -12,8 +12,12 @@ import tempfile
 from pathlib import Path
 
 from qwen36_fixtures import (
-    FixtureError, ensure_staging, inventory_files, load_json, platform_provenance,
-    sha256_file, validate_context_profile, validate_manifest, write_json,
+    FixtureError, inventory_files, load_json, platform_provenance,
+    sha256_file, validate_context_profile, write_json,
+)
+from generate_qwen36_oracle import (
+    ensure_generation_staging,
+    validate_generation_manifest,
 )
 from verify_qwen36_run import verify_run
 
@@ -89,7 +93,7 @@ def main() -> int:
         args.staging_dir = args.staging_dir.resolve()
         if not args.scorer.is_file():
             raise FixtureError(f"scorer does not exist: {args.scorer}")
-        manifest, _ = validate_manifest(args.manifest)
+        manifest, _ = validate_generation_manifest(args.manifest)
         context_profile = validate_context_profile(args.context_profile) if args.context_profile else None
         if context_profile is not None:
             if args.context > context_profile["context_limit"]:
@@ -114,7 +118,7 @@ def main() -> int:
             raise FixtureError(f"model does not exist: {args.model}")
         if args.model.stat().st_size != target["size_bytes"] or sha256_file(args.model) != target["sha256"]:
             raise FixtureError("model size or SHA-256 does not match the target artifact")
-        staging = ensure_staging(args.staging_dir)
+        staging = ensure_generation_staging(args.staging_dir, manifest)
         run_dir = staging / args.run_id
         if run_dir.exists():
             raise FixtureError(f"run already exists: {run_dir}")
@@ -200,7 +204,7 @@ def main() -> int:
             write_json(response_path, response)
 
         index = {
-            "format": "ds4-qwen36-oracle-v1",
+            "format": manifest["output_format"]["version"],
             "manifest": str(args.manifest.resolve()),
             "manifest_model": manifest["model"]["id"],
             "run_id": args.run_id,

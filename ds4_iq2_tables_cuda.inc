@@ -1,4 +1,9 @@
-__device__ __constant__ uint8_t cuda_ksigns_iq2xs[128] = {
+#ifndef DS4_IQ2_TABLE_STORAGE
+#define DS4_IQ2_TABLE_STORAGE __device__ __constant__
+#define DS4_IQ2_TABLE_STORAGE_WAS_DEFAULTED 1
+#endif
+
+DS4_IQ2_TABLE_STORAGE uint8_t cuda_ksigns_iq2xs[128] = {
       0, 129, 130,   3, 132,   5,   6, 135, 136,   9,  10, 139,  12, 141, 142,  15,
     144,  17,  18, 147,  20, 149, 150,  23,  24, 153, 154,  27, 156,  29,  30, 159,
     160,  33,  34, 163,  36, 165, 166,  39,  40, 169, 170,  43, 172,  45,  46, 175,
@@ -9,7 +14,7 @@ __device__ __constant__ uint8_t cuda_ksigns_iq2xs[128] = {
     240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255,
 };
 
-__device__ __constant__ uint64_t cuda_iq2xxs_grid[256] = {
+DS4_IQ2_TABLE_STORAGE uint64_t cuda_iq2xxs_grid[256] = {
     0x0808080808080808, 0x080808080808082b, 0x0808080808081919, 0x0808080808082b08,
     0x0808080808082b2b, 0x0808080808190819, 0x0808080808191908, 0x08080808082b0808,
     0x08080808082b082b, 0x08080808082b2b08, 0x08080808082b2b2b, 0x0808080819080819,
@@ -75,3 +80,8 @@ __device__ __constant__ uint64_t cuda_iq2xxs_grid[256] = {
     0x2b2b08080808082b, 0x2b2b080819190808, 0x2b2b08082b081919, 0x2b2b081908082b19,
     0x2b2b082b08080808, 0x2b2b190808192b08, 0x2b2b2b0819190808, 0x2b2b2b1908081908,
 };
+
+#ifdef DS4_IQ2_TABLE_STORAGE_WAS_DEFAULTED
+#undef DS4_IQ2_TABLE_STORAGE_WAS_DEFAULTED
+#undef DS4_IQ2_TABLE_STORAGE
+#endif

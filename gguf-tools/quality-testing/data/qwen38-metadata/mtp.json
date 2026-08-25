@@ -1,0 +1,259 @@
+{
+  "format": "ds4-qwen38-gguf-snapshot-v1",
+  "artifact": {
+    "filename": "mtp-Qwen3.8-27B-Q4_0.gguf",
+    "size_bytes": 1369590656,
+    "sha256": "50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e"
+  },
+  "gguf": {
+    "version": 3,
+    "metadata_count": 50,
+    "tensor_count": 18,
+    "header_size_bytes": 10945401,
+    "data_offset_bytes": 10945408,
+    "tokenizer_metadata_sha256": "d4295c499d03674f9f3732f2aadf51d01b512fb05c08d15954c3aaf4c3f20c85"
+  },
+  "metadata": {
+    "general.architecture": "qwen35",
+    "general.type": "model",
+    "general.sampling.top_k": 20,
+    "general.sampling.top_p": 0.949999988079071,
+    "general.sampling.temp": 1.0,
+    "general.name": "Qwen3.8-27B",
+    "general.basename": "Qwen3.8-27B",
+    "general.description": "Renewal of the beloved Qwen model, delivering unmatched intelligence density.",
+    "general.quantized_by": "Unsloth",
+    "general.size_label": "27B",
+    "general.license": "apache-2.0",
+    "general.repo_url": "https://huggingface.co/unsloth",
+    "general.base_model.count": 1,
+    "general.base_model.0.name": "Qwen3.8 27B",
+    "general.base_model.0.organization": "Qwen",
+    "general.base_model.0.repo_url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+    "general.tags": {
+      "element_type": "string",
+      "count": 1,
+      "encoded_sha256": "2a19662fe0406f02cc2e1c51d215b98a1845bf4d0d34e9ede6557fb18f9a1229",
+      "values": [
+        "unsloth"
+      ]
+    },
+    "qwen35.block_count": 65,
+    "qwen35.context_length": 262144,
+    "qwen35.embedding_length": 5120,
+    "qwen35.feed_forward_length": 17408,
+    "qwen35.attention.head_count": 24,
+    "qwen35.attention.head_count_kv": 4,
+    "qwen35.rope.dimension_sections": {
+      "element_type": "int32",
+      "count": 4,
+      "encoded_sha256": "df74bd2dd954d1f1271e4adfc1067c5bd3058a1b25ca62b49977e2280c5a128e",
+      "values": [
+        11,
+        11,
+        10,
+        0
+      ]
+    },
+    "qwen35.rope.freq_base": 10000000.0,
+    "qwen35.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+    "qwen35.attention.key_length": 256,
+    "qwen35.attention.value_length": 256,
+    "qwen35.nextn_predict_layers": 1,
+    "qwen35.ssm.conv_kernel": 4,
+    "qwen35.ssm.state_size": 128,
+    "qwen35.ssm.group_count": 16,
+    "qwen35.ssm.time_step_rank": 48,
+    "qwen35.ssm.inner_size": 6144,
+    "qwen35.full_attention_interval": 4,
+    "qwen35.rope.dimension_count": 64,
+    "tokenizer.ggml.model": "gpt2",
+    "tokenizer.ggml.pre": "qwen35",
+    "tokenizer.ggml.tokens": {
+      "element_type": "string",
+      "count": 248320,
+      "encoded_sha256": "8602a5aeb57ffeab205af479d8d776f6d26a87ea71908599b5beef21a9e10001"
+    },
+    "tokenizer.ggml.token_type": {
+      "element_type": "int32",
+      "count": 248320,
+      "encoded_sha256": "76adce07e4c8d6808a375cf050fc14ac9028c821be794047709bae160387353a"
+    },
+    "tokenizer.ggml.merges": {
+      "element_type": "string",
+      "count": 247587,
+      "encoded_sha256": "a284225c6b7eb3356459a6594322984eeb28a45ca0e5c7621459743f55fefa2b"
+    },
+    "tokenizer.ggml.eos_token_id": 248046,
+    "tokenizer.ggml.padding_token_id": 248055,
+    "tokenizer.ggml.bos_token_id": 248044,
+    "tokenizer.chat_template": {
+      "utf8_size_bytes": 8945,
+      "utf8_sha256": "701ba13a085c0c1b5e05414dec1aa3069904f962beee36f0899e441720b83974"
+    },
+    "general.quantization_version": 2,
+    "general.file_type": 14
+  },
+  "tensor_type_counts": {
+    "F32": 8,
+    "Q3_K": 2,
+    "Q4_K": 4,
+    "Q6_K": 4
+  },
+  "tensors": [
+    {
+      "name": "output.weight",
+      "shape": [
+        5120,
+        248320
+      ],
+      "type": "Q3_K",
+      "offset": 0
+    },
+    {
+      "name": "output_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 546304000
+    },
+    {
+      "name": "token_embd.weight",
+      "shape": [
+        5120,
+        248320
+      ],
+      "type": "Q3_K",
+      "offset": 546324480
+    },
+    {
+      "name": "blk.64.attn_k.weight",
+      "shape": [
+        5120,
+        1024
+      ],
+      "type": "Q6_K",
+      "offset": 1092628480
+    },
+    {
+      "name": "blk.64.attn_k_norm.weight",
+      "shape": [
+        256
+      ],
+      "type": "F32",
+      "offset": 1096929280
+    },
+    {
+      "name": "blk.64.attn_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1096930304
+    },
+    {
+      "name": "blk.64.attn_output.weight",
+      "shape": [
+        6144,
+        5120
+      ],
+      "type": "Q6_K",
+      "offset": 1096950784
+    },
+    {
+      "name": "blk.64.attn_q.weight",
+      "shape": [
+        5120,
+        12288
+      ],
+      "type": "Q6_K",
+      "offset": 1122755584
+    },
+    {
+      "name": "blk.64.attn_q_norm.weight",
+      "shape": [
+        256
+      ],
+      "type": "F32",
+      "offset": 1174365184
+    },
+    {
+      "name": "blk.64.attn_v.weight",
+      "shape": [
+        5120,
+        1024
+      ],
+      "type": "Q6_K",
+      "offset": 1174366208
+    },
+    {
+      "name": "blk.64.ffn_down.weight",
+      "shape": [
+        17408,
+        5120
+      ],
+      "type": "Q4_K",
+      "offset": 1178667008
+    },
+    {
+      "name": "blk.64.ffn_gate.weight",
+      "shape": [
+        5120,
+        17408
+      ],
+      "type": "Q4_K",
+      "offset": 1228802048
+    },
+    {
+      "name": "blk.64.ffn_up.weight",
+      "shape": [
+        5120,
+        17408
+      ],
+      "type": "Q4_K",
+      "offset": 1278937088
+    },
+    {
+      "name": "blk.64.nextn.eh_proj.weight",
+      "shape": [
+        10240,
+        5120
+      ],
+      "type": "Q4_K",
+      "offset": 1329072128
+    },
+    {
+      "name": "blk.64.nextn.enorm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1358563328
+    },
+    {
+      "name": "blk.64.nextn.hnorm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1358583808
+    },
+    {
+      "name": "blk.64.nextn.shared_head_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1358604288
+    },
+    {
+      "name": "blk.64.post_attention_norm.weight",
+      "shape": [
+        5120
+      ],
+      "type": "F32",
+      "offset": 1358624768
+    }
+  ]
+}

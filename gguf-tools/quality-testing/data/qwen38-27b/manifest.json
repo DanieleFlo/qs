@@ -1,0 +1,239 @@
+{
+  "schema_version": "ds4-qwen38-fixture-manifest-v1",
+  "model": {
+    "id": "Qwen3.8-27B-UD-Q4_K_S",
+    "variant": "target-with-external-mtp",
+    "architecture": "qwen35",
+    "context_length": 262144,
+    "source": "https://huggingface.co/Qwen/Qwen3.8-27B",
+    "source_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "gguf_source": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF",
+    "gguf_revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502"
+  },
+  "artifacts": [
+    {
+      "role": "target",
+      "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_S.gguf",
+      "filename": "Qwen3.8-27B-UD-Q4_K_S.gguf",
+      "size_bytes": 15358213024,
+      "sha256": "75bc9c8adba2842e72f0ab5201aaa07133c5010b566305c09187fcbdcd364017",
+      "quantization": "UD-Q4_K_S",
+      "metadata": {
+        "general.architecture": "qwen35",
+        "context_length": 262144,
+        "block_count": 65,
+        "target_layer_count": 64,
+        "nextn_predict_layers": 1,
+        "tensor_count": 866,
+        "expected_model": {
+          "hidden_size": 5120,
+          "num_attention_heads": 24,
+          "num_key_value_heads": 4,
+          "head_dim": 256,
+          "intermediate_size": 17408,
+          "vocab_size": 248320,
+          "rope_theta": 10000000,
+          "tie_word_embeddings": false
+        },
+        "tensor_type_counts": {
+          "F32": 360,
+          "Q8_0": 99,
+          "Q3_K": 13,
+          "Q4_K": 95,
+          "Q5_K": 80,
+          "Q6_K": 18,
+          "IQ2_XS": 1,
+          "IQ3_XXS": 5,
+          "IQ4_NL": 7,
+          "IQ3_S": 15,
+          "IQ2_S": 1,
+          "IQ4_XS": 172
+        },
+        "chat_template_size_bytes": 9993,
+        "chat_template_sha256": "12827f24b742ea4e80cdc12dbcf9622227056b9f797252a3149263d4f9aaadce",
+        "snapshot_file": "../qwen38-metadata/target.json",
+        "snapshot_sha256": "676efc2823c62782b1c1552a9a6041131ddc2e3f5762c6a0651adf7374d12698"
+      }
+    },
+    {
+      "role": "mtp",
+      "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/MTP/mtp-Qwen3.8-27B-Q4_0.gguf",
+      "filename": "mtp-Qwen3.8-27B-Q4_0.gguf",
+      "size_bytes": 1369590656,
+      "sha256": "50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e",
+      "quantization": "mixed-Q3_K-Q4_K-Q6_K",
+      "metadata": {
+        "general.architecture": "qwen35",
+        "context_length": 262144,
+        "block_count": 65,
+        "nextn_predict_layers": 1,
+        "tensor_count": 18,
+        "tensor_type_counts": {
+          "F32": 8,
+          "Q3_K": 2,
+          "Q4_K": 4,
+          "Q6_K": 4
+        },
+        "chat_template_size_bytes": 8945,
+        "chat_template_sha256": "701ba13a085c0c1b5e05414dec1aa3069904f962beee36f0899e441720b83974",
+        "snapshot_file": "../qwen38-metadata/mtp.json",
+        "snapshot_sha256": "19173dee7cd434860c5fac365642ef34e94e08771e63fdf6ed14d8b6c76b5810"
+      }
+    }
+  ],
+  "tokenizer": {
+    "url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/tokenizer.json",
+    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "size_bytes": 12809320,
+    "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "target_mtp_embedded_tables": "byte-identical"
+  },
+  "chat_template": {
+    "url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja",
+    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "size_bytes": 8952,
+    "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+    "gguf_templates": "audited-separately"
+  },
+  "corpus": "../qwen36-27b/prompts/cases.json",
+  "oracle": {
+    "output_format": "ds4-qwen38-oracle-v1",
+    "reference_model": "Qwen3.8-27B-UD-Q4_K_S.gguf",
+    "must_not_compare_with": "Qwen3.6",
+    "status": "not_verified",
+    "reason": "One same-token same-GGUF llama.cpp diagnostic passes; full-corpus oracle review and promotion remain pending"
+  },
+  "oracle_environments": {
+    "llama.cpp": {
+      "kind": "numeric_same_gguf",
+      "status": "not_verified",
+      "version": "b0-unknown (Windows worktree metadata is unavailable inside WSL)",
+      "commit": "2468576f241235452013308597e6de1b78866996",
+      "build_flags": "GGML_CUDA=ON; CUDA 12.4; sm_86; Release; GGML_NATIVE=ON; LLAMA_CURL=OFF",
+      "backend": "CUDA",
+      "hardware": "NVIDIA GeForce RTX 3090 24GB; driver 610.62",
+      "dtype": "GGUF UD-Q4_K_S",
+      "parameters": {
+        "temperature": 0,
+        "greedy_tokens": 32,
+        "teacher_forced_tokens": 32,
+        "top_k": 20,
+        "context": 8192,
+        "n_gpu_layers": -1,
+        "verified_runs": []
+      },
+      "diagnostic": {
+        "scope": "one canonical token manifest; 32 greedy and 32 teacher-forced positions",
+        "greedy_token_matches": 32,
+        "greedy_cosine_min": 0.99996379700609,
+        "greedy_top20_overlap_min": 0.95,
+        "teacher_argmax_matches": 31,
+        "teacher_cosine_min": 0.9999913595666545,
+        "teacher_oracle_logprob_mae": 0.025028394199325732
+      },
+      "reason": "diagnostic is not a reviewed full-corpus oracle run"
+    },
+    "transformers": {
+      "kind": "semantic_upstream",
+      "status": "not_verified",
+      "version": null,
+      "commit": null,
+      "build_flags": null,
+      "backend": null,
+      "hardware": null,
+      "dtype": "bfloat16",
+      "parameters": {
+        "temperature": 0,
+        "greedy_tokens": 32,
+        "teacher_forced_tokens": 32,
+        "top_k": 20
+      },
+      "reason": "upstream semantic oracle has not been generated"
+    },
+    "vllm": {
+      "kind": "semantic_upstream",
+      "status": "not_verified",
+      "version": null,
+      "commit": null,
+      "build_flags": null,
+      "backend": null,
+      "hardware": null,
+      "dtype": "bfloat16",
+      "parameters": {
+        "temperature": 0,
+        "greedy_tokens": 32,
+        "teacher_forced_tokens": 32,
+        "top_k": 20
+      },
+      "reason": "upstream semantic oracle has not been generated"
+    }
+  },
+  "equivalence_thresholds": {
+    "version": "ds4-qwen38-equivalence-thresholds-v1",
+    "internal": {
+      "status": "verified",
+      "metrics": {
+        "greedy_tokens": 32,
+        "teacher_forced_tokens": 32,
+        "top1_matches": 64,
+        "top20_overlap_min": 0.95,
+        "cosine_min": 0.9999990314
+      },
+      "calibration": "F32 decode/prefill reference versus production R8 decode on the pinned GGUF",
+      "reason": null
+    },
+    "cross_engine": {
+      "status": "not_verified",
+      "metrics": null,
+      "calibration": null,
+      "reason": "one-case same-GGUF diagnostic passes; full-corpus calibration is pending"
+    }
+  },
+  "short_message_gates": {
+    "version": "ds4-qwen38-short-gates-v1",
+    "excluded_categories": [
+      "long-canary"
+    ],
+    "minimum_greedy_tokens": 32,
+    "minimum_teacher_forced_tokens": 32,
+    "top_k": 20,
+    "top_k_overlap_min": 0.95,
+    "top_k_rank_agreement_min": 0.95,
+    "oracle_logprob_mae_max": 0.05,
+    "low_margin_max": 0.1
+  },
+  "output_format": {
+    "version": "ds4-qwen38-oracle-v1",
+    "index": "JSON",
+    "large_logits": "float32-le",
+    "checksums": "SHA-256"
+  },
+  "gates": {
+    "minimum_greedy_tokens": 32,
+    "minimum_teacher_forced_tokens": 32,
+    "top_k": 20,
+    "prefill_tokens_per_second_min": 500.0,
+    "generation_tokens_per_second_min": 15.0,
+    "mtp_short_generation_tokens_per_second_min": 20.0,
+    "mtp_target_token_identity_required": true
+  },
+  "runtime": {
+    "status": "kernel_ready",
+    "supported_cuda_formats": [
+      "Q3_K",
+      "IQ2_XS",
+      "IQ3_XXS",
+      "IQ4_NL",
+      "IQ3_S",
+      "IQ2_S",
+      "IQ4_XS"
+    ],
+    "missing_cuda_formats": []
+  },
+  "verification": {
+    "status": "not_verified",
+    "reasons": [
+      "reviewed full-corpus same-GGUF external Qwen3.8 oracle is pending"
+    ]
+  }
+}

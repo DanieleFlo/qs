@@ -590,8 +590,8 @@ static bool kv_cache_same_system_class(
 }
 
 static int kv_cache_engine_quant_bits(ds4_engine *engine) {
-    /* Qwen3.6 is dense, so there is no routed-expert tensor to inspect. */
-    if (ds4_engine_is_qwen36_q4_k_s(engine)) return 4;
+    /* Audited Qwen targets are dense, so there is no routed-expert tensor. */
+    if (ds4_engine_is_qwen_q4_k_s(engine)) return 4;
     return ds4_engine_routed_quant_bits(engine);
 }
 
@@ -1096,7 +1096,7 @@ bool ds4_kvstore_store_live_prefix_text(ds4_kvstore *kc,
     }
 
     ds4_session_payload_file staged = {0};
-    const bool direct_qwen = ds4_engine_is_qwen36_q4_k_s(engine);
+    const bool direct_qwen = ds4_engine_is_qwen_q4_k_s(engine);
     uint64_t payload_bytes = direct_qwen ?
         ds4_session_payload_bytes(session) : 0;
     if ((!direct_qwen &&

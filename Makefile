@@ -47,7 +47,7 @@ DS4_LINK_LIBS ?= $(CUDA_LDLIBS)
 METAL_LDLIBS := $(LDLIBS)
 endif
 
-.PHONY: all help clean test test-constrained-json-live test-jsonschemabench-safety test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics perf-doctor perf-harness-test perf-fast-test perf-direction-ab perf-slow-test research-fetch research-index research-check strix-halo rocm
+.PHONY: all help clean test test-qwen38 test-qwen38-perf test-constrained-json-live test-jsonschemabench-safety test-metal-session-batch test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics perf-doctor perf-harness-test perf-fast-test perf-direction-ab perf-slow-test research-fetch research-index research-check docs-index docs-check strix-halo rocm
 
 ifeq ($(UNAME_S),Darwin)
 all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
@@ -57,6 +57,7 @@ help:
 	@echo "  make              Build Metal ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make cpu          Build CPU-only ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make test         Build and run tests"
+	@echo "  make test-qwen38-perf  Run the opt-in Qwen3.8 CLI/server MTP large-context-allocation gate"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
 	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make dspark-verify-depth  Run DSpark speculative verification smoke if support GGUF is present"
@@ -111,6 +112,7 @@ help:
 	@echo "  make rocm                Alias for make strix-halo"
 	@echo "  make cpu                 Build CPU-only ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make test                Build and run tests"
+	@echo "  make test-qwen38-perf    Run the opt-in Qwen3.8 CLI/server MTP large-context-allocation gate"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
 	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make dspark-verify-depth Run DSpark speculative verification smoke if support GGUF is present"
@@ -211,7 +213,13 @@ perf-direction-ab:
 		--baseline "performance-results/$(PERF_ID)-baseline/experiment.json"
 
 perf-slow-test: perf-fast-test qwen-numerics
-	python3 -m unittest tests.test_qwen36_fixtures tests.test_qwen36_numerics -v
+	python3 -m unittest tests.test_qwen36_fixtures tests.test_qwen36_numerics tests.test_qwen38_compatibility -v
+
+test-qwen38:
+	python3 -m unittest tests.test_qwen38_compatibility -v
+
+test-qwen38-perf: ds4 ds4-server
+	DS4_TEST_QWEN38_PERF=1 python3 -m unittest tests.test_qwen38_compatibility.Qwen38CompatibilityTests.test_cli_and_server_mtp_short_large_allocation_regression -v
 
 research-fetch:
 	python3 tools/fetch_research_corpus.py --refresh
@@ -222,6 +230,12 @@ research-index:
 
 research-check: research-index
 	python3 -m unittest tests.test_research_corpus -v
+
+docs-index: research-index
+	python3 tools/build_docs_indexes.py
+
+docs-check: docs-index
+	python3 -m unittest tests.test_research_corpus tests.test_docs_wiki -v
 
 ds4.o: ds4.c ds4.h ds4_ssd.h ds4_distributed.h ds4_gpu.h
 	$(CC) $(CFLAGS) -c -o $@ ds4.c
@@ -449,6 +463,7 @@ test: ds4_test ds4_agent_test ds4_server_test ds4-eval q4k-dot-test \
 	./ds4-eval --self-test-extractors
 	./ds4_agent_test
 	./ds4_server_test
+	python3 -m unittest tests.test_qwen38_compatibility -v
 	./ds4_test
 	./tests/test_layer_pack
 	./tests/test_engine_mgpu_placement

@@ -42,11 +42,13 @@ DEFAULT_RESULTS = ROOT / "performance-results"
 SCHEMA_VERSION = 1
 CONTEXT_CURVE_SUITE = "context-curve-full"
 MTP_CONTEXT_CURVE_SUITE = "mtp-context-curve"
+MTP_SHORT_REGRESSION_SUITE = "mtp-short-regression"
 MTP_DEPTH_CROSSOVER_SUITE = "mtp-depth-crossover"
 MTP_DEPTH_2K_SUITE = "mtp-depth-2k"
 MTP_DEPTH_BOUNDARY_SUITE = "mtp-depth-boundary"
 MTP_WEAKEST_CONFIRM_SUITE = "mtp-weakest-confirm"
 MTP_LONG_CONTEXT_SMOKE_SUITE = "mtp-long-context-smoke"
+MTP_DEPTH_28K_SUITE = "mtp-depth-28k"
 MTP_THRESHOLD_SEARCH_SUITE = "mtp-threshold-search"
 MTP_THRESHOLD_MIDPOINT_SUITE = "mtp-threshold-midpoint"
 AGENT_DSML_BASELINE_SUITE = "agent-dsml-unconstrained-baseline"
@@ -599,9 +601,23 @@ def prompt_filler_intercept(
     return first_tokens - first_count
 
 
-def server_curve_prompt(filler_count: int) -> str:
+def server_curve_prompt(filler_count: int,
+                        pattern: str = "numbered-list") -> str:
     if filler_count < 0:
         raise HarnessError("target context is smaller than the calibrated prompt wrapper")
+    if pattern == "technical-explanation":
+        return (
+            "Ignore all occurrences of alpha. Read only the final "
+            "instruction.\nFILLER:"
+            + " alpha" * filler_count
+            + "\nFINAL INSTRUCTION: Write a detailed technical explanation "
+              "of reliable GPU benchmarking. Cover warmup, synchronization, "
+              "memory, latency, throughput, determinism, and correctness. "
+              "Use complete paragraphs and continue for at least 64 words."
+              "\nANSWER:"
+        )
+    if pattern != "numbered-list":
+        raise HarnessError(f"unknown server prompt pattern: {pattern}")
     return (
         "Read the following calibration filler silently.\nFILLER:"
         + " alpha" * filler_count
@@ -2179,12 +2195,16 @@ def constrained_usage(response: dict[str, Any]) -> tuple[int, int]:
 
 
 def completion_request(base_url: str, prompt: str, max_tokens: int,
-                       timeout: float) -> dict[str, Any]:
-    return post_json(base_url + "/v1/completions", {
+                       timeout: float,
+                       thinking: bool | None = None) -> dict[str, Any]:
+    body: dict[str, Any] = {
         "model": "deepseek-chat", "prompt": prompt,
         "max_tokens": max_tokens, "temperature": 0,
         "seed": 424242, "stream": False,
-    }, timeout)
+    }
+    if thinking is not None:
+        body["thinking"] = thinking
+    return post_json(base_url + "/v1/completions", body, timeout)
 
 
 def completion_usage(response: dict[str, Any]) -> tuple[int, int]:
@@ -2219,7 +2239,17 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
             probe.bind(("127.0.0.1", 0))
             port = int(probe.getsockname()[1])
     base_url = f"http://127.0.0.1:{port}"
-    context_alloc = max(contexts) + generation_tokens + 1
+    minimum_context_alloc = max(contexts) + generation_tokens + 1
+    context_alloc = (
+        args.context_alloc
+        if args.context_alloc is not None
+        else minimum_context_alloc
+    )
+    if context_alloc < minimum_context_alloc:
+        raise HarnessError(
+            f"--context-alloc {context_alloc} is below the required "
+            f"{minimum_context_alloc} tokens"
+        )
     command = [
         str(binary), "--model", str(model), "--backend", "cuda",
         "--ctx", str(context_alloc), "--host", "127.0.0.1", "--port", str(port),
@@ -2245,10 +2275,14 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
 
         first_count, second_count = 32, 96
         first = completion_request(
-            base_url, server_curve_prompt(first_count), 1, args.timeout
+            base_url, server_curve_prompt(first_count, args.prompt_pattern),
+            1, args.timeout,
+            args.thinking,
         )
         second = completion_request(
-            base_url, server_curve_prompt(second_count), 1, args.timeout
+            base_url, server_curve_prompt(second_count, args.prompt_pattern),
+            1, args.timeout,
+            args.thinking,
         )
         first_tokens, _ = completion_usage(first)
         second_tokens, _ = completion_usage(second)
@@ -2262,14 +2296,18 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
             # Zero is the requested empty-context bucket. Inference still needs
             # a real prompt, so use the smallest calibrated wrapper and retain
             # its actual token count in raw_rows.
-            prompt = server_curve_prompt(0 if context == 0 else context - intercept)
+            prompt = server_curve_prompt(
+                0 if context == 0 else context - intercept,
+                args.prompt_pattern,
+            )
             samples = []
             output_hashes = []
             completion_counts = []
             for _ in range(args.repetitions):
                 request_offset = log_path.stat().st_size
                 response = completion_request(
-                    base_url, prompt, generation_tokens, args.timeout
+                    base_url, prompt, generation_tokens, args.timeout,
+                    args.thinking,
                 )
                 actual_context, completion_count = completion_usage(response)
                 if context != 0 and actual_context != context:
@@ -3256,8 +3294,9 @@ def build_parser() -> argparse.ArgumentParser:
     server_curve.add_argument(
         "--suite", default=CONTEXT_CURVE_SUITE,
         choices=(CONTEXT_CURVE_SUITE, MTP_CONTEXT_CURVE_SUITE,
+                 MTP_SHORT_REGRESSION_SUITE,
                  MTP_DEPTH_CROSSOVER_SUITE, MTP_LONG_CONTEXT_SMOKE_SUITE,
-                 MTP_DEPTH_2K_SUITE,
+                 MTP_DEPTH_2K_SUITE, MTP_DEPTH_28K_SUITE,
                  MTP_DEPTH_BOUNDARY_SUITE,
                  MTP_WEAKEST_CONFIRM_SUITE,
                  MTP_THRESHOLD_SEARCH_SUITE, MTP_THRESHOLD_MIDPOINT_SUITE,
@@ -3265,8 +3304,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     server_curve.add_argument("--mtp", action="store_true")
     server_curve.add_argument("--mtp-model")
+    server_curve.add_argument(
+        "--prompt-pattern",
+        choices=("numbered-list", "technical-explanation"),
+        default="numbered-list",
+        help="calibrated completion canary; technical-explanation resists early EOS",
+    )
+    server_thinking = server_curve.add_mutually_exclusive_group()
+    server_thinking.add_argument(
+        "--thinking", dest="thinking", action="store_true",
+        help="explicitly enable thinking in completion requests",
+    )
+    server_thinking.add_argument(
+        "--no-thinking", dest="thinking", action="store_false",
+        help="explicitly disable thinking in completion requests",
+    )
+    server_curve.set_defaults(thinking=None)
     server_curve.add_argument("--repetitions", type=int, default=2)
     server_curve.add_argument("--minimum-completion-tokens", type=int, default=32)
+    server_curve.add_argument(
+        "--context-alloc", type=int,
+        help="allocate this server context independently of the measured prompt length",
+    )
     server_curve.add_argument("--port", type=int, default=0)
     server_curve.add_argument("--startup-timeout", type=float, default=180.0)
     server_curve.add_argument("--timeout", type=float, default=1800.0)

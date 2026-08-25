@@ -137,7 +137,7 @@ riusa ogni riga K/V per due query head del gruppo GQA. L'override diagnostico
 confermato è 2.
 
 Il registro unico di soluzioni mantenute e scartate è
-`docs/qwen36-performance-ledger.md`. I documenti datati restano fonti storiche,
+`docs/performance/qwen36-performance-ledger.md`. I documenti datati restano fonti storiche,
 ma una decisione nuova va sempre memorizzata anche nel ledger.
 
 ## Curva completa di contesto 2K-30K
@@ -166,11 +166,32 @@ tempo HTTP comprensivo del prefill. Le due risposte per frontiera devono inoltre
 avere lo stesso hash; un candidato confrontato a un baseline deve conservare
 anche gli hash del baseline.
 
+La lunghezza effettiva del prompt e la capacita' KV allocata sono variabili
+distinte. `--context-alloc N` forza la seconda senza falsificare la prima e
+rifiuta valori insufficienti per il workload. Il canary
+`--prompt-pattern technical-explanation --no-thinking` evita risposte EOS di
+uno o due token osservate con alcuni template Qwen. Il gate model-backed che
+riproduce un prompt corto MTP con allocazione 28.768 e' `make
+test-qwen38-perf`; la suite isolata usata internamente e'
+`mtp-short-regression`.
+
     python3 tools/perf_harness.py server-curve \
       --id server-context-curve-default-01 \
       --model gguf/Qwen3.6-27B-Q4_K_S.gguf \
       --repetitions 2 \
       --hypothesis "server decode stays above 20 tok/s from 2K to 30K" \
+      --baseline-run
+
+Per riprodurre esplicitamente il caso Qwen3.8 con prompt corto e grande
+allocazione:
+
+    python3 tools/perf_harness.py server-curve \
+      --id qwen38-mtp-short-largealloc \
+      --model gguf/Qwen3.8-27B-UD-Q4_K_S.gguf \
+      --suite mtp-short-regression --mtp --context-alloc 28768 \
+      --no-thinking --prompt-pattern technical-explanation \
+      --repetitions 2 --minimum-completion-tokens 32 \
+      --hypothesis "Qwen3.8 short MTP stays above 20 tok/s at ctx 28768" \
       --baseline-run
 
 ## Ciclo di sviluppo rapido

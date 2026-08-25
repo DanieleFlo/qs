@@ -1124,12 +1124,14 @@ static char *agent_build_system_prompt_reminder(ds4_engine *engine) {
 static void agent_append_system_prompt(ds4_engine *engine, ds4_tokens *tokens,
                                        const char *extra) {
     /* The built-in tool prompt is trusted DS4 control text.  Tokenize it like a
-     * rendered chat prompt so the literal ｜DSML｜ markers in the examples become
-     * the model's dedicated DSML token.  Do not apply that tokenizer to user
-     * supplied -sys text: arbitrary user text containing <｜User｜>, <think>, or
-     * ｜DSML｜ must remain plain content, not control tokens. */
+     * rendered chat prompt.  DeepSeek maps the literal ｜DSML｜ markers in the
+     * examples to its dedicated control token; Qwen instead needs a real ChatML
+     * system role around the textual DSML grammar.  User-supplied -sys text is
+     * always appended as system-message content rather than trusted rendered
+     * control text. */
     char *tools_prompt = agent_build_tools_prompt(engine);
-    if (agent_tool_syntax_for_engine(engine) == AGENT_TOOL_SYNTAX_GLM)
+    if (agent_tool_syntax_for_engine(engine) == AGENT_TOOL_SYNTAX_GLM ||
+        ds4_engine_is_qwen(engine))
         ds4_chat_append_message(engine, tokens, "system", tools_prompt);
     else
         ds4_tokenize_rendered_chat(engine, tools_prompt, tokens);
@@ -1182,7 +1184,8 @@ static void agent_worker_maybe_append_system_prompt_reminder(agent_worker *w) {
     agent_publish_system_status(w, "Re-injecting system prompt reminder...");
     agent_trace(w, "system prompt reminder injected at transcript=%d",
                 w->transcript.len);
-    if (agent_tool_syntax_for_engine(w->engine) == AGENT_TOOL_SYNTAX_GLM) {
+    if (agent_tool_syntax_for_engine(w->engine) == AGENT_TOOL_SYNTAX_GLM ||
+        ds4_engine_is_qwen(w->engine)) {
         ds4_chat_append_message(w->engine, &w->transcript, "system", reminder);
     } else {
         ds4_tokenize_rendered_chat(w->engine, reminder, &w->transcript);
@@ -4186,8 +4189,10 @@ static bool agent_kv_load_path(agent_worker *w, const char *path,
         snprintf(err, err_len, "KV checkpoint was written for a different model");
         ok = false;
     }
+    const int runtime_quant_bits = ds4_engine_is_qwen_q4_k_s(w->engine) ?
+        4 : ds4_engine_routed_quant_bits(w->engine);
     if (ok && hdr.payload_bytes != 0 &&
-        hdr.quant_bits != (uint8_t)ds4_engine_routed_quant_bits(w->engine))
+        hdr.quant_bits != (uint8_t)runtime_quant_bits)
     {
         snprintf(err, err_len, "KV checkpoint was written for a different quantization");
         ok = false;
@@ -4269,7 +4274,12 @@ static bool agent_kv_save_path(agent_worker *w, const char *path,
         snprintf(err, err_len, "live KV state does not match session transcript");
         return false;
     }
-    const int quant_bits = ds4_engine_routed_quant_bits(w->engine);
+    /* Qwen Q4_K_S is dense: it has no routed expert tensor from which the
+     * generic helper can infer a bit width.  Its persistent-session payload is
+     * nevertheless fully supported and uses the audited Q4 identity, matching
+     * the server KV-store policy. */
+    const int quant_bits = ds4_engine_is_qwen_q4_k_s(w->engine) ?
+        4 : ds4_engine_routed_quant_bits(w->engine);
     if (quant_bits != 2 && quant_bits != 4) {
         snprintf(err, err_len, "unsupported routed quantization for KV save");
         return false;

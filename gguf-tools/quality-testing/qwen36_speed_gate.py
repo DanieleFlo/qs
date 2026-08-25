@@ -18,7 +18,10 @@ def validate_speed_report(path: Path, *, model_sha256: str, backend: str,
                           hardware: str) -> dict:
     report = load_json(path)
     report_format = report.get("format")
-    if report_format not in {"ds4-qwen36-speed-v1", "ds4-qwen36-speed-v2"}:
+    if report_format not in {
+        "ds4-qwen36-speed-v1", "ds4-qwen36-speed-v2",
+        "ds4-qwen38-speed-v1", "ds4-qwen38-speed-v2",
+    }:
         raise FixtureError("performance report has an unsupported format")
     common_fields = ("model_sha256", "engine_commit", "build_flags", "backend",
                   "hardware", "prefill_tokens",

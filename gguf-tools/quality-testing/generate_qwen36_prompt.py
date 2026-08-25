@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Materialize one deterministic long Qwen3.6 corpus case into staging."""
+"""Materialize one deterministic long Qwen3.x corpus case into staging."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-from qwen36_fixtures import FixtureError, ensure_staging, find_case, materialize_case, validate_manifest, write_json
+from qwen36_fixtures import FixtureError, find_case, materialize_case, write_json
+from generate_qwen36_oracle import (
+    ensure_generation_staging,
+    validate_generation_manifest,
+)
 
 
 def main() -> int:
@@ -16,11 +20,11 @@ def main() -> int:
     parser.add_argument("--staging-dir", required=True, type=Path)
     args = parser.parse_args()
     try:
-        _, corpus = validate_manifest(args.manifest)
+        manifest, corpus = validate_generation_manifest(args.manifest)
         case = find_case(corpus, args.case)
         if case["category"] != "long-canary":
             raise FixtureError(f"{args.case} is not a long-canary case")
-        staging = ensure_staging(args.staging_dir)
+        staging = ensure_generation_staging(args.staging_dir, manifest)
         materialized = materialize_case(case)
         case_dir = staging / case["id"]
         case_dir.mkdir(exist_ok=True)

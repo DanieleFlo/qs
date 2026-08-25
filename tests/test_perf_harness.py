@@ -86,6 +86,13 @@ class PerfHarnessTests(unittest.TestCase):
             30000,
         )
 
+    def test_mtp_short_regression_is_an_isolated_empty_frontier(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-short-regression"
+        )
+        self.assertEqual([item["context"] for item in workloads], [0])
+        self.assertEqual([item["generation_tokens"] for item in workloads], [64])
+
     def test_mtp_threshold_search_follows_the_bisection_points(self) -> None:
         workloads = HARNESS.load_workloads(
             ROOT / "performance" / "workloads.yaml", "mtp-threshold-search"
@@ -109,6 +116,12 @@ class PerfHarnessTests(unittest.TestCase):
             workloads[0]["generation_tokens"] + 1,
             30000,
         )
+
+    def test_mtp_depth_28k_is_an_isolated_tail_probe(self) -> None:
+        workloads = HARNESS.load_workloads(
+            ROOT / "performance" / "workloads.yaml", "mtp-depth-28k"
+        )
+        self.assertEqual([item["context"] for item in workloads], [28672])
 
     def test_mtp_depth_crossover_samples_4k_8k_12k(self) -> None:
         workloads = HARNESS.load_workloads(
@@ -464,15 +477,35 @@ class PerfHarnessTests(unittest.TestCase):
         ])
         self.assertEqual(args.repetitions, 2)
         self.assertEqual(args.port, 0)
+        self.assertIsNone(args.context_alloc)
 
     def test_server_curve_accepts_mtp_curve_and_sidecar(self) -> None:
         args = HARNESS.build_parser().parse_args([
             "server-curve", "--model", "model.gguf", "--baseline-run",
             "--hypothesis", "MTP remains faster through 28K",
-            "--suite", "mtp-context-curve", "--mtp",
+            "--suite", "mtp-context-curve", "--mtp", "--no-thinking",
+            "--prompt-pattern", "technical-explanation",
         ])
         self.assertEqual(args.suite, "mtp-context-curve")
         self.assertTrue(args.mtp)
+        self.assertFalse(args.thinking)
+        self.assertEqual(args.prompt_pattern, "technical-explanation")
+
+    def test_server_curve_accepts_explicit_large_context_allocation(self) -> None:
+        args = HARNESS.build_parser().parse_args([
+            "server-curve", "--model", "model.gguf", "--baseline-run",
+            "--hypothesis", "short MTP remains fast with a large allocation",
+            "--suite", "mtp-short-regression", "--mtp",
+            "--context-alloc", "28768",
+        ])
+        self.assertEqual(args.suite, "mtp-short-regression")
+        self.assertEqual(args.context_alloc, 28768)
+
+    def test_technical_server_prompt_has_one_token_filler(self) -> None:
+        short = HARNESS.server_curve_prompt(32, "technical-explanation")
+        long = HARNESS.server_curve_prompt(96, "technical-explanation")
+        self.assertEqual(long.count(" alpha") - short.count(" alpha"), 64)
+        self.assertIn("at least 64 words", short)
 
     def test_doctor_reports_the_shared_split_k_crossover(self) -> None:
         self.assertEqual(HARNESS.QWEN_SPLIT_K_MIN_CONTEXT, 96)

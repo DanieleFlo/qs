@@ -431,8 +431,8 @@ int main(void) {
 
     /* The general Qwen Q4_K_S payload is portable across session objects and
      * restores all continuation-dependent state, not only target KV rows. */
-    CHECK(ds4_engine_is_qwen36_q4_k_s(engine),
-          "agentic checkpoint gate requires Qwen3.6 Q4_K_S");
+    CHECK(ds4_engine_is_qwen_q4_k_s(engine),
+          "agentic checkpoint gate requires an audited Qwen Q4_K_S target");
     uint64_t session_payload_bytes = 0;
     CHECK(save_session_payload(live, session_path, &session_payload_bytes) == 0,
           "portable session save failed");

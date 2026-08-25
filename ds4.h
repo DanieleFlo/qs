@@ -124,10 +124,11 @@ typedef struct {
     int debug_hash;             /* cross-check hidden state every N tokens */
 } ds4_tp_options;
 
-/* Frontends use this known sidecar when --mtp is enabled without an explicit
- * support-model override.  The relative path intentionally follows the
- * repository's normal ./gguf layout. */
+/* Known Qwen sidecars in the repository's normal ./gguf layout.  Frontends
+ * set mtp_auto for --mtp; the engine selects the sidecar only after it has
+ * structurally identified the target generation. */
 #define DS4_QWEN36_DEFAULT_MTP_PATH "gguf/mtp-Qwen3.6-27B-Q4_0.gguf"
+#define DS4_QWEN38_DEFAULT_MTP_PATH "gguf/mtp-Qwen3.8-27B-Q4_0.gguf"
 
 typedef struct {
     const char *model_path;
@@ -151,6 +152,7 @@ typedef struct {
     uint64_t simulate_used_memory_bytes;
     bool warm_weights;
     bool quality;
+    bool mtp_auto;
     bool glm_mtp;
     bool glm_mtp_timing;
     bool dspark;
@@ -251,9 +253,12 @@ bool ds4_engine_glm_layer_payload_bytes(ds4_engine *e,
  * KV files with the previously-zero reserved byte remain Flash-compatible;
  * Pro and later shapes must use nonzero ids. */
 int ds4_engine_model_id(ds4_engine *e);
-/* True only for the audited Qwen3.6 27B Q4_K_S layout.  Cache policy uses this
- * narrow predicate instead of guessing from the model path or quant bits. */
+/* Exact audited Qwen target predicates.  Cache policy uses these instead of
+ * guessing from the model path or nominal quant bits. */
 bool ds4_engine_is_qwen36_q4_k_s(ds4_engine *e);
+bool ds4_engine_is_qwen38_ud_q4_k_s(ds4_engine *e);
+bool ds4_engine_is_qwen_q4_k_s(ds4_engine *e);
+bool ds4_engine_is_qwen(ds4_engine *e);
 bool ds4_engine_is_glm_dsa(ds4_engine *e);
 const char *ds4_backend_name(ds4_backend backend);
 bool ds4_think_mode_enabled(ds4_think_mode mode);

@@ -49,6 +49,69 @@ typedef struct {
     uint16_t d;
 } probe_block_q6_k;
 
+typedef struct {
+    uint8_t hmask[32];
+    uint8_t qs[64];
+    uint8_t scales[12];
+    uint16_t d;
+} probe_block_q3_k;
+
+typedef struct {
+    uint16_t d;
+    uint16_t qs[32];
+    uint8_t scales[8];
+} probe_block_iq2_xs;
+
+typedef struct {
+    uint16_t d;
+    uint8_t qs[64];
+    uint8_t qh[8];
+    uint8_t scales[8];
+} probe_block_iq2_s;
+
+typedef struct {
+    uint16_t d;
+    uint8_t qs[96];
+} probe_block_iq3_xxs;
+
+typedef struct {
+    uint16_t d;
+    uint8_t qs[64];
+    uint8_t qh[8];
+    uint8_t signs[32];
+    uint8_t scales[4];
+} probe_block_iq3_s;
+
+typedef struct {
+    uint16_t d;
+    uint8_t qs[16];
+} probe_block_iq4_nl;
+
+typedef struct {
+    uint16_t d;
+    uint16_t scales_h;
+    uint8_t scales_l[4];
+    uint8_t qs[128];
+} probe_block_iq4_xs;
+
+_Static_assert(sizeof(probe_block_q3_k) == 110, "Q3_K block layout");
+_Static_assert(sizeof(probe_block_iq2_xs) == 74, "IQ2_XS block layout");
+_Static_assert(sizeof(probe_block_iq2_s) == 82, "IQ2_S block layout");
+_Static_assert(sizeof(probe_block_iq3_xxs) == 98, "IQ3_XXS block layout");
+_Static_assert(sizeof(probe_block_iq3_s) == 110, "IQ3_S block layout");
+_Static_assert(sizeof(probe_block_iq4_nl) == 18, "IQ4_NL block layout");
+_Static_assert(sizeof(probe_block_iq4_xs) == 136, "IQ4_XS block layout");
+
+/* Reuse only the immutable GGML codebooks.  The host dequantizers below are
+ * separate scalar implementations, so the test still catches packing,
+ * indexing, sign, scale, dispatch, and CUDA-reduction mistakes. */
+#define DS4_IQ2_TABLE_STORAGE static const __attribute__((unused))
+#include "ds4_iq2_tables_cuda.inc"
+#undef DS4_IQ2_TABLE_STORAGE
+#define DS4_IQ_UD_TABLE_STORAGE static const
+#include "ds4_iq_ud_tables_cuda.inc"
+#undef DS4_IQ_UD_TABLE_STORAGE
+
 static float f16_to_f32(uint16_t h) {
     const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
     const uint32_t exp = (h >> 10) & 0x1fu;
@@ -171,6 +234,122 @@ static float q6_k_value(const probe_block_q6_k *block, uint32_t i) {
     }
     return f16_to_f32(block->d) * (float)block->scales[scale] *
            (float)((int)q - 32);
+}
+
+static uint8_t u64_byte(uint64_t value, uint32_t index) {
+    return (uint8_t)(value >> (8u * index));
+}
+
+static uint16_t load_u16_le(const uint8_t *bytes) {
+    return (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8u);
+}
+
+static float q3_k_value(const probe_block_q3_k *block, uint32_t i) {
+    const uint32_t n = i >> 7u;
+    const uint32_t within = i & 127u;
+    const uint32_t j = within >> 5u;
+    const uint32_t l = within & 31u;
+    const uint32_t is0 = l >> 4u;
+    const uint32_t is = 8u * n + 2u * j + is0;
+    uint8_t scale;
+    if (is < 4u) {
+        scale = (block->scales[is] & 0x0fu) |
+                (((block->scales[is + 8u] >> 0u) & 3u) << 4u);
+    } else if (is < 8u) {
+        scale = (block->scales[is] & 0x0fu) |
+                (((block->scales[is + 4u] >> 2u) & 3u) << 4u);
+    } else if (is < 12u) {
+        scale = (block->scales[is - 8u] >> 4u) |
+                (((block->scales[is] >> 4u) & 3u) << 4u);
+    } else {
+        scale = (block->scales[is - 8u] >> 4u) |
+                (((block->scales[is - 4u] >> 6u) & 3u) << 4u);
+    }
+    const uint32_t mask = 1u << (4u * n + j);
+    const int q = (int)((block->qs[32u * n + l] >> (2u * j)) & 3u) -
+                  ((block->hmask[l] & mask) ? 0 : 4);
+    return f16_to_f32(block->d) * (float)((int)scale - 32) * (float)q;
+}
+
+static float iq2_xs_value(const probe_block_iq2_xs *block, uint32_t i) {
+    const uint32_t ib = i >> 5u;
+    const uint32_t il = (i & 31u) >> 3u;
+    const uint32_t j = i & 7u;
+    const uint16_t q = block->qs[4u * ib + il];
+    const uint8_t grid = u64_byte(cuda_iq2xs_grid[q & 511u], j);
+    const uint8_t signs = cuda_ksigns_iq2xs[q >> 9u];
+    const uint32_t scale =
+        (block->scales[ib] >> (4u * (il >> 1u))) & 0x0fu;
+    const float d = f16_to_f32(block->d) * (0.5f + (float)scale) * 0.25f;
+    return d * (float)grid * ((signs & (1u << j)) ? -1.0f : 1.0f);
+}
+
+static float iq2_s_value(const probe_block_iq2_s *block, uint32_t i) {
+    const uint32_t ib = i >> 5u;
+    const uint32_t il = (i & 31u) >> 3u;
+    const uint32_t j = i & 7u;
+    const uint32_t grid_index = (uint32_t)block->qs[4u * ib + il] |
+        (((uint32_t)block->qh[ib] << (8u - 2u * il)) & 0x300u);
+    const uint8_t grid = u64_byte(cuda_iq2s_grid[grid_index], j);
+    const uint8_t signs = block->qs[32u + 4u * ib + il];
+    const uint32_t scale =
+        (block->scales[ib] >> (4u * (il >> 1u))) & 0x0fu;
+    const float d = f16_to_f32(block->d) * (0.5f + (float)scale) * 0.25f;
+    return d * (float)grid * ((signs & (1u << j)) ? -1.0f : 1.0f);
+}
+
+static float iq3_xxs_value(const probe_block_iq3_xxs *block, uint32_t i) {
+    const uint32_t ib = i >> 5u;
+    const uint32_t il = (i & 31u) >> 3u;
+    const uint32_t j = i & 7u;
+    const uint8_t *q3 = block->qs + 8u * ib;
+    const uint8_t *gas = block->qs + 64u + 4u * ib;
+    const uint32_t aux = (uint32_t)load_u16_le(gas) |
+                         ((uint32_t)load_u16_le(gas + 2u) << 16u);
+    const uint32_t code = q3[2u * il + (j >> 2u)];
+    const uint8_t grid =
+        (uint8_t)(cuda_iq3xxs_grid[code] >> (8u * (j & 3u)));
+    const uint8_t signs = cuda_ksigns_iq2xs[(aux >> (7u * il)) & 127u];
+    const float d = f16_to_f32(block->d) *
+                    (0.5f + (float)(aux >> 28u)) * 0.5f;
+    return d * (float)grid * ((signs & (1u << j)) ? -1.0f : 1.0f);
+}
+
+static float iq3_s_value(const probe_block_iq3_s *block, uint32_t i) {
+    const uint32_t ib = i >> 5u;
+    const uint32_t il = (i & 31u) >> 3u;
+    const uint32_t j = i & 7u;
+    const uint8_t *qs = block->qs + 8u * ib;
+    const uint32_t code = j < 4u ?
+        ((uint32_t)qs[2u * il] |
+         (((uint32_t)block->qh[ib] << (8u - 2u * il)) & 0x100u)) :
+        ((uint32_t)qs[2u * il + 1u] |
+         (((uint32_t)block->qh[ib] << (7u - 2u * il)) & 0x100u));
+    const uint8_t grid =
+        (uint8_t)(cuda_iq3s_grid[code] >> (8u * (j & 3u)));
+    const uint8_t signs = block->signs[4u * ib + il];
+    const uint32_t scale =
+        (block->scales[ib >> 1u] >> (4u * (ib & 1u))) & 0x0fu;
+    const float d = f16_to_f32(block->d) * (float)(1u + 2u * scale);
+    return d * (float)grid * ((signs & (1u << j)) ? -1.0f : 1.0f);
+}
+
+static float iq4_nl_value(const probe_block_iq4_nl *block, uint32_t i) {
+    const uint8_t q = block->qs[i & 15u];
+    const uint8_t code = i < 16u ? (q & 0x0fu) : (q >> 4u);
+    return f16_to_f32(block->d) * (float)cuda_kvalues_iq4nl[code];
+}
+
+static float iq4_xs_value(const probe_block_iq4_xs *block, uint32_t i) {
+    const uint32_t ib = i >> 5u;
+    const uint32_t j = i & 31u;
+    const uint8_t q = block->qs[16u * ib + (j & 15u)];
+    const uint8_t code = j < 16u ? (q & 0x0fu) : (q >> 4u);
+    const uint32_t scale =
+        ((block->scales_l[ib >> 1u] >> (4u * (ib & 1u))) & 0x0fu) |
+        (((block->scales_h >> (2u * ib)) & 3u) << 4u);
+    return f16_to_f32(block->d) * (float)((int)scale - 32) *
+           (float)cuda_kvalues_iq4nl[code];
 }
 
 static float pattern(uint32_t index, uint32_t salt, float scale) {
@@ -996,6 +1175,317 @@ static int run_q5_k_warp8_probe(void) {
     return failed;
 }
 
+static uint32_t ud_block_size(uint32_t type) {
+    switch (type) {
+    case 11u: return sizeof(probe_block_q3_k);
+    case 17u: return sizeof(probe_block_iq2_xs);
+    case 18u: return sizeof(probe_block_iq3_xxs);
+    case 20u: return sizeof(probe_block_iq4_nl);
+    case 21u: return sizeof(probe_block_iq3_s);
+    case 22u: return sizeof(probe_block_iq2_s);
+    case 23u: return sizeof(probe_block_iq4_xs);
+    default: return 0u;
+    }
+}
+
+static uint32_t ud_quant_size(uint32_t type) {
+    return type == 20u ? 32u : 256u;
+}
+
+static const char *ud_type_name(uint32_t type) {
+    switch (type) {
+    case 11u: return "q3_k";
+    case 17u: return "iq2_xs";
+    case 18u: return "iq3_xxs";
+    case 20u: return "iq4_nl";
+    case 21u: return "iq3_s";
+    case 22u: return "iq2_s";
+    case 23u: return "iq4_xs";
+    default: return "unknown";
+    }
+}
+
+static float ud_value(uint32_t type, const uint8_t *row, uint32_t i) {
+    const uint32_t qk = ud_quant_size(type);
+    const uint32_t block_size = ud_block_size(type);
+    const uint8_t *block = row + (i / qk) * block_size;
+    const uint32_t qi = i % qk;
+    switch (type) {
+    case 11u: return q3_k_value((const probe_block_q3_k *)block, qi);
+    case 17u: return iq2_xs_value((const probe_block_iq2_xs *)block, qi);
+    case 18u: return iq3_xxs_value((const probe_block_iq3_xxs *)block, qi);
+    case 20u: return iq4_nl_value((const probe_block_iq4_nl *)block, qi);
+    case 21u: return iq3_s_value((const probe_block_iq3_s *)block, qi);
+    case 22u: return iq2_s_value((const probe_block_iq2_s *)block, qi);
+    case 23u: return iq4_xs_value((const probe_block_iq4_xs *)block, qi);
+    default: return 0.0f;
+    }
+}
+
+static void ud_fill_weights(uint32_t type, uint8_t *weights,
+                            uint32_t rows, uint32_t inputs) {
+    const uint32_t qk = ud_quant_size(type);
+    const uint32_t block_size = ud_block_size(type);
+    const uint32_t blocks_per_row = inputs / qk;
+    const uint32_t row_bytes = blocks_per_row * block_size;
+    for (uint32_t row = 0; row < rows; row++) {
+        for (uint32_t i = 0; i < row_bytes; i++) {
+            weights[(size_t)row * row_bytes + i] =
+                (uint8_t)(37u * i + 53u * row + 19u * type + 11u);
+        }
+        for (uint32_t block = 0; block < blocks_per_row; block++) {
+            uint8_t *ptr = weights + (size_t)row * row_bytes +
+                           (size_t)block * block_size;
+            /* Small, exactly representable positive per-block scales keep the
+             * oracle sensitive without overflowing adversarial byte patterns. */
+            const uint16_t d = (uint16_t)(0x1800u +
+                ((row + 3u * block + type) & 3u) * 0x0100u);
+            switch (type) {
+            case 11u: ((probe_block_q3_k *)ptr)->d = d; break;
+            case 17u: ((probe_block_iq2_xs *)ptr)->d = d; break;
+            case 18u: ((probe_block_iq3_xxs *)ptr)->d = d; break;
+            case 20u: ((probe_block_iq4_nl *)ptr)->d = d; break;
+            case 21u: ((probe_block_iq3_s *)ptr)->d = d; break;
+            case 22u: ((probe_block_iq2_s *)ptr)->d = d; break;
+            case 23u: ((probe_block_iq4_xs *)ptr)->d = d; break;
+            default: break;
+            }
+        }
+    }
+}
+
+static float tree_dot_256(uint32_t type, const uint8_t *row,
+                          const float *input) {
+    float work[256];
+    for (uint32_t i = 0; i < 256u; i++)
+        work[i] = ud_value(type, row, i) * input[i];
+    for (uint32_t stride = 128u; stride; stride >>= 1u)
+        for (uint32_t i = 0; i < stride; i++)
+            work[i] += work[i + stride];
+    return work[0];
+}
+
+static int run_ud_format_probe(uint32_t type) {
+    enum { INPUTS = 256, ROWS = 7, TOKENS = 8 };
+    const uint32_t row_bytes =
+        (INPUTS / ud_quant_size(type)) * ud_block_size(type);
+    const size_t weight_bytes = (size_t)ROWS * row_bytes;
+    uint8_t *weights = malloc(weight_bytes);
+    float *input = malloc((size_t)TOKENS * INPUTS * sizeof(float));
+    float *input_q8 = malloc((size_t)TOKENS * INPUTS * sizeof(float));
+    float *input_r8 = malloc((size_t)TOKENS * INPUTS * sizeof(float));
+    float *oracle = calloc((size_t)TOKENS * ROWS, sizeof(float));
+    float *oracle_q8 = calloc(ROWS, sizeof(float));
+    float *oracle_r8 = calloc(ROWS, sizeof(float));
+    float *oracle_r8_rows = calloc(
+        (size_t)TOKENS * ROWS, sizeof(float));
+    float *decode = calloc(ROWS, sizeof(float));
+    float *decode_q8 = calloc(ROWS, sizeof(float));
+    float *decode_r8 = calloc(ROWS, sizeof(float));
+    float *verify2_r8 = calloc(2u * ROWS, sizeof(float));
+    float *verify3_r8 = calloc(3u * ROWS, sizeof(float));
+    float *prefill = calloc((size_t)TOKENS * ROWS, sizeof(float));
+    float *prefill_f16 = calloc((size_t)TOKENS * ROWS, sizeof(float));
+    int failed = !weights || !input || !input_q8 || !input_r8 || !oracle ||
+                 !oracle_q8 || !oracle_r8 || !oracle_r8_rows || !decode ||
+                 !decode_q8 || !decode_r8 || !verify2_r8 || !verify3_r8 ||
+                 !prefill || !prefill_f16;
+    if (failed) goto cleanup;
+
+    ud_fill_weights(type, weights, ROWS, INPUTS);
+    for (uint32_t tok = 0; tok < TOKENS; tok++) {
+        for (uint32_t i = 0; i < INPUTS; i++) {
+            input[(size_t)tok * INPUTS + i] =
+                pattern(i + 257u * tok, 1709u + 13u * type, 0.0006f);
+        }
+        quantize_dequantize_q8_1(
+            input + (size_t)tok * INPUTS,
+            input_q8 + (size_t)tok * INPUTS, INPUTS);
+        quantize_dequantize_q8_1_r8(
+            input + (size_t)tok * INPUTS,
+            input_r8 + (size_t)tok * INPUTS, INPUTS);
+        for (uint32_t row = 0; row < ROWS; row++) {
+            oracle[(size_t)tok * ROWS + row] = tree_dot_256(
+                type, weights + (size_t)row * row_bytes,
+                input + (size_t)tok * INPUTS);
+            oracle_r8_rows[(size_t)tok * ROWS + row] = tree_dot_256(
+                type, weights + (size_t)row * row_bytes,
+                input_r8 + (size_t)tok * INPUTS);
+        }
+    }
+    for (uint32_t row = 0; row < ROWS; row++) {
+        oracle_q8[row] = tree_dot_256(
+            type, weights + (size_t)row * row_bytes, input_q8);
+        oracle_r8[row] = tree_dot_256(
+            type, weights + (size_t)row * row_bytes, input_r8);
+    }
+
+    ds4_gpu_tensor *x = ds4_gpu_tensor_alloc(
+        (size_t)TOKENS * INPUTS * sizeof(float));
+    ds4_gpu_tensor *out = ds4_gpu_tensor_alloc(
+        (size_t)TOKENS * ROWS * sizeof(float));
+    failed = !x || !out;
+    if (!failed) {
+        failed |= !ds4_gpu_set_model_map(weights, weight_bytes);
+        failed |= !ds4_gpu_tensor_write(
+            x, 0, input, (size_t)TOKENS * INPUTS * sizeof(float));
+        setenv("DS4_CUDA_QWEN38_NO_DECODE_Q8_1_R8", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(
+            out, weights, weight_bytes, 0, type, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(out, 0, decode, ROWS * sizeof(float));
+
+        setenv("DS4_CUDA_QWEN38_DECODE_Q8_1", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(
+            out, weights, weight_bytes, 0, type, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(
+            out, 0, decode_q8, ROWS * sizeof(float));
+        unsetenv("DS4_CUDA_QWEN38_DECODE_Q8_1");
+
+        unsetenv("DS4_CUDA_QWEN38_NO_DECODE_Q8_1_R8");
+        setenv("DS4_CUDA_QWEN38_DECODE_Q8_1_R8", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(
+            out, weights, weight_bytes, 0, type, INPUTS, ROWS, x, 1u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(
+            out, 0, decode_r8, ROWS * sizeof(float));
+
+        failed |= !ds4_gpu_matmul_quant_tensor(
+            out, weights, weight_bytes, 0, type, INPUTS, ROWS, x, 2u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(
+            out, 0, verify2_r8, 2u * ROWS * sizeof(float));
+        failed |= !ds4_gpu_matmul_quant_tensor(
+            out, weights, weight_bytes, 0, type, INPUTS, ROWS, x, 3u);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(
+            out, 0, verify3_r8, 3u * ROWS * sizeof(float));
+        unsetenv("DS4_CUDA_QWEN38_DECODE_Q8_1_R8");
+
+        setenv("DS4_CUDA_QWEN_PREFILL_PEDANTIC", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(
+            out, weights, weight_bytes, 0, type, INPUTS, ROWS, x, TOKENS);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(
+            out, 0, prefill, (size_t)TOKENS * ROWS * sizeof(float));
+        unsetenv("DS4_CUDA_QWEN_PREFILL_PEDANTIC");
+
+        setenv("DS4_CUDA_QWEN38_PREFILL_F16", "1", 1);
+        failed |= !ds4_gpu_matmul_quant_tensor(
+            out, weights, weight_bytes, 0, type, INPUTS, ROWS, x, TOKENS);
+        failed |= !ds4_gpu_synchronize();
+        failed |= !ds4_gpu_tensor_read(
+            out, 0, prefill_f16,
+            (size_t)TOKENS * ROWS * sizeof(float));
+        unsetenv("DS4_CUDA_QWEN38_PREFILL_F16");
+    }
+    if (!failed) {
+        const probe_metrics decode_metric = measure(decode, oracle, ROWS);
+        const probe_metrics q8_metric = measure(decode_q8, oracle_q8, ROWS);
+        const probe_metrics r8_metric = measure(decode_r8, oracle_r8, ROWS);
+        const probe_metrics verify2_metric =
+            measure(verify2_r8, oracle_r8_rows, 2u * ROWS);
+        const probe_metrics verify3_metric =
+            measure(verify3_r8, oracle_r8_rows, 3u * ROWS);
+        const probe_metrics prefill_metric =
+            measure(prefill, oracle, (size_t)TOKENS * ROWS);
+        const probe_metrics prefill_f16_metric =
+            measure(prefill_f16, oracle, (size_t)TOKENS * ROWS);
+        const char *decode_kind = classify(decode_metric, 2e-5, 3e-5);
+        const char *q8_kind = classify(q8_metric, 3e-5, 4e-5);
+        const char *r8_kind = classify(r8_metric, 5e-5, 5e-5);
+        const char *verify2_kind = classify(verify2_metric, 5e-5, 5e-5);
+        const char *verify3_kind = classify(verify3_metric, 5e-5, 5e-5);
+        const char *prefill_kind = classify(prefill_metric, 3e-5, 4e-5);
+        const char *prefill_f16_kind =
+            classify(prefill_f16_metric, 3e-3, 4e-3);
+        printf("{\"probe\":\"qwen38_ud_matmul\",\"format\":\"%s\","
+               "\"comparison\":\"decode_vs_scalar_codebook_oracle\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ud_type_name(type), ROWS, decode_metric.max_abs,
+               decode_metric.cosine, decode_kind);
+        printf("{\"probe\":\"qwen38_ud_matmul\",\"format\":\"%s\","
+               "\"comparison\":\"q8_1_mmvq_vs_q8_1_policy\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ud_type_name(type), ROWS, q8_metric.max_abs,
+               q8_metric.cosine, q8_kind);
+        printf("{\"probe\":\"qwen38_ud_matmul\",\"format\":\"%s\","
+               "\"comparison\":\"q8_1_r8_mmvq_vs_r8_policy\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ud_type_name(type), ROWS, r8_metric.max_abs,
+               r8_metric.cosine, r8_kind);
+        printf("{\"probe\":\"qwen38_ud_matmul\",\"format\":\"%s\","
+               "\"comparison\":\"verify2_q8_1_r8_vs_r8_policy\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ud_type_name(type), 2u * ROWS, verify2_metric.max_abs,
+               verify2_metric.cosine, verify2_kind);
+        printf("{\"probe\":\"qwen38_ud_matmul\",\"format\":\"%s\","
+               "\"comparison\":\"verify3_q8_1_r8_vs_r8_policy\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ud_type_name(type), 3u * ROWS, verify3_metric.max_abs,
+               verify3_metric.cosine, verify3_kind);
+        printf("{\"probe\":\"qwen38_ud_matmul\",\"format\":\"%s\","
+               "\"comparison\":\"prefill_dequant_gemm_vs_scalar_codebook_oracle\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ud_type_name(type), TOKENS * ROWS, prefill_metric.max_abs,
+               prefill_metric.cosine, prefill_kind);
+        printf("{\"probe\":\"qwen38_ud_matmul\",\"format\":\"%s\","
+               "\"comparison\":\"prefill_f16_gemm_vs_scalar_codebook_oracle\","
+               "\"values\":%u,\"max_abs\":%.9g,\"cosine\":%.12g,"
+               "\"classification\":\"%s\"}\n",
+               ud_type_name(type), TOKENS * ROWS, prefill_f16_metric.max_abs,
+               prefill_f16_metric.cosine, prefill_f16_kind);
+        failed |= strcmp(decode_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(q8_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(r8_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(verify2_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(verify3_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(prefill_kind, "outside_roundoff_envelope") == 0;
+        failed |= strcmp(prefill_f16_kind,
+                         "outside_roundoff_envelope") == 0;
+    }
+    if (out) ds4_gpu_tensor_free(out);
+    if (x) ds4_gpu_tensor_free(x);
+
+cleanup:
+    unsetenv("DS4_CUDA_QWEN_PREFILL_PEDANTIC");
+    unsetenv("DS4_CUDA_QWEN38_DECODE_Q8_1");
+    unsetenv("DS4_CUDA_QWEN38_DECODE_Q8_1_R8");
+    unsetenv("DS4_CUDA_QWEN38_NO_DECODE_Q8_1_R8");
+    unsetenv("DS4_CUDA_QWEN38_PREFILL_F16");
+    free(prefill_f16);
+    free(prefill);
+    free(verify3_r8);
+    free(verify2_r8);
+    free(decode_r8);
+    free(decode_q8);
+    free(decode);
+    free(oracle_r8);
+    free(oracle_r8_rows);
+    free(oracle_q8);
+    free(oracle);
+    free(input_r8);
+    free(input_q8);
+    free(input);
+    free(weights);
+    return failed;
+}
+
+static int run_qwen38_ud_probes(void) {
+    static const uint32_t types[] = {11u, 17u, 18u, 20u, 21u, 22u, 23u};
+    int failed = 0;
+    for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
+        failed |= run_ud_format_probe(types[i]);
+    return failed;
+}
+
 int main(void) {
     if (!ds4_gpu_init()) return 2;
     int failed = run_gdn_probe();
@@ -1003,6 +1493,7 @@ int main(void) {
     failed |= run_q4_k_probe();
     failed |= run_q5_k_warp8_probe();
     failed |= run_q6_k_warp8_probe();
+    failed |= run_qwen38_ud_probes();
     ds4_gpu_cleanup();
     printf("{\"probe\":\"summary\",\"status\":\"%s\"}\n",
            failed ? "FAIL" : "PASS");

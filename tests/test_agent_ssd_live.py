@@ -94,11 +94,11 @@ def run_scenario(log_path: Path, name: str, action) -> tuple[str, str]:
     return response, segment
 
 
-def seed_short_agent_anchor(base_url: str, log_path: Path) -> None:
+def seed_short_agent_anchor(base_url: str, log_path: Path, model_id: str) -> None:
     """Create the one-token system anchor that previously masked long prompts."""
     payload = json.dumps(
         {
-            "model": "Qwen3.6-27B-Q4_K_S.gguf",
+            "model": model_id,
             "messages": [{"role": "user", "content": "Reply SEED_OK."}],
             "max_tokens": 16,
             "temperature": 0.0,
@@ -182,13 +182,14 @@ def assert_short_return(segment: str, marker: str, name: str) -> None:
 def run_system_cases(
     client: Client,
     base_url: str,
+    model_id: str,
     workroot: Path,
     log_path: Path,
     phase: str,
     warm_cache: str,
 ) -> list[dict[str, str]]:
     if phase == "cold":
-        seed_short_agent_anchor(base_url, log_path)
+        seed_short_agent_anchor(base_url, log_path, model_id)
     agent = make_agent(client=client, workroot=workroot)
     response, segment = run_scenario(
         log_path,
@@ -222,8 +223,11 @@ def run_hds_cases(
                 "Delegate once to the direct child HDS agent-wiki. Tell the child "
                 "this is a read-only checkpoint test: it must immediately use its "
                 "configured exit procedure and return HDS_CHILD_DONE without using "
-                "file tools. After the child returns, use the root exit procedure "
-                f"and return exactly {HDS_RESPONSE}."
+                "file tools. HDS_CHILD_DONE is only an intermediate child result and "
+                "must never be used or paraphrased as the root's final response. "
+                "After the child returns, the root must use its own configured exit "
+                f"procedure and return exactly {HDS_RESPONSE}; do not summarize the "
+                "checkpoint or return any other text."
             )
         ).response,
     )
@@ -266,6 +270,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("cold", "warm"), required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:18082/v1")
+    parser.add_argument("--model-id", default="Qwen3.6-27B-Q4_K_S.gguf")
     parser.add_argument("--server-log", type=Path, required=True)
     parser.add_argument("--workroot", type=Path, required=True)
     parser.add_argument(
@@ -285,7 +290,7 @@ def main() -> None:
         raise ValueError(f"unexpected skill canary contents: {canary}")
 
     client = Client.agentic_openai(
-        model="Qwen3.6-27B-Q4_K_S.gguf",
+        model=args.model_id,
         api_key="ds4-live-test",
         base_url=args.base_url,
         timeout=900.0,
@@ -296,6 +301,7 @@ def main() -> None:
         report["system"] = run_system_cases(
             client,
             args.base_url,
+            args.model_id,
             workroot,
             args.server_log,
             args.phase,

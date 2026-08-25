@@ -16,3 +16,7 @@ quality-testing/data/*
 !quality-testing/data/qwen36-27b-mtp/**
 !quality-testing/data/qwen36-metadata/
 !quality-testing/data/qwen36-metadata/**
+!quality-testing/data/qwen38-27b/
+!quality-testing/data/qwen38-27b/**
+!quality-testing/data/qwen38-metadata/
+!quality-testing/data/qwen38-metadata/**
