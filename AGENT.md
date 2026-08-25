@@ -8,9 +8,10 @@ source and the reason an existing solution does or does not transfer to DS4. Kee
 `PROJECT_INDEX.md` updated when a relevant file is added, removed, renamed, or
 changes responsibility.
 
-`ds4.c` is a DeepSeek V4 Flash specific inference engine. It is not a generic
-GGUF runner. The goal is a small, readable, high-performance C codebase with
-Objective-C only where Metal requires it and Metal kernels under `metal/`.
+`ds4.c` is a specialized inference engine for the explicitly audited DeepSeek
+V4, GLM 5.2, and Qwen3.6/Qwen3.8 layouts. It is not a generic GGUF runner. The
+goal is a small, readable, high-performance C codebase with Objective-C only
+where Metal requires it and Metal kernels under `metal/`.
 
 ## Goals
 
@@ -38,8 +39,11 @@ Objective-C only where Metal requires it and Metal kernels under `metal/`.
 
 ## Layout
 
-- `ds4.c`: model loading, tokenizer, CPU reference code, Metal graph scheduling,
-  sessions, disk-cache payload serialization.
+- `ds4.c`: model catalog/validation, loading, tokenizers, CPU reference code,
+  model-specific graph scheduling, sessions, and disk-cache payload
+  serialization.
+- `ds4_qwen.h`: shared Qwen execution-stage vocabulary for graph scheduling
+  and accelerator backends.
 - `ds4_cli.c`: command line, linenoise REPL, interactive transcript handling.
 - `ds4_server.c`: OpenAI/Anthropic compatible HTTP API, worker queue, streaming,
   tool-call mapping, disk KV cache policy.

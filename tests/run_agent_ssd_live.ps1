@@ -21,7 +21,7 @@ $WslRepo = (wsl.exe -e wslpath -a $Repo).Trim()
 $WslCache = (wsl.exe -e wslpath -a $Cache).Trim()
 $WslPid = (wsl.exe -e wslpath -a $PidFile).Trim()
 $MtpArgs = ""
-$ModelId = [System.IO.Path]::GetFileName($Model)
+$ModelId = [System.IO.Path]::GetFileNameWithoutExtension($Model)
 if ($MtpModel) {
     $MtpPath = if ([System.IO.Path]::IsPathRooted($MtpModel)) {
         $MtpModel

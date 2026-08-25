@@ -2410,8 +2410,17 @@ static bool model_alias_enables_thinking(const char *model) {
 }
 
 static server_model_syntax server_model_syntax_for_engine(ds4_engine *engine) {
-    if (ds4_engine_is_glm_dsa(engine)) return SERVER_MODEL_SYNTAX_GLM;
-    if (ds4_engine_is_qwen(engine)) return SERVER_MODEL_SYNTAX_QWEN;
+    const ds4_model_descriptor *model =
+        ds4_engine_model_descriptor(engine);
+    if (!model) return SERVER_MODEL_SYNTAX_DEEPSEEK;
+    switch (model->family) {
+    case DS4_MODEL_FAMILY_GLM_DSA:
+        return SERVER_MODEL_SYNTAX_GLM;
+    case DS4_MODEL_FAMILY_QWEN35:
+        return SERVER_MODEL_SYNTAX_QWEN;
+    case DS4_MODEL_FAMILY_DEEPSEEK4:
+        return SERVER_MODEL_SYNTAX_DEEPSEEK;
+    }
     return SERVER_MODEL_SYNTAX_DEEPSEEK;
 }
 
@@ -2422,18 +2431,14 @@ static const char *server_model_syntax_name(server_model_syntax syntax) {
 }
 
 static bool server_qwen_model_id_known(const char *id) {
-    return id &&
-           (!strcmp(id, "Qwen3.6-27B-Q4_K_S.gguf") ||
-            !strcmp(id, "Qwen3.6-27B-Q4_K_M.gguf") ||
-            !strcmp(id, "Qwen3.8-27B-UD-Q4_K_S.gguf"));
+    const ds4_model_descriptor *model = ds4_model_descriptor_for_id(id);
+    return model && model->family == DS4_MODEL_FAMILY_QWEN35;
 }
 
 static const char *server_model_id_from_engine(ds4_engine *engine) {
-    if (ds4_engine_is_glm_dsa(engine)) return "glm-5.2";
-    const char *name = ds4_engine_model_name(engine);
-    if (server_qwen_model_id_known(name)) return name;
-    return ds4_engine_model_id(engine) == 1 ?
-           "deepseek-v4-pro" : "deepseek-v4-flash";
+    const ds4_model_descriptor *model =
+        ds4_engine_model_descriptor(engine);
+    return model ? model->canonical_id : "deepseek-v4-flash";
 }
 
 static bool server_model_alias_known(const char *id) {
@@ -18373,16 +18378,25 @@ static void append_model_json_values(buf *b, const char *id, const char *name,
 }
 
 static void append_model_json(buf *b, const server *s, const char *id) {
+    const ds4_model_descriptor *model =
+        ds4_engine_model_descriptor(s->engine);
+    const char *name = model && model->family == DS4_MODEL_FAMILY_QWEN35 ?
+        model->canonical_id : ds4_engine_model_name(s->engine);
     append_model_json_values(b,
                              id,
-                             ds4_engine_model_name(s->engine),
+                             name,
                              s->ctx_size,
                              s->default_tokens);
 }
 
 static bool send_model(server *s, int fd, const char *id) {
+    const ds4_model_descriptor *requested =
+        ds4_model_descriptor_for_id(id);
+    const char *response_id = requested &&
+        requested->family == DS4_MODEL_FAMILY_QWEN35 ?
+        requested->canonical_id : id;
     buf b = {0};
-    append_model_json(&b, s, id);
+    append_model_json(&b, s, response_id);
     buf_putc(&b, '\n');
     bool ok = http_response(fd, s->enable_cors, 200, "application/json", b.ptr);
     buf_free(&b);
@@ -18393,9 +18407,11 @@ static bool send_models(server *s, int fd) {
     buf b = {0};
     buf_puts(&b, "{\"object\":\"list\",\"data\":[");
     const char *loaded_id = server_model_id_from_engine(s->engine);
-    if (server_qwen_model_id_known(loaded_id)) {
+    const ds4_model_descriptor *model =
+        ds4_engine_model_descriptor(s->engine);
+    if (model && model->family == DS4_MODEL_FAMILY_QWEN35) {
         append_model_json(&b, s, loaded_id);
-    } else if (ds4_engine_is_glm_dsa(s->engine)) {
+    } else if (model && model->family == DS4_MODEL_FAMILY_GLM_DSA) {
         append_model_json(&b, s, "glm-5.2");
         buf_putc(&b, ',');
         append_model_json(&b, s, "glm-5.2-chat");
@@ -18724,9 +18740,10 @@ static ds4_backend default_server_backend(void) {
 static char *default_qwen_session_cache_dir(ds4_engine *engine) {
     const char *home = getenv("HOME");
     if (!home || !home[0]) home = ".";
-    const char *suffix = ds4_engine_is_qwen38_ud_q4_k_s(engine) ?
-        ".ds4/qwen38-ud-q4ks-kv" : ".ds4/qwen36-q4ks-kv";
-    return ds4_kvstore_path_join(home, suffix);
+    const ds4_model_descriptor *model =
+        ds4_engine_model_descriptor(engine);
+    return model && model->managed_cache_subdir ?
+        ds4_kvstore_path_join(home, model->managed_cache_subdir) : NULL;
 }
 
 static server_config parse_options(int argc, char **argv) {
@@ -19013,7 +19030,10 @@ int main(int argc, char **argv) {
                ds4_engine_model_name(engine));
 
     char *automatic_kv_dir = NULL;
-    const bool qwen_session_cache = ds4_engine_is_qwen_q4_k_s(engine);
+    const ds4_model_descriptor *loaded_model =
+        ds4_engine_model_descriptor(engine);
+    const bool qwen_session_cache = loaded_model &&
+        loaded_model->managed_cache_subdir != NULL;
     if (qwen_session_cache) {
         if (!cfg.kv_cache_min_tokens_set)
             cfg.kv_cache.min_tokens = 1;
@@ -20623,6 +20643,12 @@ static void test_reasoning_effort_mapping(void) {
 }
 
 static void test_model_alias_thinking_controls(void) {
+    const ds4_model_descriptor *qwen36 =
+        ds4_model_descriptor_for_id("Qwen3.6-27B-Q4_K_S");
+    const ds4_model_descriptor *qwen36_legacy =
+        ds4_model_descriptor_for_id("Qwen3.6-27B-Q4_K_S.gguf");
+    const ds4_model_descriptor *qwen38 =
+        ds4_model_descriptor_for_id("Qwen3.8-27B-UD-Q4_K_S");
     TEST_ASSERT(model_alias_disables_thinking("deepseek-chat"));
     TEST_ASSERT(model_alias_disables_thinking("glm-5.2-chat"));
     TEST_ASSERT(model_alias_disables_thinking("glm-5.2-no-think"));
@@ -20633,10 +20659,28 @@ static void test_model_alias_thinking_controls(void) {
     TEST_ASSERT(model_alias_enables_thinking("zai/glm-5.2-reasoner"));
     TEST_ASSERT(server_model_alias_known("glm-5.2-chat"));
     TEST_ASSERT(server_model_alias_known("glm-5.2-reasoner"));
+    TEST_ASSERT(server_model_alias_known("Qwen3.6-27B-Q4_K_S"));
+    TEST_ASSERT(server_model_alias_known("Qwen3.6-27B-Q4_K_M"));
+    TEST_ASSERT(server_model_alias_known("Qwen3.8-27B-UD-Q4_K_S"));
     TEST_ASSERT(server_model_alias_known("Qwen3.6-27B-Q4_K_S.gguf"));
     TEST_ASSERT(server_model_alias_known("Qwen3.6-27B-Q4_K_M.gguf"));
     TEST_ASSERT(server_model_alias_known("Qwen3.8-27B-UD-Q4_K_S.gguf"));
     TEST_ASSERT(!server_model_alias_known("Qwen3.6-27B-Q4_K_X.gguf"));
+    TEST_ASSERT(qwen36 && qwen36->family == DS4_MODEL_FAMILY_QWEN35);
+    TEST_ASSERT(qwen36 == qwen36_legacy);
+    TEST_ASSERT(qwen36 &&
+                !strcmp(qwen36->canonical_id, "Qwen3.6-27B-Q4_K_S"));
+    TEST_ASSERT(qwen36 && qwen36->default_mtp_path &&
+                !strcmp(qwen36->default_mtp_path,
+                        DS4_QWEN36_DEFAULT_MTP_PATH));
+    TEST_ASSERT(qwen36 && qwen36->managed_cache_subdir &&
+                !strcmp(qwen36->managed_cache_subdir,
+                        ".ds4/qwen36-q4ks-kv"));
+    TEST_ASSERT(qwen38 && qwen38->kind ==
+                DS4_MODEL_QWEN38_27B_UD_Q4_K_S);
+    TEST_ASSERT(qwen38 && qwen38->managed_cache_subdir &&
+                !strcmp(qwen38->managed_cache_subdir,
+                        ".ds4/qwen38-ud-q4ks-kv"));
 }
 
 static void test_api_thinking_controls_parse(void) {
@@ -22717,24 +22761,24 @@ static void test_model_metadata_clamps_completion_to_context(void) {
     buf_free(&b);
 
     append_model_json_values(&b,
-                             "Qwen3.6-27B-Q4_K_S.gguf",
-                             "Qwen3.6-27B-Q4_K_S.gguf",
+                             "Qwen3.6-27B-Q4_K_S",
+                             "Qwen3.6-27B-Q4_K_S",
                              32768, 393216);
     TEST_ASSERT(strstr(b.ptr,
-                       "\"id\":\"Qwen3.6-27B-Q4_K_S.gguf\"") != NULL);
+                       "\"id\":\"Qwen3.6-27B-Q4_K_S\"") != NULL);
     TEST_ASSERT(strstr(b.ptr,
-                       "\"name\":\"Qwen3.6-27B-Q4_K_S.gguf\"") != NULL);
+                       "\"name\":\"Qwen3.6-27B-Q4_K_S\"") != NULL);
     TEST_ASSERT(strstr(b.ptr, "\"max_completion_tokens\":32768") != NULL);
     buf_free(&b);
 
     append_model_json_values(&b,
-                             "Qwen3.8-27B-UD-Q4_K_S.gguf",
-                             "Qwen3.8-27B-UD-Q4_K_S.gguf",
+                             "Qwen3.8-27B-UD-Q4_K_S",
+                             "Qwen3.8-27B-UD-Q4_K_S",
                              65536, 262144);
     TEST_ASSERT(strstr(b.ptr,
-                       "\"id\":\"Qwen3.8-27B-UD-Q4_K_S.gguf\"") != NULL);
+                       "\"id\":\"Qwen3.8-27B-UD-Q4_K_S\"") != NULL);
     TEST_ASSERT(strstr(b.ptr,
-                       "\"name\":\"Qwen3.8-27B-UD-Q4_K_S.gguf\"") != NULL);
+                       "\"name\":\"Qwen3.8-27B-UD-Q4_K_S\"") != NULL);
     TEST_ASSERT(strstr(b.ptr, "\"max_completion_tokens\":65536") != NULL);
     buf_free(&b);
 }

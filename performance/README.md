@@ -164,14 +164,19 @@ verifica che ogni richiesta abbia esattamente il contesto richiesto, richiede
 almeno 32 token generati e usa l'`avg t/s` di decode emesso dal server, non il
 tempo HTTP comprensivo del prefill. Le due risposte per frontiera devono inoltre
 avere lo stesso hash; un candidato confrontato a un baseline deve conservare
-anche gli hash del baseline.
+anche gli hash del baseline. L'harness legge l'ID canonico del modello da
+`/v1/models` e lo usa nelle richieste; il default no-thinking e' esplicito e non
+viene piu' ottenuto passando l'alias estraneo `deepseek-chat` a un server Qwen.
+Ogni server di benchmark usa inoltre una home temporanea isolata, quindi non
+puo' riutilizzare checkpoint KV lasciati da esperimenti precedenti.
 
 La lunghezza effettiva del prompt e la capacita' KV allocata sono variabili
 distinte. `--context-alloc N` forza la seconda senza falsificare la prima e
 rifiuta valori insufficienti per il workload. Il canary
 `--prompt-pattern technical-explanation --no-thinking` evita risposte EOS di
 uno o due token osservate con alcuni template Qwen. Il gate model-backed che
-riproduce un prompt corto MTP con allocazione 28.768 e' `make
+riproduce un prompt corto MTP con l'allocazione sicura per prompt fino a 22K
+(22.593 token, inclusa la generazione) e' `make
 test-qwen38-perf`; la suite isolata usata internamente e'
 `mtp-short-regression`.
 
@@ -188,10 +193,10 @@ allocazione:
     python3 tools/perf_harness.py server-curve \
       --id qwen38-mtp-short-largealloc \
       --model gguf/Qwen3.8-27B-UD-Q4_K_S.gguf \
-      --suite mtp-short-regression --mtp --context-alloc 28768 \
+      --suite mtp-short-regression --mtp --context-alloc 22593 \
       --no-thinking --prompt-pattern technical-explanation \
       --repetitions 2 --minimum-completion-tokens 32 \
-      --hypothesis "Qwen3.8 short MTP stays above 20 tok/s at ctx 28768" \
+      --hypothesis "Qwen3.8 short MTP stays above 20 tok/s at safe 22K allocation" \
       --baseline-run
 
 ## Ciclo di sviluppo rapido
@@ -521,13 +526,14 @@ hardware, modelli, file sorgente, 128 token greedy e depth 2 misura 40.9 ->
 Il valore assoluto e' direzionale, perche' il frontend llama.cpp applica la
 propria conversazione mentre il gate DS4 sopra usa `--raw-prompt`.
 
-La curva MTP server usa capacità 28.737 e non supera 30K. Copre il bucket di
-prompt minimo e poi 2K–28K a passo 2K:
+La curva MTP server usa capacità 22.593, lasciando margine alla sidecar e alle
+cache CUDA su una RTX 3090 da 24 GiB. Copre il bucket di prompt minimo e poi
+2K–22K a passo 2K:
 
     python3 tools/perf_harness.py server-curve \
       --id mtp-curve --suite mtp-context-curve \
       --model gguf/Qwen3.6-27B-Q4_K_S.gguf --mtp \
-      --repetitions 2 --hypothesis "MTP stays faster through 28K" \
+      --repetitions 2 --hypothesis "MTP stays faster through 22K" \
       --baseline performance-results/target-curve/experiment.json
 
 La ricerca `mtp-threshold-search` confronta seriale e split-K a
@@ -538,9 +544,11 @@ RTX 3090 del 2026-08-13 ha trovato pareggio MTP a 64 e vantaggio split-K a 96
 
 La profondità MTP è adattiva: V(3) sotto 2K, V(2) da 2K. Il confronto
 V(3)/V(2) usa `mtp-depth-boundary`, `mtp-depth-crossover` e
-`mtp-long-context-smoke`; `mtp-weakest-confirm` ripete il punto col margine
-minore. La curva finale 0–28K migliora tutte le mediane target-only (+11,73%
-medio, +10,04% a 28K). La conferma 24K a cinque run misura 23,26 → 23,91
+`mtp-long-context-smoke`; `mtp-weakest-confirm` ripete il punto corrente col
+margine minore, 22K. La precedente campagna 0–28K migliorava tutte le mediane
+target-only (+11,73% medio, +10,04% a 28K), ma lasciava troppo poco margine
+VRAM durante prefill reale; il gate corrente si ferma quindi a 22K. La
+conferma storica a 24K, prima del nuovo margine, misurava 23,26 → 23,91
 tok/s (+2,79%, CV 0,71%/1,32%, `KEEP_CANDIDATE`). In V(2) i snapshot GDN
 per riga rendono superfluo il pre-snapshot completo; il gate model-backed
 passa reject/rollback, sampling 128/128 identico, gap argmax 0 e fallback 0.

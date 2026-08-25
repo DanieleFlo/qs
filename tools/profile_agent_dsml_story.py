@@ -109,7 +109,7 @@ def main() -> int:
     parser.add_argument("--server-log", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workroot", type=Path, required=True)
-    parser.add_argument("--model", default="Qwen3.6-27B-Q4_K_S.gguf")
+    parser.add_argument("--model", default="Qwen3.6-27B-Q4_K_S")
     parser.add_argument(
         "--experiment-id",
         default="constraint-m5-agent-dsml-story-300-current-001",

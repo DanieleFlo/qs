@@ -24,6 +24,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ds4_qwen.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

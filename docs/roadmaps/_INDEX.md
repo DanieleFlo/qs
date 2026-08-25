@@ -2,6 +2,21 @@
 
 Indice generato; non modificare a mano.
 
+## [Constrained JSON e DSML: piano di completamento](constrained-json-decoding-plan.md)
+
+**Completato quando:** un singolo token puo attraversare apertura tool, invoke,
+
+- righe 7–18: **1. Simulatore incrementale del candidate DSML** — **Completato quando:** un singolo token puo attraversare apertura tool, invoke,
+- righe 19–28: **2. Stato incrementale senza tail arbitrario** — **Completato quando:** il filtro riparte dallo stato persistente e dal primo byte
+- righe 29–43: **3. Parser JSON incrementale e JSON Schema** — **Completato quando:** ogni chiusura di un valore JSON viene ammessa soltanto se
+- righe 44–60: **4. Tool call vincolate end-to-end** — **Completato quando:** nome tool, nomi parametri, forma JSON e schema completo
+- righe 61–75: **5. Output JSON Schema vincolati** — **Completato quando:** Chat Completions `response_format` e Responses
+- righe 76–89: **6. Robustezza, regressioni e verifica** — **Completato quando:** la suite server passa senza regressioni e i casi limite
+- righe 90–103: **7. Thinking con output e tool call strict** — **Completato quando:** il reasoning resta libero e separato fino al primo
+- righe 104–125: **8. Fast-forward deterministico dei token vincolati** — **Completato quando:** chiavi, separatori, chiusure, `const`, rami enum gia
+- righe 126–138: **Limiti intenzionali** — al primo `</think>`; subito dopo deve iniziare il documento JSON, senza whitespace
+- righe 139–145: **Ultima verifica model-backed** — Chat e Responses con thinking, tool senza argomenti e tentativi adversariali
+
 ## [TODO Roadmap — Constrained Decoding DSML/JSON ad alte prestazioni](DS4_constrained_decoding_TODO_roadmap.md)
 
 Queste regole sono vincolanti per tutti i macro-task.
@@ -159,21 +174,6 @@ Queste regole sono vincolanti per tutti i macro-task.
 - righe 1375–1390: **Risultato complessivo** — Sezione strutturale; consultare il contenuto locale indicato.
 - righe 1391–1405: **Contributo di ogni macro-task** — Sezione strutturale; consultare il contenuto locale indicato.
 - righe 1406–1413: **Conclusioni** — Sezione strutturale; consultare il contenuto locale indicato.
-
-## [Constrained JSON e DSML: piano di completamento](constrained-json-decoding-plan.md)
-
-**Completato quando:** un singolo token puo attraversare apertura tool, invoke,
-
-- righe 7–18: **1. Simulatore incrementale del candidate DSML** — **Completato quando:** un singolo token puo attraversare apertura tool, invoke,
-- righe 19–28: **2. Stato incrementale senza tail arbitrario** — **Completato quando:** il filtro riparte dallo stato persistente e dal primo byte
-- righe 29–43: **3. Parser JSON incrementale e JSON Schema** — **Completato quando:** ogni chiusura di un valore JSON viene ammessa soltanto se
-- righe 44–60: **4. Tool call vincolate end-to-end** — **Completato quando:** nome tool, nomi parametri, forma JSON e schema completo
-- righe 61–75: **5. Output JSON Schema vincolati** — **Completato quando:** Chat Completions `response_format` e Responses
-- righe 76–89: **6. Robustezza, regressioni e verifica** — **Completato quando:** la suite server passa senza regressioni e i casi limite
-- righe 90–103: **7. Thinking con output e tool call strict** — **Completato quando:** il reasoning resta libero e separato fino al primo
-- righe 104–125: **8. Fast-forward deterministico dei token vincolati** — **Completato quando:** chiavi, separatori, chiusure, `const`, rami enum gia
-- righe 126–138: **Limiti intenzionali** — al primo `</think>`; subito dopo deve iniziare il documento JSON, senza whitespace
-- righe 139–145: **Ultima verifica model-backed** — Chat e Responses con thinking, tool senza argomenti e tentativi adversariali
 
 ## [Roadmap di integrazione Qwen3.8 27B UD-Q4_K_S](qwen38-implementation-roadmap.md)
 

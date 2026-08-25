@@ -2,11 +2,11 @@
   <img src="logo.svg" alt="DwarfStar logo" width="220">
 </p>
 
-**DwarfStar** is a small native inference engine optimized first for
-**DeepSeek V4 Flash**. It also supports **GLM 5.2** and, on very high-memory
-machines, **DeepSeek V4 PRO**. It is self-contained and deliberately narrow,
-not a general GGUF runner. Model loading, prompt rendering, tool calls, KV
-state, the HTTP server, and the coding agent are built and tested together.
+**DwarfStar** is a small native inference engine for a deliberately narrow set
+of audited models: **DeepSeek V4 Flash/PRO**, **Qwen3.6/Qwen3.8 27B**, and
+**GLM 5.2**. It is self-contained, not a general GGUF runner. Model loading,
+prompt rendering, tool calls, KV state, the HTTP server, and the coding agent
+are built and tested together.
 The repository also includes tools and data for GGUF, imatrix, quality, and speed.
 
 Supported backends:
@@ -49,7 +49,7 @@ llama.cpp project and the kernels, quantization formats, GGUF ecosystem, and har
 engineering knowledge developed there**.
 We are thankful and indebted to [`llama.cpp`](https://github.com/ggml-org/llama.cpp)
 and its contributors. Their implementation, kernels, tests, and design choices were
-an essential reference while building this DeepSeek V4 specific inference path.
+an essential reference while building these model-specific inference paths.
 Some source-level pieces are retained or adapted here under the MIT license: GGUF
 quant layouts and tables, CPU quant/dot logic, and certain kernels. For this
 reason, and because we are genuinely grateful, we keep the GGML authors copyright
@@ -139,8 +139,9 @@ and is selected explicitly with `--mtp-model FILE`. The current MTP/speculative
 decoding path is still experimental: it is correctness-gated and currently
 provides at most a slight speedup, not a meaningful generation-speed win.
 
-Qwen3.6 27B supports both audited quantizations below. Use the GGUF basename as
-the model name in clients connected to `ds4-server`:
+Qwen3.6 27B supports both audited quantizations below. The CLI takes the GGUF
+path, while clients connected to `ds4-server` use the extension-free API IDs
+`Qwen3.6-27B-Q4_K_S` or `Qwen3.6-27B-Q4_K_M`:
 
 ```sh
 ./ds4 -m gguf/Qwen3.6-27B-Q4_K_S.gguf
@@ -169,11 +170,22 @@ The pinned Qwen3.8 target and matching MTP sidecar can be downloaded together:
 ```
 
 DS4 audits its 65-block target layout, embedded NextN block, tokenizer, dynamic
-quant inventory, and the mixed Q3_K/Q4_K/Q6_K MTP layout. The current CUDA
-backend deliberately stops before allocating the model because this Unsloth UD
-artifact also uses Q3_K, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, and IQ4_XS;
-dedicated CUDA matvec kernels for those formats are still required. See the
+quant inventory, and the mixed Q3_K/Q4_K/Q6_K MTP layout. The CUDA backend has
+dedicated paths for the artifact's Q3_K, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S,
+IQ4_NL, and IQ4_XS tensors, so both target-only and MTP inference run through
+the same engine/session API used by Qwen3.6. See the
 [Qwen3.8 compatibility audit](docs/architecture/qwen38-compatibility.md).
+
+### Runtime ownership
+
+The CLI and server choose user-facing policy (model, prompt, sampling and
+request lifecycle); they do not select CUDA kernels. After the GGUF is
+validated, the engine owns model identity and schedules explicit Qwen phases:
+decode, prefill, MTP verify, draft, replay and catch-up. The CUDA backend then
+selects the calibrated kernel for that phase's row shape and quantization.
+This boundary is intentional: a new Qwen generation or kernel policy should be
+added to the model catalog and engine/backend scheduler, not copied into both
+frontends.
 
 GLM 5.2 support is limited to the GGUF files tested by this branch:
 
@@ -1057,9 +1069,9 @@ Supported endpoints:
 - `GET /v1/models`
 - `GET /v1/models/deepseek-v4-flash`
 - `GET /v1/models/deepseek-v4-pro`
-- `GET /v1/models/Qwen3.6-27B-Q4_K_S.gguf`
-- `GET /v1/models/Qwen3.6-27B-Q4_K_M.gguf`
-- `GET /v1/models/Qwen3.8-27B-UD-Q4_K_S.gguf`
+- `GET /v1/models/Qwen3.6-27B-Q4_K_S`
+- `GET /v1/models/Qwen3.6-27B-Q4_K_M`
+- `GET /v1/models/Qwen3.8-27B-UD-Q4_K_S`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/completions`
@@ -1068,7 +1080,9 @@ Supported endpoints:
 The Flash and PRO model endpoints are compatibility aliases. They both report
 the model currently loaded from the GGUF passed with `-m`; the endpoint name does
 not select a different model. For Qwen, `/v1/models` reports only the loaded
-quantization and uses its exact GGUF basename as both `id` and `name`.
+quantization and uses an extension-free API ID for both `id` and `name`. The old
+IDs ending in `.gguf` remain accepted as compatibility aliases but are no longer
+advertised.
 
 `/v1/chat/completions` accepts the usual OpenAI-style `messages`,
 `max_tokens`/`max_completion_tokens`, `temperature`, `top_p`, `top_k`, `min_p`,
@@ -1194,7 +1208,7 @@ Minimal OpenAI example:
 curl http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"Qwen3.6-27B-Q4_K_S.gguf",
+    "model":"Qwen3.6-27B-Q4_K_S",
     "messages":[{"role":"user","content":"List three Redis design principles."}],
     "stream":true
   }'

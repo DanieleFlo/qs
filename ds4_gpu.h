@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "ds4_qwen.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -659,9 +661,12 @@ int ds4_gpu_qwen35_gated_delta_net_rows_tensor(
         uint64_t              norm_offset,
         uint32_t              n_tokens);
 
-/* Selects the current Qwen layer for decode policies that keep the final
- * transformer layers on the high-precision matvec. */
-void ds4_gpu_qwen35_set_decode_layer(uint32_t layer);
+/* Qwen graph phase and layer are explicit scheduler inputs. CUDA currently
+ * keeps the same calibrated row-count dispatch as before; carrying the phase
+ * prevents prefill/verifier work from being mislabeled as "decode" and gives
+ * future kernel policy one authoritative extension point. */
+void ds4_gpu_qwen_set_execution_stage(ds4_qwen_execution_stage stage,
+                                      uint32_t layer);
 
 /* Optional fused GPU operations.
  *

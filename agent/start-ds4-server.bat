@@ -16,6 +16,6 @@ if errorlevel 1 (
 echo Starting ds4-server on http://127.0.0.1:8080 ...
 echo CUDA decode baseline: MTP depth 2, Q8_1-R8, split-K32 and GQA2
 rem WSL NAT forwards this guest listener to Windows localhost.
-wsl.exe --cd "%REPO_DIR%" ./ds4-server --cuda -m gguf/Qwen3.8-27B-UD-Q4_K_S.gguf --mtp --ctx 24768 --host 0.0.0.0 --port 8080 %*
+wsl.exe --cd "%REPO_DIR%" ./ds4-server --cuda -m gguf/Qwen3.8-27B-UD-Q4_K_S.gguf --mtp --ctx 22593 --host 0.0.0.0 --port 8080 %*
 
 pause

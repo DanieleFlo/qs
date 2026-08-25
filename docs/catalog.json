@@ -2093,6 +2093,88 @@
       "index": "docs/roadmaps/_INDEX.md",
       "documents": [
         {
+          "path": "docs/roadmaps/constrained-json-decoding-plan.md",
+          "sections": [
+            {
+              "title": "Constrained JSON e DSML: piano di completamento",
+              "level": 1,
+              "start": 1,
+              "end": 145,
+              "summary": "Questo documento traccia il completamento del decoder vincolato usato dal"
+            },
+            {
+              "title": "1. Simulatore incrementale del candidate DSML",
+              "level": 2,
+              "start": 7,
+              "end": 18,
+              "summary": "**Completato quando:** un singolo token puo attraversare apertura tool, invoke,"
+            },
+            {
+              "title": "2. Stato incrementale senza tail arbitrario",
+              "level": 2,
+              "start": 19,
+              "end": 28,
+              "summary": "**Completato quando:** il filtro riparte dallo stato persistente e dal primo byte"
+            },
+            {
+              "title": "3. Parser JSON incrementale e JSON Schema",
+              "level": 2,
+              "start": 29,
+              "end": 43,
+              "summary": "**Completato quando:** ogni chiusura di un valore JSON viene ammessa soltanto se"
+            },
+            {
+              "title": "4. Tool call vincolate end-to-end",
+              "level": 2,
+              "start": 44,
+              "end": 60,
+              "summary": "**Completato quando:** nome tool, nomi parametri, forma JSON e schema completo"
+            },
+            {
+              "title": "5. Output JSON Schema vincolati",
+              "level": 2,
+              "start": 61,
+              "end": 75,
+              "summary": "**Completato quando:** Chat Completions `response_format` e Responses"
+            },
+            {
+              "title": "6. Robustezza, regressioni e verifica",
+              "level": 2,
+              "start": 76,
+              "end": 89,
+              "summary": "**Completato quando:** la suite server passa senza regressioni e i casi limite"
+            },
+            {
+              "title": "7. Thinking con output e tool call strict",
+              "level": 2,
+              "start": 90,
+              "end": 103,
+              "summary": "**Completato quando:** il reasoning resta libero e separato fino al primo"
+            },
+            {
+              "title": "8. Fast-forward deterministico dei token vincolati",
+              "level": 2,
+              "start": 104,
+              "end": 125,
+              "summary": "**Completato quando:** chiavi, separatori, chiusure, `const`, rami enum gia"
+            },
+            {
+              "title": "Limiti intenzionali",
+              "level": 2,
+              "start": 126,
+              "end": 138,
+              "summary": "al primo `</think>`; subito dopo deve iniziare il documento JSON, senza whitespace"
+            },
+            {
+              "title": "Ultima verifica model-backed",
+              "level": 2,
+              "start": 139,
+              "end": 145,
+              "summary": "Chat e Responses con thinking, tool senza argomenti e tentativi adversariali"
+            }
+          ]
+        },
+        {
           "path": "docs/roadmaps/DS4_constrained_decoding_TODO_roadmap.md",
           "sections": [
             {
@@ -3172,88 +3254,6 @@
               "start": 1406,
               "end": 1413,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
-            }
-          ]
-        },
-        {
-          "path": "docs/roadmaps/constrained-json-decoding-plan.md",
-          "sections": [
-            {
-              "title": "Constrained JSON e DSML: piano di completamento",
-              "level": 1,
-              "start": 1,
-              "end": 145,
-              "summary": "Questo documento traccia il completamento del decoder vincolato usato dal"
-            },
-            {
-              "title": "1. Simulatore incrementale del candidate DSML",
-              "level": 2,
-              "start": 7,
-              "end": 18,
-              "summary": "**Completato quando:** un singolo token puo attraversare apertura tool, invoke,"
-            },
-            {
-              "title": "2. Stato incrementale senza tail arbitrario",
-              "level": 2,
-              "start": 19,
-              "end": 28,
-              "summary": "**Completato quando:** il filtro riparte dallo stato persistente e dal primo byte"
-            },
-            {
-              "title": "3. Parser JSON incrementale e JSON Schema",
-              "level": 2,
-              "start": 29,
-              "end": 43,
-              "summary": "**Completato quando:** ogni chiusura di un valore JSON viene ammessa soltanto se"
-            },
-            {
-              "title": "4. Tool call vincolate end-to-end",
-              "level": 2,
-              "start": 44,
-              "end": 60,
-              "summary": "**Completato quando:** nome tool, nomi parametri, forma JSON e schema completo"
-            },
-            {
-              "title": "5. Output JSON Schema vincolati",
-              "level": 2,
-              "start": 61,
-              "end": 75,
-              "summary": "**Completato quando:** Chat Completions `response_format` e Responses"
-            },
-            {
-              "title": "6. Robustezza, regressioni e verifica",
-              "level": 2,
-              "start": 76,
-              "end": 89,
-              "summary": "**Completato quando:** la suite server passa senza regressioni e i casi limite"
-            },
-            {
-              "title": "7. Thinking con output e tool call strict",
-              "level": 2,
-              "start": 90,
-              "end": 103,
-              "summary": "**Completato quando:** il reasoning resta libero e separato fino al primo"
-            },
-            {
-              "title": "8. Fast-forward deterministico dei token vincolati",
-              "level": 2,
-              "start": 104,
-              "end": 125,
-              "summary": "**Completato quando:** chiavi, separatori, chiusure, `const`, rami enum gia"
-            },
-            {
-              "title": "Limiti intenzionali",
-              "level": 2,
-              "start": 126,
-              "end": 138,
-              "summary": "al primo `</think>`; subito dopo deve iniziare il documento JSON, senza whitespace"
-            },
-            {
-              "title": "Ultima verifica model-backed",
-              "level": 2,
-              "start": 139,
-              "end": 145,
-              "summary": "Chat e Responses con thinking, tool senza argomenti e tentativi adversariali"
             }
           ]
         },

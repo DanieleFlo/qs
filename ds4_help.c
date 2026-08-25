@@ -336,7 +336,7 @@ static void print_server_api(FILE *fp, const help_colors *c) {
     opt(fp, c, "--trace FILE", "Write prompts, cache decisions, output, and tool calls.");
     opt(fp, c, "--batched-session N", "Keep N resident sessions and batch decode-ready requests.");
     para(fp, c, "Endpoints: /v1/chat/completions, /v1/responses, /v1/completions, and /v1/messages.");
-    para(fp, c, "DeepSeek endpoint aliases remain available; Qwen uses its audited loaded-model ID: Qwen3.6-27B-Q4_K_S.gguf, Qwen3.6-27B-Q4_K_M.gguf, or Qwen3.8-27B-UD-Q4_K_S.gguf.");
+    para(fp, c, "DeepSeek endpoint aliases remain available; Qwen uses an extension-free API ID: Qwen3.6-27B-Q4_K_S, Qwen3.6-27B-Q4_K_M, or Qwen3.8-27B-UD-Q4_K_S. Legacy .gguf IDs remain accepted.");
     fputc('\n', fp);
 }
 

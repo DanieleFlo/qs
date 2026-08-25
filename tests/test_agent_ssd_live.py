@@ -19,19 +19,27 @@ import argparse
 import json
 import re
 import time
+import unittest
 import urllib.request
 from pathlib import Path
 
-from agent_wiki.backend.core.agent.deep_agent import DeepAgent
-from agent_wiki.backend.core.client import Client
-from agent_wiki.backend.core.config.hds_config import HDSGraphConfig, HDSNodeConfig
-from agent_wiki.configs.runtime import (
-    LoopConfigOverride,
-    ModelRequestConfigOverride,
-    RuntimeConfigOverrides,
-)
-from agent_wiki.configs.settings import SystemConfig
-from agent_wiki.wiki import WikiGraphNodeConfig
+try:
+    from agent_wiki.backend.core.agent.deep_agent import DeepAgent
+    from agent_wiki.backend.core.client import Client
+    from agent_wiki.backend.core.config.hds_config import HDSGraphConfig, HDSNodeConfig
+    from agent_wiki.configs.runtime import (
+        LoopConfigOverride,
+        ModelRequestConfigOverride,
+        RuntimeConfigOverrides,
+    )
+    from agent_wiki.configs.settings import SystemConfig
+    from agent_wiki.wiki import WikiGraphNodeConfig
+except ModuleNotFoundError as exc:
+    if exc.name == "agent_wiki":
+        raise unittest.SkipTest(
+            "agent_wiki is available only in the dedicated Agent SSD environment"
+        ) from exc
+    raise
 
 
 MIN_SYSTEM_TOKENS = 8_000
@@ -270,7 +278,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("cold", "warm"), required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:18082/v1")
-    parser.add_argument("--model-id", default="Qwen3.6-27B-Q4_K_S.gguf")
+    parser.add_argument("--model-id", default="Qwen3.6-27B-Q4_K_S")
     parser.add_argument("--server-log", type=Path, required=True)
     parser.add_argument("--workroot", type=Path, required=True)
     parser.add_argument(

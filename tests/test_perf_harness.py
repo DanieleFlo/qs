@@ -20,6 +20,27 @@ SPEC.loader.exec_module(HARNESS)
 
 
 class PerfHarnessTests(unittest.TestCase):
+    def test_advertised_model_id_uses_the_server_canonical_id(self) -> None:
+        payload = {
+            "object": "list",
+            "data": [{"id": "Qwen3.6-27B-Q4_K_S", "object": "model"}],
+        }
+        self.assertEqual(
+            HARNESS.advertised_model_id(payload), "Qwen3.6-27B-Q4_K_S"
+        )
+        for invalid in ({}, {"data": []}, {"data": [{}]}):
+            with self.assertRaises(HARNESS.HarnessError):
+                HARNESS.advertised_model_id(invalid)
+
+    def test_server_environment_isolates_the_persistent_cache(self) -> None:
+        original = {"HOME": "/real/home", "DS4_TEST": "1"}
+        isolated = HARNESS.isolated_server_environment(
+            original, Path("/tmp/isolated-server-home")
+        )
+        self.assertEqual(isolated["HOME"], "/tmp/isolated-server-home")
+        self.assertEqual(isolated["DS4_TEST"], "1")
+        self.assertEqual(original["HOME"], "/real/home")
+
     def test_canonical_quick_suite_names_phase_batch_and_context(self) -> None:
         workloads = HARNESS.load_workloads(
             ROOT / "performance" / "workloads.yaml", "quick"
@@ -71,19 +92,19 @@ class PerfHarnessTests(unittest.TestCase):
         for key in ("generation_tokens", "prefill_chunk", "backend", "batch"):
             self.assertEqual(len({item[key] for item in workloads}), 1)
 
-    def test_mtp_context_curve_covers_zero_through_28k(self) -> None:
+    def test_mtp_context_curve_covers_zero_through_22k(self) -> None:
         workloads = HARNESS.load_workloads(
             ROOT / "performance" / "workloads.yaml", "mtp-context-curve"
         )
         self.assertEqual(
             [item["context"] for item in workloads],
-            list(range(0, 28673, 2048)),
+            list(range(0, 22529, 2048)),
         )
-        self.assertEqual(len(workloads), 15)
+        self.assertEqual(len(workloads), 12)
         self.assertLess(
             max(item["context"] for item in workloads) +
             workloads[0]["generation_tokens"] + 1,
-            30000,
+            23000,
         )
 
     def test_mtp_short_regression_is_an_isolated_empty_frontier(self) -> None:
@@ -106,22 +127,22 @@ class PerfHarnessTests(unittest.TestCase):
         )
         self.assertEqual([item["context"] for item in midpoint], [96])
 
-    def test_mtp_long_context_smoke_covers_midpoint_and_28k(self) -> None:
+    def test_mtp_long_context_smoke_covers_midpoint_and_22k(self) -> None:
         workloads = HARNESS.load_workloads(
             ROOT / "performance" / "workloads.yaml", "mtp-long-context-smoke"
         )
-        self.assertEqual([item["context"] for item in workloads], [16384, 28672])
+        self.assertEqual([item["context"] for item in workloads], [16384, 22528])
         self.assertLess(
             max(item["context"] for item in workloads) +
             workloads[0]["generation_tokens"] + 1,
-            30000,
+            23000,
         )
 
-    def test_mtp_depth_28k_is_an_isolated_tail_probe(self) -> None:
+    def test_mtp_depth_22k_is_an_isolated_tail_probe(self) -> None:
         workloads = HARNESS.load_workloads(
-            ROOT / "performance" / "workloads.yaml", "mtp-depth-28k"
+            ROOT / "performance" / "workloads.yaml", "mtp-depth-22k"
         )
-        self.assertEqual([item["context"] for item in workloads], [28672])
+        self.assertEqual([item["context"] for item in workloads], [22528])
 
     def test_mtp_depth_crossover_samples_4k_8k_12k(self) -> None:
         workloads = HARNESS.load_workloads(
@@ -146,11 +167,11 @@ class PerfHarnessTests(unittest.TestCase):
             [item["context"] for item in workloads], [0, 2048, 4096]
         )
 
-    def test_mtp_weakest_confirm_is_24k(self) -> None:
+    def test_mtp_weakest_confirm_is_22k(self) -> None:
         workloads = HARNESS.load_workloads(
             ROOT / "performance" / "workloads.yaml", "mtp-weakest-confirm"
         )
-        self.assertEqual([item["context"] for item in workloads], [24576])
+        self.assertEqual([item["context"] for item in workloads], [22528])
 
     @staticmethod
     def curve_workload(context: int, tps: float) -> dict:
@@ -478,11 +499,12 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(args.repetitions, 2)
         self.assertEqual(args.port, 0)
         self.assertIsNone(args.context_alloc)
+        self.assertFalse(args.thinking)
 
     def test_server_curve_accepts_mtp_curve_and_sidecar(self) -> None:
         args = HARNESS.build_parser().parse_args([
             "server-curve", "--model", "model.gguf", "--baseline-run",
-            "--hypothesis", "MTP remains faster through 28K",
+            "--hypothesis", "MTP remains faster through 22K",
             "--suite", "mtp-context-curve", "--mtp", "--no-thinking",
             "--prompt-pattern", "technical-explanation",
         ])
@@ -491,15 +513,15 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertFalse(args.thinking)
         self.assertEqual(args.prompt_pattern, "technical-explanation")
 
-    def test_server_curve_accepts_explicit_large_context_allocation(self) -> None:
+    def test_server_curve_accepts_explicit_safe_context_allocation(self) -> None:
         args = HARNESS.build_parser().parse_args([
             "server-curve", "--model", "model.gguf", "--baseline-run",
-            "--hypothesis", "short MTP remains fast with a large allocation",
+            "--hypothesis", "short MTP remains fast with a safe allocation",
             "--suite", "mtp-short-regression", "--mtp",
-            "--context-alloc", "28768",
+            "--context-alloc", "22593",
         ])
         self.assertEqual(args.suite, "mtp-short-regression")
-        self.assertEqual(args.context_alloc, 28768)
+        self.assertEqual(args.context_alloc, 22593)
 
     def test_technical_server_prompt_has_one_token_filler(self) -> None:
         short = HARNESS.server_curve_prompt(32, "technical-explanation")

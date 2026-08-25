@@ -29969,12 +29969,17 @@ __global__ static void qwen35_q4_k_q8_k_cpu_diag_kernel(
     out[tok * out_dim + row] = sumf;
 }
 
+static uint32_t g_cuda_qwen_layer;
+static ds4_qwen_execution_stage g_cuda_qwen_stage = DS4_QWEN_STAGE_DECODE;
+
 typedef struct {
     cudaEvent_t start;
     cudaEvent_t quantized;
     cudaEvent_t done;
     int active;
     uint32_t weight_type;
+    ds4_qwen_execution_stage stage;
+    uint32_t layer;
 } qwen35_q8_1_r8_profile;
 
 static void qwen35_q8_1_r8_profile_end(qwen35_q8_1_r8_profile *profile,
@@ -29990,8 +29995,10 @@ static void qwen35_q8_1_r8_profile_end(qwen35_q8_1_r8_profile *profile,
         (void)cudaEventElapsedTime(&mmvq_ms, profile->quantized,
                                    profile->done);
         fprintf(stderr,
-                "QWEN_Q8_1_R8_PROFILE weight=Q%u_K in=%llu out=%llu "
+                "QWEN_Q8_1_R8_PROFILE stage=%s layer=%u "
+                "weight=Q%u_K in=%llu out=%llu "
                 "quant=%.6fms mmvq=%.6fms total=%.6fms\n",
+                ds4_qwen_execution_stage_name(profile->stage), profile->layer,
                 profile->weight_type - 8u,
                 (unsigned long long)in_dim, (unsigned long long)out_dim,
                 quant_ms, mmvq_ms, quant_ms + mmvq_ms);
@@ -30004,10 +30011,14 @@ static void qwen35_q8_1_r8_profile_end(qwen35_q8_1_r8_profile *profile,
 
 static qwen35_q8_1_r8_profile qwen35_q8_1_r8_profile_begin(
         uint32_t weight_type) {
-    qwen35_q8_1_r8_profile result = {NULL, NULL, NULL, 0, weight_type};
+    qwen35_q8_1_r8_profile result = {
+        NULL, NULL, NULL, 0, weight_type,
+        g_cuda_qwen_stage, g_cuda_qwen_layer
+    };
     static int profiled[3] = {0, 0, 0};
     const uint32_t slot = weight_type - 12u;
     if (slot >= 3u || profiled[slot] ||
+        g_cuda_qwen_stage != DS4_QWEN_STAGE_DECODE ||
         getenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8_PROFILE") == NULL) return result;
     if (cudaEventCreate(&result.start) != cudaSuccess ||
         cudaEventCreate(&result.quantized) != cudaSuccess ||
@@ -30024,10 +30035,11 @@ static qwen35_q8_1_r8_profile qwen35_q8_1_r8_profile_begin(
     return result;
 }
 
-static uint32_t g_cuda_qwen35_decode_layer = 0u;
-
-extern "C" void ds4_gpu_qwen35_set_decode_layer(uint32_t layer) {
-    g_cuda_qwen35_decode_layer = layer;
+extern "C" void ds4_gpu_qwen_set_execution_stage(
+        ds4_qwen_execution_stage stage,
+        uint32_t layer) {
+    g_cuda_qwen_stage = stage;
+    g_cuda_qwen_layer = layer;
 }
 
 static int qwen35_quant_k_matmul(
@@ -30070,8 +30082,8 @@ static int qwen35_quant_k_matmul(
         ((adaptive_layers_env != NULL && adaptive_q8_layers <= 64u) ||
          (adaptive_start_env != NULL && adaptive_q8_start <= 64u));
     const bool adaptive_q8_selected =
-        (!adaptive_layers_env || g_cuda_qwen35_decode_layer < adaptive_q8_layers) &&
-        (!adaptive_start_env || g_cuda_qwen35_decode_layer >= adaptive_q8_start);
+        (!adaptive_layers_env || g_cuda_qwen_layer < adaptive_q8_layers) &&
+        (!adaptive_start_env || g_cuda_qwen_layer >= adaptive_q8_start);
     const bool q4_q8_decode =
         getenv("DS4_CUDA_QWEN_DECODE_Q4_Q8") != NULL ||
         (getenv("DS4_CUDA_QWEN_DECODE_Q4_Q8_LSQ") != NULL &&
@@ -30129,7 +30141,10 @@ static int qwen35_quant_k_matmul(
         if (!xq) return 0;
         qwen35_block_q8_1 *xq1 = q8_1_r8 ?
             (qwen35_block_q8_1 *)((char *)xq + xq_bytes) : NULL;
-        qwen35_q8_1_r8_profile r8_profile = {NULL, NULL, NULL, 0, weight_type};
+        qwen35_q8_1_r8_profile r8_profile = {
+            NULL, NULL, NULL, 0, weight_type,
+            g_cuda_qwen_stage, g_cuda_qwen_layer
+        };
         if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type);
         if (q8_1_r8) {
             qwen35_q8_1_r8_quantize_kernel<<<blocks, 256>>>(
@@ -30241,7 +30256,10 @@ static int qwen35_quant_k_matmul(
         if (!xq) return 0;
         qwen35_block_q8_1 *xq1 = q8_1_r8 ?
             (qwen35_block_q8_1 *)((char *)xq + xq_bytes) : NULL;
-        qwen35_q8_1_r8_profile r8_profile = {NULL, NULL, NULL, 0, weight_type};
+        qwen35_q8_1_r8_profile r8_profile = {
+            NULL, NULL, NULL, 0, weight_type,
+            g_cuda_qwen_stage, g_cuda_qwen_layer
+        };
         if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type);
         if (q8_1_r8) {
             qwen35_q8_1_r8_quantize_kernel<<<blocks, 256>>>(
@@ -30492,7 +30510,7 @@ static int qwen35_quant_k_matmul(
             (getenv("DS4_CUDA_QWEN_PREFILL_F16_DOWN") != NULL &&
              in_dim == 17408u && out_dim == 5120u);
         const bool f16_gemm = f16_requested &&
-            g_cuda_qwen35_decode_layer < f16_layers;
+            g_cuda_qwen_layer < f16_layers;
         const uint64_t weight_tmp_bytes = weight_elems *
             (f16_gemm ? sizeof(__half) : sizeof(float));
         const uint64_t xh_offset = (weight_tmp_bytes + 255u) & ~255ull;
@@ -30974,95 +30992,6 @@ static int qwen35_attention_split_k_launch(
     return cuda_ok(cudaGetLastError(), "qwen35 split-k attention merge");
 }
 
-__global__ static void qwen35_prepare_q_kernel(
-        float *q_gate,
-        const float *norm,
-        uint32_t position) {
-    const uint32_t h = blockIdx.x;
-    const uint32_t d = threadIdx.x;
-    float *q = q_gate + h * 512u;
-    __shared__ float reduce[256];
-    reduce[d] = q[d] * q[d];
-    qwen35_block_reduce_sum(reduce);
-    q[d] *= rsqrtf(reduce[0] / 256.0f + 1.0e-6f) * norm[d];
-    __syncthreads();
-    if (d < 32u) {
-        const float theta = (float)position *
-            powf(10000000.0f, -(2.0f * (float)d) / 64.0f);
-        const float c = cosf(theta), s = sinf(theta);
-        const float x0 = q[d], x1 = q[d + 32u];
-        q[d] = x0 * c - x1 * s;
-        q[d + 32u] = x0 * s + x1 * c;
-    }
-}
-
-__global__ static void qwen35_prepare_kv_kernel(
-        float *k,
-        const float *v,
-        const float *norm,
-        float *key_cache,
-        float *value_cache,
-        uint32_t position) {
-    const uint32_t h = blockIdx.x;
-    const uint32_t d = threadIdx.x;
-    float *kh = k + h * 256u;
-    __shared__ float reduce[256];
-    reduce[d] = kh[d] * kh[d];
-    qwen35_block_reduce_sum(reduce);
-    kh[d] *= rsqrtf(reduce[0] / 256.0f + 1.0e-6f) * norm[d];
-    __syncthreads();
-    if (d < 32u) {
-        const float theta = (float)position *
-            powf(10000000.0f, -(2.0f * (float)d) / 64.0f);
-        const float c = cosf(theta), s = sinf(theta);
-        const float x0 = kh[d], x1 = kh[d + 32u];
-        kh[d] = x0 * c - x1 * s;
-        kh[d + 32u] = x0 * s + x1 * c;
-    }
-    __syncthreads();
-    const uint64_t cache = ((uint64_t)position * 4u + h) * 256u + d;
-    key_cache[cache] = kh[d];
-    value_cache[cache] = v[h * 256u + d];
-}
-
-__global__ static void qwen35_attention_kernel(
-        float *out,
-        const float *q_gate,
-        const float *key_cache,
-        const float *value_cache,
-        uint32_t position) {
-    const uint32_t qh = blockIdx.x;
-    const uint32_t d = threadIdx.x;
-    const uint32_t kvh = qh / 6u;
-    const float *q = q_gate + qh * 512u;
-    float acc = 0.0f;
-    __shared__ float reduce[256];
-    __shared__ float online_m;
-    __shared__ float online_l;
-    __shared__ float alpha;
-    __shared__ float beta_w;
-    if (d == 0u) { online_m = -INFINITY; online_l = 0.0f; }
-    __syncthreads();
-    for (uint32_t t = 0; t <= position; t++) {
-        const uint64_t base = ((uint64_t)t * 4u + kvh) * 256u;
-        reduce[d] = q[d] * key_cache[base + d];
-        qwen35_block_reduce_sum(reduce);
-        if (d == 0u) {
-            const float score = reduce[0] * (1.0f / 16.0f);
-            const float next_m = fmaxf(online_m, score);
-            alpha = expf(online_m - next_m);
-            beta_w = expf(score - next_m);
-            online_l = online_l * alpha + beta_w;
-            online_m = next_m;
-        }
-        __syncthreads();
-        acc = acc * alpha + value_cache[base + d] * beta_w;
-        __syncthreads();
-    }
-    const float gate = 1.0f / (1.0f + expf(-q[256u + d]));
-    out[qh * 256u + d] = (acc / online_l) * gate;
-}
-
 __global__ static void qwen35_prepare_q_rows_kernel(
         float *q_gate,
         const float *norm,
@@ -31382,72 +31311,6 @@ extern "C" int ds4_gpu_qwen35_full_attention_tensor(
         position, 1u, context_capacity);
 }
 
-__global__ static void qwen35_conv_kernel(
-        float *qkv, float *state, const float *weight) {
-    const uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
-    if (c >= 10240u) return;
-    float *s = state + (uint64_t)c * 4u;
-    s[0] = s[1]; s[1] = s[2]; s[2] = s[3]; s[3] = qkv[c];
-    float y = 0.0f;
-    #pragma unroll
-    for (uint32_t i = 0; i < 4u; i++) y += s[i] * weight[(uint64_t)c * 4u + i];
-    qkv[c] = y / (1.0f + expf(-y));
-}
-
-__global__ static void qwen35_gdn_kernel(
-        float *out, const float *qkv, const float *z,
-        const float *alpha_in, const float *beta_in,
-        float *state, const float *a, const float *dt_bias,
-        const float *norm) {
-    const uint32_t vh = blockIdx.x;
-    const uint32_t d = threadIdx.x;
-    /* llama.cpp's Qwen3.5 GGUF converter rewrites the 48 value heads from
-     * upstream grouped order [K0v0,K0v1,K0v2,K1v0,...] to tiled order
-     * [K0v0,K1v0,...,K15v0,K0v1,...].  Q/K broadcast must therefore follow
-     * the physical GGUF head index, not HF repeat_interleave semantics. */
-    const uint32_t group = vh % 16u;
-    __shared__ float q[128], k[128], ov[128], reduce[128];
-    __shared__ float qscale_shared, kscale_shared;
-    q[d] = qkv[group * 128u + d];
-    k[d] = qkv[2048u + group * 128u + d];
-    reduce[d] = q[d] * q[d];
-    qwen35_block_reduce_sum(reduce);
-    if (d == 0u) qscale_shared = rsqrtf(reduce[0] + 1.0e-6f);
-    __syncthreads();
-    q[d] *= qscale_shared;
-    /* Do not reuse reduce until every warp has consumed the Q norm. */
-    __syncthreads();
-    reduce[d] = k[d] * k[d];
-    qwen35_block_reduce_sum(reduce);
-    if (d == 0u) kscale_shared = rsqrtf(reduce[0] + 1.0e-6f);
-    __syncthreads();
-    k[d] *= kscale_shared;
-    __syncthreads();
-    const float beta = 1.0f / (1.0f + expf(-beta_in[vh]));
-    const float x = alpha_in[vh] + dt_bias[vh];
-    const float softplus = x > 20.0f ? x : log1pf(expf(x));
-    const float decay = expf(a[vh] * softplus);
-    const float value = qkv[4096u + vh * 128u + d];
-    float pred = 0.0f;
-    for (uint32_t j = 0; j < 128u; j++) {
-        pred += decay * state[((uint64_t)vh * 128u + j) * 128u + d] * k[j];
-    }
-    float y = 0.0f;
-    for (uint32_t j = 0; j < 128u; j++) {
-        float *cell = state + ((uint64_t)vh * 128u + j) * 128u + d;
-        const float updated = decay * *cell + beta * k[j] * (value - pred);
-        *cell = updated;
-        y += updated * q[j] * 0.08838834764831845f;
-    }
-    ov[d] = y;
-    reduce[d] = y * y;
-    qwen35_block_reduce_sum(reduce);
-    const float rms = rsqrtf(reduce[0] / 128.0f + 1.0e-6f);
-    const float gate = z[vh * 128u + d];
-    out[vh * 128u + d] = ov[d] * rms * norm[d] *
-                          (gate / (1.0f + expf(-gate)));
-}
-
 /* llama.cpp-style state mapping for decode: four warps own four output
  * columns and each lane keeps four rows of its column in registers.  This
  * changes recurrent-state traffic from two reads plus one write to one read
@@ -31463,6 +31326,9 @@ __global__ static void qwen35_gdn_state_warp4_kernel(
     const uint32_t lane = tid & 31u;
     const uint32_t warp = tid >> 5u;
     const uint32_t col = tile * 4u + warp;
+    /* The GGUF converter stores 48 value heads in tiled order
+     * [K0v0,K1v0,...,K15v0,K0v1,...], so Q/K broadcast follows the physical
+     * head index instead of Hugging Face repeat_interleave semantics. */
     const uint32_t group = vh % 16u;
     __shared__ float q[128], k[128], reduce[128];
     __shared__ float qscale, kscale, decay_shared, beta_shared;

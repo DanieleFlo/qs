@@ -213,6 +213,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   prompt, generazione, sampling, perplexity e dump diagnostici.
 - `ds4_server.c` — eseguibile `ds4-server`: API HTTP compatibili, code, worker,
   session batching, streaming, tool-call mapping e policy della KV su disco;
+  espone per Qwen ID API canonici senza l'estensione `.gguf`, mantenendo gli ID
+  storici come alias di compatibilità;
   per Responses gestisce inoltre il namespace `agentic`, il masking DSML dei
   nomi e le frame gerarchiche delle skill. Per Qwen3.6 Q4_K_S abilita
   automaticamente una cache durevole con budget condiviso fra sessioni,
@@ -229,7 +231,7 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   full-vocabulary di una riga fra run Qwen etichettati; il gate delle suite
   oracle conta sequenze complete e argmax greedy/teacher-forced; `doctor`
   segnala separatamente client, benchmark e server obsoleti. La suite completa
-  2K–30K controlla floor e forma della curva; le suite MTP coprono 0–28K, la
+  2K–30K controlla floor e forma della curva; le suite MTP coprono 0–22K, la
   ricerca del crossover split-K e della profondità V(3)/V(2). `server-curve`
   esegue queste matrici via HTTP usando i token effettivi e il tempo di decode
   del server.
@@ -284,9 +286,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 
 ### API, modello e orchestrazione centrale
 
-- `ds4.h` — API pubblica stretta: opzioni engine, token, sessioni, sync/eval,
-  logits, sampling filtrato, batching, snapshot, checkpoint ricorrenti Qwen
-  per skill e callback.
+- `ds4.h` — API pubblica stretta: descrittore canonico di famiglia/target,
+  opzioni engine, token, sessioni, sync/eval, logits, sampling filtrato,
+  batching, snapshot, checkpoint ricorrenti Qwen per skill e callback.
 - `ds4.c` — nucleo verticale del motore: parser GGUF mmap-backed, metadata,
   shape dei modelli, tensor binding, tokenizer, CPU reference, costruzione e
   scheduling del grafo, sessioni, prefill/decode, KV, logits, MTP e payload
@@ -298,9 +300,12 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   comprende inoltre timeline, logits, stato GDN, KV full-attention e stato MTP,
   e rifiuta il restore quando payload e runtime non concordano sulla modalita'
   MTP.
-  Il fork Qwen in memoria resta escluso. Il profiler Qwen opzionale emette
-  tempi strutturati attention/FFN per ogni layer di prefill e decode, consumati
+  Il fork Qwen in memoria resta escluso. Lo scheduler distingue esplicitamente
+  decode, prefill, verifica MTP, draft, replay e catch-up; il profiler Qwen
+  opzionale emette tempi strutturati attention/FFN per fase e layer, consumati
   dal comando profile-network del performance harness.
+- `ds4_qwen.h` — vocabolario interno unico delle fasi di esecuzione Qwen,
+  condiviso fra scheduler C e backend CUDA/Metal/ROCm.
 - `ds4_gpu.h` — interfaccia tensoriale condivisa fra il grafo C e i backend
   accelerati; descrive tensori opachi, operazioni, attention e batching,
   incluse le due primitive interne Qwen per full-attention gated e Gated

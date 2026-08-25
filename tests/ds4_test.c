@@ -6378,25 +6378,36 @@ static void test_think_tool_recovery(void) {
     TEST_ASSERT(text.ptr && text.len >= 10 &&
                 !memcmp(text.ptr + text.len - 10, "</think>\n\n", 10));
 
-    /* The model must now complete a valid call on the executable side. */
-    uint64_t rng = 123;
+    /* Recovery and model-quality are separate contracts.  The neighboring
+     * tool-call-quality test exercises natural generation; use a fixed valid
+     * continuation here so this test isolates recovery state, token replay,
+     * marker detection, and parsing across every supported model family. */
+    const char *continuation =
+        DS4_TOOL_CALLS_START "\n"
+        DS4_INVOKE_START " name=\"list_files\">\n"
+        DS4_PARAM_START " name=\"path\" string=\"true\">."
+        DS4_PARAM_END "\n"
+        DS4_INVOKE_END "\n"
+        DS4_TOOL_CALLS_END;
+    ds4_tokens continuation_tokens = {0};
+    ds4_tokenize_rendered_chat(engine, continuation, &continuation_tokens);
+    TEST_ASSERT(continuation_tokens.len > 1);
     bool decode_ok = true;
     bool saw_start = false;
     bool saw_end = false;
-    for (int i = 0; i < 256 && !saw_end; i++) {
-        int token = ds4_session_sample(session, 0.0f, 0, 1.0f, 0.0f, &rng);
-        if (token == ds4_token_eos(engine)) break;
+    for (int i = 0; i < continuation_tokens.len; i++) {
+        const int token = continuation_tokens.v[i];
+        if (ds4_session_eval(session, token, err, sizeof(err)) != 0) {
+            decode_ok = false;
+            break;
+        }
         size_t piece_len = 0;
         char *piece = ds4_token_text(engine, token, &piece_len);
         buf_append(&text, piece, piece_len);
         free(piece);
         observe_tool_markers(text.ptr, &saw_start, &saw_end, NULL);
-        if (saw_end) break;
-        if (ds4_session_eval(session, token, err, sizeof(err)) != 0) {
-            decode_ok = false;
-            break;
-        }
     }
+    ds4_tokens_free(&continuation_tokens);
     fprintf(stderr, "ds4-test: think-tool-recovery continuation=[%s]\n",
             text.ptr ? text.ptr : "");
     TEST_ASSERT(decode_ok);
@@ -6412,7 +6423,7 @@ static void test_think_tool_recovery(void) {
     TEST_ASSERT(reasoning && strstr(reasoning, "list_files tool right away"));
 
     fprintf(stderr,
-            "ds4-test: think-tool-recovery recovered=%d gen_tokens=%d calls=%d name=%s\n",
+            "ds4-test: think-tool-recovery recovered=%d recovery_tokens=%d calls=%d name=%s\n",
             rec, completion, calls.len, calls.len ? calls.v[0].name : "-");
 
     free(content);

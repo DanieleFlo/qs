@@ -57,7 +57,7 @@ help:
 	@echo "  make              Build Metal ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make cpu          Build CPU-only ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make test         Build and run tests"
-	@echo "  make test-qwen38-perf  Run the opt-in Qwen3.8 CLI/server MTP large-context-allocation gate"
+	@echo "  make test-qwen38-perf  Run the opt-in Qwen3.8 CLI/server MTP VRAM-safe context gate"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
 	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make dspark-verify-depth  Run DSpark speculative verification smoke if support GGUF is present"
@@ -112,7 +112,7 @@ help:
 	@echo "  make rocm                Alias for make strix-halo"
 	@echo "  make cpu                 Build CPU-only ./ds4, ./ds4-server, ./ds4-bench, ./ds4-eval, and ./ds4-agent"
 	@echo "  make test                Build and run tests"
-	@echo "  make test-qwen38-perf    Run the opt-in Qwen3.8 CLI/server MTP large-context-allocation gate"
+	@echo "  make test-qwen38-perf    Run the opt-in Qwen3.8 CLI/server MTP VRAM-safe context gate"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
 	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make dspark-verify-depth Run DSpark speculative verification smoke if support GGUF is present"
@@ -219,7 +219,7 @@ test-qwen38:
 	python3 -m unittest tests.test_qwen38_compatibility -v
 
 test-qwen38-perf: ds4 ds4-server
-	DS4_TEST_QWEN38_PERF=1 python3 -m unittest tests.test_qwen38_compatibility.Qwen38CompatibilityTests.test_cli_and_server_mtp_short_large_allocation_regression -v
+	DS4_TEST_QWEN38_PERF=1 python3 -m unittest tests.test_qwen38_compatibility.Qwen38CompatibilityTests.test_cli_and_server_mtp_performance_gate -v
 
 research-fetch:
 	python3 tools/fetch_research_corpus.py --refresh
@@ -237,7 +237,7 @@ docs-index: research-index
 docs-check: docs-index
 	python3 -m unittest tests.test_research_corpus tests.test_docs_wiki -v
 
-ds4.o: ds4.c ds4.h ds4_ssd.h ds4_distributed.h ds4_gpu.h
+ds4.o: ds4.c ds4.h ds4_ssd.h ds4_distributed.h ds4_gpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -c -o $@ ds4.c
 
 ds4_ssd.o: ds4_ssd.c ds4_ssd.h
@@ -255,7 +255,7 @@ ds4_tp.o: ds4_tp.c ds4_tp.h ds4.h ds4_ssd.h
 ds4_help.o: ds4_help.c ds4_help.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_help.c
 
-ds4_gpu_args.o: ds4_gpu_args.c ds4_gpu_args.h ds4_gpu_mgpu.h
+ds4_gpu_args.o: ds4_gpu_args.c ds4_gpu_args.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_gpu_args.c
 
 ds4_server.o: ds4_server.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h rax.h
@@ -288,10 +288,10 @@ ds4_agent_test.o: tests/ds4_agent_test.c ds4_agent.c ds4.h ds4_ssd.h ds4_distrib
 ds4_server_test.o: ds4_server.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h rax.h
 	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_SERVER_TEST -DDS4_NO_GPU -c -o $@ ds4_server.c
 
-tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
+tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_long_context_smoke.c
 
-tests/qwen_numerics_probe.o: tests/qwen_numerics_probe.c ds4_gpu.h
+tests/qwen_numerics_probe.o: tests/qwen_numerics_probe.c ds4_gpu.h ds4_qwen.h
 	$(CC) $(QUALITY_CFLAGS) -I. -c -o $@ tests/qwen_numerics_probe.c
 
 rax.o: rax.c rax.h rax_malloc.h
@@ -300,13 +300,13 @@ rax.o: rax.c rax.h rax_malloc.h
 linenoise.o: linenoise.c linenoise.h
 	$(CC) $(CFLAGS) -c -o $@ linenoise.c
 
-ds4_cpu.o: ds4.c ds4.h ds4_ssd.h ds4_distributed.h ds4_gpu.h
+ds4_cpu.o: ds4.c ds4.h ds4_ssd.h ds4_distributed.h ds4_gpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_NO_GPU -c -o $@ ds4.c
 
 ds4_cli_cpu.o: ds4_cli.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h linenoise.h
 	$(CC) $(CFLAGS) -DDS4_NO_GPU -c -o $@ ds4_cli.c
 
-ds4_gpu_args_cpu.o: ds4_gpu_args.c ds4_gpu_args.h ds4_gpu_mgpu.h
+ds4_gpu_args_cpu.o: ds4_gpu_args.c ds4_gpu_args.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -DDS4_NO_GPU -c -o $@ ds4_gpu_args.c
 
 ds4_server_cpu.o: ds4_server.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h rax.h
@@ -321,16 +321,16 @@ ds4_eval_cpu.o: ds4_eval.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h
 ds4_agent_cpu.o: ds4_agent.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h ds4_web.h linenoise.h
 	$(CC) $(CFLAGS) -DDS4_NO_GPU -c -o $@ ds4_agent.c
 
-ds4_metal.o: ds4_metal.m ds4_gpu.h $(METAL_SRCS)
+ds4_metal.o: ds4_metal.m ds4_gpu.h ds4_qwen.h $(METAL_SRCS)
 	$(CC) $(OBJCFLAGS) -c -o $@ ds4_metal.m
 
-ds4_cuda.o: ds4_cuda.cu ds4_gpu.h ds4_gpu_mgpu.h ds4_iq2_tables_cuda.inc
+ds4_cuda.o: ds4_cuda.cu ds4_gpu.h ds4_gpu_mgpu.h ds4_qwen.h ds4_iq2_tables_cuda.inc
 	$(NVCC) $(NVCCFLAGS) -c -o $@ ds4_cuda.cu
 
-ds4_rocm.o: ds4_rocm.cu ds4_gpu.h ds4_iq2_tables_cuda.inc $(ROCM_SRCS)
+ds4_rocm.o: ds4_rocm.cu ds4_gpu.h ds4_qwen.h ds4_iq2_tables_cuda.inc $(ROCM_SRCS)
 	$(HIPCC) $(ROCM_CFLAGS) -c -o $@ ds4_rocm.cu
 
-ds4_rocm_compat.o: ds4_rocm_compat.cu ds4_gpu.h ds4_gpu_mgpu.h ds4_gpu_args.h
+ds4_rocm_compat.o: ds4_rocm_compat.cu ds4_gpu.h ds4_gpu_mgpu.h ds4_qwen.h ds4_gpu_args.h
 	$(HIPCC) $(ROCM_CFLAGS) -c -o $@ ds4_rocm_compat.cu
 
 ds4_rocm_unavailable.o: ds4_rocm_unavailable.cu
@@ -348,59 +348,59 @@ tests/test_layer_pack.o: tests/test_layer_pack.c ds4_layer_pack.h
 tests/test_layer_pack: tests/test_layer_pack.o ds4_layer_pack.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-tests/test_gpu_args.o: tests/test_gpu_args.c ds4_gpu_args.h ds4_gpu_mgpu.h
+tests/test_gpu_args.o: tests/test_gpu_args.c ds4_gpu_args.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -DDS4_NO_GPU -c -o $@ $<
 
 tests/test_gpu_args: tests/test_gpu_args.o ds4_gpu_args_cpu.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-ds4_cpu_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_layer_pack.h
+ds4_cpu_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_qwen.h ds4_layer_pack.h
 	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_NO_GPU -DDS4_TEST_HOOKS -c -o $@ ds4.c
 
-ds4_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_layer_pack.h
+ds4_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_qwen.h ds4_layer_pack.h
 	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_TEST_HOOKS -c -o $@ ds4.c
 
-tests/test_engine_mgpu_placement.o: tests/test_engine_mgpu_placement.c ds4.h ds4_gpu_mgpu.h ds4_layer_pack.h
+tests/test_engine_mgpu_placement.o: tests/test_engine_mgpu_placement.c ds4.h ds4_gpu_mgpu.h ds4_qwen.h ds4_layer_pack.h
 	$(CC) $(CFLAGS) -I. -c -o $@ $<
 
 tests/test_engine_mgpu_placement: tests/test_engine_mgpu_placement.o ds4_cpu_test_hooks.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_layer_pack.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 ifneq ($(UNAME_S),Darwin)
-tests/test_gpu_xdev.o: tests/test_gpu_xdev.c ds4_gpu.h ds4_gpu_mgpu.h
+tests/test_gpu_xdev.o: tests/test_gpu_xdev.c ds4_gpu.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_gpu_xdev: tests/test_gpu_xdev.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
-tests/test_gpu_model_cache.o: tests/test_gpu_model_cache.c ds4_gpu.h
+tests/test_gpu_model_cache.o: tests/test_gpu_model_cache.c ds4_gpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_gpu_model_cache: tests/test_gpu_model_cache.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
-tests/test_gpu_lookup_cache_strict.o: tests/test_gpu_lookup_cache_strict.c ds4_gpu.h ds4_gpu_mgpu.h
+tests/test_gpu_lookup_cache_strict.o: tests/test_gpu_lookup_cache_strict.c ds4_gpu.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_gpu_lookup_cache_strict: tests/test_gpu_lookup_cache_strict.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
-ds4_cuda_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_layer_pack.h
+ds4_cuda_test_hooks.o: ds4.c ds4.h ds4_gpu.h ds4_gpu_mgpu.h ds4_qwen.h ds4_layer_pack.h
 	$(CC) $(CFLAGS) -Wno-unused-function -DDS4_TEST_HOOKS -I$(CUDA_HOME)/include -c -o $@ ds4.c
 
-tests/test_engine_mgpu_refusal.o: tests/test_engine_mgpu_refusal.c ds4.h ds4_gpu_mgpu.h
+tests/test_engine_mgpu_refusal.o: tests/test_engine_mgpu_refusal.c ds4.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_engine_mgpu_refusal: tests/test_engine_mgpu_refusal.o ds4_gpu_args.o ds4_kvstore.o rax.o $(CORE_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
-tests/test_engine_mgpu_runtime.o: tests/test_engine_mgpu_runtime.c ds4.h ds4_gpu_mgpu.h
+tests/test_engine_mgpu_runtime.o: tests/test_engine_mgpu_runtime.c ds4.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -DDS4_TEST_HOOKS -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_engine_mgpu_runtime: tests/test_engine_mgpu_runtime.o ds4_cuda_test_hooks.o ds4_gpu_args.o ds4_kvstore.o rax.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_cuda.o ds4_layer_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
-tests/test_engine_correctness.o: tests/test_engine_correctness.c ds4.h ds4_gpu_mgpu.h
+tests/test_engine_correctness.o: tests/test_engine_correctness.c ds4.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_engine_correctness: tests/test_engine_correctness.o ds4_gpu_args.o ds4_kvstore.o rax.o $(CORE_OBJS)
@@ -412,7 +412,7 @@ tests/test_sampling.o: tests/test_sampling.c ds4.h
 tests/test_sampling: tests/test_sampling.o ds4_cuda_test_hooks.o ds4_gpu_args.o ds4_kvstore.o rax.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_cuda.o ds4_layer_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
-tests/test_cuda_session_batch.o: tests/test_cuda_session_batch.c ds4.h ds4_gpu_args.h ds4_gpu_mgpu.h
+tests/test_cuda_session_batch.o: tests/test_cuda_session_batch.c ds4.h ds4_gpu_args.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_cuda_session_batch: tests/test_cuda_session_batch.o ds4_gpu_args.o ds4_kvstore.o rax.o $(CORE_OBJS)
@@ -421,7 +421,7 @@ tests/test_cuda_session_batch: tests/test_cuda_session_batch.o ds4_gpu_args.o ds
 test-cuda-session-batch: tests/test_cuda_session_batch
 	DS4_TEST_MODEL="$(DS4_TEST_MODEL)" ./tests/test_cuda_session_batch
 
-tests/test_cuda_mixed_batch.o: tests/test_cuda_mixed_batch.c ds4.h ds4_gpu_args.h ds4_gpu_mgpu.h
+tests/test_cuda_mixed_batch.o: tests/test_cuda_mixed_batch.c ds4.h ds4_gpu_args.h ds4_gpu_mgpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -DDS4_TEST_HOOKS -I. -I$(CUDA_HOME)/include -c -o $@ $<
 
 tests/test_cuda_mixed_batch: tests/test_cuda_mixed_batch.o ds4_cuda_test_hooks.o ds4_gpu_args.o ds4_kvstore.o rax.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_cuda.o ds4_layer_pack.o

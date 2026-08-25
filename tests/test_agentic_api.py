@@ -65,7 +65,7 @@ def response_payload(
         agentic["skill_call_id"] = skill_call_id
     return {
         "model": os.environ.get("DS4_AGENTIC_MODEL",
-                                "Qwen3.6-27B-Q4_K_S.gguf"),
+                                "Qwen3.6-27B-Q4_K_S"),
         "input": input_items,
         "tools": REGISTRY,
         "tool_choice": "auto",

@@ -26,7 +26,7 @@
       "kind": "dsml",
       "endpoint": "/v1/responses",
       "payload": {
-        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "model": "Qwen3.6-27B-Q4_K_S",
         "input": [
           {
             "role": "user",
@@ -72,7 +72,7 @@
       "kind": "json_schema",
       "endpoint": "/v1/chat/completions",
       "payload": {
-        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "model": "Qwen3.6-27B-Q4_K_S",
         "messages": [
           {
             "role": "user",
@@ -132,7 +132,7 @@
       "kind": "dsml",
       "endpoint": "/v1/responses",
       "payload": {
-        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "model": "Qwen3.6-27B-Q4_K_S",
         "input": [
           {
             "role": "user",
@@ -173,7 +173,7 @@
       "kind": "dsml",
       "endpoint": "/v1/responses",
       "payload": {
-        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "model": "Qwen3.6-27B-Q4_K_S",
         "input": [
           {
             "role": "user",
@@ -214,7 +214,7 @@
       "kind": "dsml",
       "endpoint": "/v1/responses",
       "payload": {
-        "model": "Qwen3.6-27B-Q4_K_S.gguf",
+        "model": "Qwen3.6-27B-Q4_K_S",
         "input": [
           {
             "role": "user",

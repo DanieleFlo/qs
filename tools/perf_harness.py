@@ -24,6 +24,7 @@ import statistics
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -48,7 +49,7 @@ MTP_DEPTH_2K_SUITE = "mtp-depth-2k"
 MTP_DEPTH_BOUNDARY_SUITE = "mtp-depth-boundary"
 MTP_WEAKEST_CONFIRM_SUITE = "mtp-weakest-confirm"
 MTP_LONG_CONTEXT_SMOKE_SUITE = "mtp-long-context-smoke"
-MTP_DEPTH_28K_SUITE = "mtp-depth-28k"
+MTP_DEPTH_22K_SUITE = "mtp-depth-22k"
 MTP_THRESHOLD_SEARCH_SUITE = "mtp-threshold-search"
 MTP_THRESHOLD_MIDPOINT_SUITE = "mtp-threshold-midpoint"
 AGENT_DSML_BASELINE_SUITE = "agent-dsml-unconstrained-baseline"
@@ -1687,8 +1688,27 @@ def post_json_expect_http_error(
     )
 
 
+def advertised_model_id(payload: dict[str, Any]) -> str:
+    models = payload.get("data")
+    if not isinstance(models, list) or not models:
+        raise HarnessError("/v1/models returned no advertised models")
+    model_id = models[0].get("id") if isinstance(models[0], dict) else None
+    if not isinstance(model_id, str) or not model_id:
+        raise HarnessError("/v1/models returned an invalid model id")
+    return model_id
+
+
+def isolated_server_environment(
+    environment: dict[str, str], server_home: Path,
+) -> dict[str, str]:
+    """Return a server environment that cannot reuse the user's KV cache."""
+    isolated = dict(environment)
+    isolated["HOME"] = str(server_home)
+    return isolated
+
+
 def wait_for_server(base_url: str, process: subprocess.Popen[Any],
-                    log_path: Path, timeout: float) -> None:
+                    log_path: Path, timeout: float) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -1697,9 +1717,13 @@ def wait_for_server(base_url: str, process: subprocess.Popen[Any],
             )
             raise HarnessError(f"ds4-server exited during startup\n{tail}")
         try:
-            with urllib.request.urlopen(base_url + "/v1/models", timeout=1.0):
-                return
-        except (urllib.error.URLError, TimeoutError):
+            with urllib.request.urlopen(
+                base_url + "/v1/models", timeout=1.0
+            ) as response:
+                payload = json.load(response)
+            advertised_model_id(payload)
+            return payload
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
             time.sleep(0.1)
     raise HarnessError(f"ds4-server was not ready after {timeout:.1f}s")
 
@@ -2194,11 +2218,16 @@ def constrained_usage(response: dict[str, Any]) -> tuple[int, int]:
     return prompt, completion
 
 
-def completion_request(base_url: str, prompt: str, max_tokens: int,
-                       timeout: float,
-                       thinking: bool | None = None) -> dict[str, Any]:
+def completion_request(
+    base_url: str,
+    model_id: str,
+    prompt: str,
+    max_tokens: int,
+    timeout: float,
+    thinking: bool | None = None,
+) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "model": "deepseek-chat", "prompt": prompt,
+        "model": model_id, "prompt": prompt,
         "max_tokens": max_tokens, "temperature": 0,
         "seed": 424242, "stream": False,
     }
@@ -2232,7 +2261,10 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
         raise HarnessError(f"experiment already exists: {out_dir}")
     out_dir.mkdir(parents=True)
     log_path = out_dir / "server.log"
-    env = apply_env_overrides(os.environ, args.env)
+    server_home = tempfile.TemporaryDirectory(prefix="ds4-perf-server-home-")
+    env = isolated_server_environment(
+        apply_env_overrides(os.environ, args.env), Path(server_home.name)
+    )
     port = args.port
     if port == 0:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -2271,16 +2303,21 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
             command, cwd=ROOT, env=env, stdout=log_stream,
             stderr=subprocess.STDOUT, text=True,
         )
-        wait_for_server(base_url, process, log_path, args.startup_timeout)
+        models = wait_for_server(
+            base_url, process, log_path, args.startup_timeout
+        )
+        model_id = advertised_model_id(models)
 
         first_count, second_count = 32, 96
         first = completion_request(
-            base_url, server_curve_prompt(first_count, args.prompt_pattern),
+            base_url, model_id,
+            server_curve_prompt(first_count, args.prompt_pattern),
             1, args.timeout,
             args.thinking,
         )
         second = completion_request(
-            base_url, server_curve_prompt(second_count, args.prompt_pattern),
+            base_url, model_id,
+            server_curve_prompt(second_count, args.prompt_pattern),
             1, args.timeout,
             args.thinking,
         )
@@ -2306,7 +2343,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
             for _ in range(args.repetitions):
                 request_offset = log_path.stat().st_size
                 response = completion_request(
-                    base_url, prompt, generation_tokens, args.timeout,
+                    base_url, model_id, prompt, generation_tokens, args.timeout,
                     args.thinking,
                 )
                 actual_context, completion_count = completion_usage(response)
@@ -2366,6 +2403,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
                 process.wait(timeout=10)
         if log_stream is not None:
             log_stream.close()
+        server_home.cleanup()
 
     baseline_record = (
         None if args.baseline_run else read_json(Path(args.baseline), "baseline experiment")
@@ -2398,6 +2436,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
             "model": str(model.resolve()),
             "model_sha256": cached_sha256(model, Path(args.results)),
             "environment_overrides": dict(item.split("=", 1) for item in args.env),
+            "server_home_policy": "isolated-temporary",
             "command": command, "prompt_filler_token_intercept": intercept,
         },
         "hardware": hardware_profile(), "workloads": results,
@@ -2480,7 +2519,10 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
         raise HarnessError(f"experiment already exists: {out_dir}")
     out_dir.mkdir(parents=True)
     log_path = out_dir / "server.log"
-    env = apply_env_overrides(os.environ, args.env)
+    server_home = tempfile.TemporaryDirectory(prefix="ds4-perf-server-home-")
+    env = isolated_server_environment(
+        apply_env_overrides(os.environ, args.env), Path(server_home.name)
+    )
     env["DS4_SERVER_PHASE_PROFILE"] = "1"
     env["DS4_CONSTRAINT_MODE"] = args.constraint_mode
     port = args.port
@@ -2504,8 +2546,10 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
             command, cwd=ROOT, env=env, stdout=log_stream,
             stderr=subprocess.STDOUT, text=True,
         )
-        wait_for_server(base_url, process, log_path, args.startup_timeout)
-        model_name = model.name
+        models = wait_for_server(
+            base_url, process, log_path, args.startup_timeout
+        )
+        model_name = advertised_model_id(models)
         for probe in unsupported_probes:
             payload = json.loads(json.dumps(probe["payload"]))
             payload["model"] = model_name
@@ -2669,6 +2713,7 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
                 process.wait(timeout=10)
         if log_stream is not None:
             log_stream.close()
+        server_home.cleanup()
 
     baseline_record = (
         None if args.baseline_run else read_json(Path(args.baseline), "baseline experiment")
@@ -2735,6 +2780,7 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
                 "DS4_SERVER_PHASE_PROFILE": "1",
                 "DS4_CONSTRAINT_MODE": args.constraint_mode,
             },
+            "server_home_policy": "isolated-temporary",
             "command": command,
         },
         "hardware": hardware_profile(),
@@ -3296,7 +3342,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(CONTEXT_CURVE_SUITE, MTP_CONTEXT_CURVE_SUITE,
                  MTP_SHORT_REGRESSION_SUITE,
                  MTP_DEPTH_CROSSOVER_SUITE, MTP_LONG_CONTEXT_SMOKE_SUITE,
-                 MTP_DEPTH_2K_SUITE, MTP_DEPTH_28K_SUITE,
+                 MTP_DEPTH_2K_SUITE, MTP_DEPTH_22K_SUITE,
                  MTP_DEPTH_BOUNDARY_SUITE,
                  MTP_WEAKEST_CONFIRM_SUITE,
                  MTP_THRESHOLD_SEARCH_SUITE, MTP_THRESHOLD_MIDPOINT_SUITE,
@@ -3319,7 +3365,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-thinking", dest="thinking", action="store_false",
         help="explicitly disable thinking in completion requests",
     )
-    server_curve.set_defaults(thinking=None)
+    # Historically the harness smuggled this policy through the
+    # "deepseek-chat" alias even when Qwen was loaded. Keep the effective
+    # default, but make it an explicit request option tied to no model name.
+    server_curve.set_defaults(thinking=False)
     server_curve.add_argument("--repetitions", type=int, default=2)
     server_curve.add_argument("--minimum-completion-tokens", type=int, default=32)
     server_curve.add_argument(

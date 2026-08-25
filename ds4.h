@@ -59,6 +59,41 @@ typedef struct {
 typedef struct ds4_engine ds4_engine;
 typedef struct ds4_session ds4_session;
 
+/* Canonical model identity.
+ *
+ * GGUF architecture names describe a tensor layout, not a product name:
+ * both Qwen3.6 and Qwen3.8 currently use the "qwen35" architecture string.
+ * Frontends should use this descriptor instead of inferring the loaded model
+ * from file paths, display names, or a growing list of boolean predicates. */
+typedef enum {
+    DS4_MODEL_FAMILY_DEEPSEEK4 = 0,
+    DS4_MODEL_FAMILY_GLM_DSA,
+    DS4_MODEL_FAMILY_QWEN35,
+} ds4_model_family;
+
+typedef enum {
+    DS4_MODEL_DEEPSEEK_V4_FLASH = 0,
+    DS4_MODEL_DEEPSEEK_V4_PRO,
+    DS4_MODEL_GLM_52,
+    DS4_MODEL_QWEN36_27B_Q4_K_M,
+    DS4_MODEL_QWEN36_27B_Q4_K_S,
+    DS4_MODEL_QWEN38_27B_UD_Q4_K_S,
+} ds4_model_kind;
+
+typedef struct {
+    ds4_model_kind kind;
+    ds4_model_family family;
+    const char *architecture;
+    /* Diagnostic/artifact-facing name. It may include a file extension. */
+    const char *display_name;
+    /* Stable server API ID. It is independent from the GGUF filename. */
+    const char *canonical_id;
+    const char *default_mtp_path;
+    /* Relative to HOME. NULL disables the server's narrowly audited
+     * automatic session cache for this target. */
+    const char *managed_cache_subdir;
+} ds4_model_descriptor;
+
 typedef void (*ds4_session_progress_fn)(void *ud, const char *event, int current, int total);
 typedef bool (*ds4_session_cancel_fn)(void *ud);
 
@@ -230,6 +265,8 @@ uint32_t ds4_engine_prefill_chunk(ds4_engine *e);
 int ds4_engine_power(ds4_engine *e);
 int ds4_engine_set_power(ds4_engine *e, int power_percent);
 const char *ds4_engine_model_name(ds4_engine *e);
+const ds4_model_descriptor *ds4_engine_model_descriptor(ds4_engine *e);
+const ds4_model_descriptor *ds4_model_descriptor_for_id(const char *id);
 int ds4_engine_layer_count(ds4_engine *e);
 /* Decode gate schedule for the TP transport; see ds4_tp_identity. */
 void ds4_engine_tp_gate_schedule(ds4_engine *e,
@@ -297,7 +334,6 @@ int ds4_engine_collect_imatrix(ds4_engine *e,
 void ds4_engine_dump_tokens(ds4_engine *e, const ds4_tokens *tokens);
 int ds4_dump_text_tokenization(const char *model_path, const char *text, FILE *fp);
 int ds4_engine_head_test(ds4_engine *e, const ds4_tokens *prompt);
-bool ds4_engine_is_glm_dsa(ds4_engine *e);
 int ds4_engine_first_token_test(ds4_engine *e, const ds4_tokens *prompt);
 int ds4_engine_metal_graph_test(ds4_engine *e, const ds4_tokens *prompt);
 int ds4_engine_metal_graph_full_test(ds4_engine *e, const ds4_tokens *prompt);

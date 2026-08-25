@@ -292,7 +292,7 @@ class Qwen38CompatibilityTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("DS4_TEST_QWEN38_PERF") == "1",
                          "set DS4_TEST_QWEN38_PERF=1 for the CLI/server MTP gate")
-    def test_cli_and_server_mtp_short_large_allocation_regression(self) -> None:
+    def test_cli_and_server_mtp_performance_gate(self) -> None:
         runtime = self._local_runtime()
         server = PROJECT_ROOT / "ds4-server"
         if runtime is None or not server.is_file():
@@ -304,7 +304,7 @@ class Qwen38CompatibilityTests(unittest.TestCase):
 
         cli = subprocess.run(
             [str(binary), "-m", str(target), "--cuda", "--mtp",
-             "--ctx", "28768", "--nothink", "--temp", "0",
+             "--ctx", "22593", "--nothink", "--temp", "0",
              "-p", "ciao", "-n", "32"],
             cwd=PROJECT_ROOT, text=True, capture_output=True,
             timeout=600, check=False,
@@ -318,17 +318,17 @@ class Qwen38CompatibilityTests(unittest.TestCase):
         self.assertGreaterEqual(float(timing.group(2)), minimum_tps)
 
         with tempfile.TemporaryDirectory() as raw_results:
-            experiment_id = "qwen38-mtp-short-large-allocation-regression"
+            experiment_id = "qwen38-mtp-short-safe-allocation-regression"
             harness = subprocess.run(
                 [sys.executable, str(PROJECT_ROOT / "tools" / "perf_harness.py"),
                  "server-curve", "--id", experiment_id,
                  "--model", str(target), "--binary", str(server),
                  "--suite", "mtp-short-regression", "--mtp",
-                 "--context-alloc", "28768", "--no-thinking",
+                 "--context-alloc", "22593", "--no-thinking",
                  "--prompt-pattern", "technical-explanation",
                  "--minimum-completion-tokens", "32", "--repetitions", "2",
                  "--hypothesis",
-                 "Qwen3.8 short MTP remains fast with a 28768-token allocation",
+                 "Qwen3.8 short MTP remains fast with the 22K-safe allocation",
                  "--baseline-run", "--results", raw_results],
                 cwd=PROJECT_ROOT, text=True, capture_output=True,
                 timeout=1200, check=False,
@@ -352,7 +352,7 @@ class Qwen38CompatibilityTests(unittest.TestCase):
             for row in record["workloads"][0]["raw_rows"]
         ))
         command = record["provenance"]["command"]
-        self.assertEqual(command[command.index("--ctx") + 1], "28768")
+        self.assertEqual(command[command.index("--ctx") + 1], "22593")
 
     def test_qwen36_mtp_is_rejected_for_qwen38(self) -> None:
         runtime = self._local_runtime()
@@ -378,12 +378,21 @@ class Qwen38CompatibilityTests(unittest.TestCase):
             encoding="utf-8")
         agent_ssd_runner = (PROJECT_ROOT / "tests" / "run_agent_ssd_live.ps1").read_text(
             encoding="utf-8")
+        agent_server_launcher = (
+            PROJECT_ROOT / "agent" / "start-ds4-server.bat"
+        ).read_text(encoding="utf-8")
+        agent_profiler = (
+            PROJECT_ROOT / "tools" / "profile_agent_dsml_story.py"
+        ).read_text(encoding="utf-8")
         self.assertIn('"Qwen3.8-27B-UD-Q4_K_S.gguf"', server)
-        self.assertIn('.ds4/qwen38-ud-q4ks-kv', server)
+        self.assertIn('.canonical_id = "Qwen3.8-27B-UD-Q4_K_S"', engine)
+        self.assertIn('.ds4/qwen38-ud-q4ks-kv', engine)
         self.assertIn("SERVER_MODEL_SYNTAX_QWEN", server)
         self.assertIn("render_qwen_chat_prompt_text", server)
         self.assertIn("append_qwen_agentic_scope_instruction", server)
-        self.assertIn("ds4_engine_is_qwen(engine)", server)
+        self.assertIn("ds4_engine_model_descriptor(engine)", server)
+        self.assertIn("DS4_MODEL_FAMILY_QWEN35", server)
+        self.assertIn("ds4_engine_model_descriptor(ds4_engine *e)", engine)
         self.assertIn("bool ds4_engine_is_qwen(ds4_engine *e)", engine)
         self.assertIn("ds4_engine_is_qwen(engine)", agent)
         self.assertIn("ds4_engine_is_qwen_q4_k_s(w->engine)", agent)
@@ -391,6 +400,11 @@ class Qwen38CompatibilityTests(unittest.TestCase):
         self.assertIn("ds4_engine_is_qwen_q4_k_s(engine)", checkpoint)
         self.assertIn("mtp-Qwen3.8-27B-Q4_0.gguf", checkpoint_runner)
         self.assertIn("--model-id $ModelId", agent_ssd_runner)
+        self.assertIn("--ctx 22593", agent_server_launcher)
+        self.assertNotIn("--ctx 24768", agent_server_launcher)
+        self.assertIn(
+            'default="Qwen3.6-27B-Q4_K_S"', agent_profiler
+        )
 
     @unittest.skipUnless(os.environ.get("DS4_TEST_QWEN38_SHA") == "1",
                          "set DS4_TEST_QWEN38_SHA=1 for the 16.7 GB checksum gate")
