@@ -68,6 +68,9 @@ static int check_q6k_matmul(void) {
     ds4_gpu_tensor *x = ds4_gpu_tensor_alloc(sizeof(input));
     ds4_gpu_tensor *out = ds4_gpu_tensor_alloc(sizeof(actual));
     int rc = 1;
+    /* This is an exact Q6_K kernel oracle. The production Q8_1+residual path
+     * is deliberately approximate and has its own model-level parity gates. */
+    setenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8", "1", 1);
     if (x && out && ds4_gpu_set_model_map(weights, sizeof(weights)) &&
         ds4_gpu_tensor_write(x, 0, input, sizeof(input)) &&
         ds4_gpu_matmul_quant_tensor(out, weights, sizeof(weights), 0, 14u,
@@ -84,6 +87,7 @@ static int check_q6k_matmul(void) {
             }
         }
     }
+    unsetenv("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8");
     ds4_gpu_tensor_free(out);
     ds4_gpu_tensor_free(x);
     return rc;

@@ -5,9 +5,10 @@ safe to commit and use in release QA.
 
 - `glm52-openrouter-100`: 100 GLM 5.2 OpenRouter continuations with API
   top-logprob slices.
-- `flash`: 100 DeepSeek V4 Flash official continuations with API top-logprob
-  slices.
-- `pro`: 100 DeepSeek V4 PRO official continuations with API top-logprob
+- `flash`: 100 DeepSeek V4 Flash 0731 continuations from the official DeepSeek
+  API, with API top-logprob slices.
+- `pro`: 100 DeepSeek V4 PRO preview continuations with API top-logprob slices.
+- `pro-0813`: 100 DeepSeek V4 PRO 0813 continuations with API top-logprob
   slices.
 - `qwen36-27b`: shared English Qwen3.6 input corpus and pinned target
   manifest; reviewed output uses the same prompts/continuations/responses

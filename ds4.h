@@ -192,6 +192,7 @@ typedef struct {
     bool glm_mtp_timing;
     bool dspark;
     bool dspark_strict;
+    bool dspark_exact_sampling;
     bool dspark_confidence_threshold_set;
     bool cuda_tensor_parallel;
     bool ssd_streaming;
@@ -200,6 +201,8 @@ typedef struct {
     bool inspect_only;
     /* Multi-GPU placement uses this to price per-layer KV storage. */
     int placement_ctx_hint;
+    /* Number of independently allocated session graphs/caches to reserve. */
+    int placement_session_count_hint;
     /* Server batch mode serializes execution and can share prefill scratch. */
     bool share_session_prefill_workspace;
     bool first_token_test;
@@ -523,6 +526,30 @@ int ds4_test_sample_logits(const float *logits, uint32_t n_vocab,
                            float temperature, int top_k,
                            float top_p, float min_p, uint64_t *rng,
                            float *prob_scratch);
+int ds4_test_sampling_probabilities(const float *logits, uint32_t n_vocab,
+                                    float temperature, int top_k,
+                                    float top_p, float min_p, float *probs);
+int ds4_test_speculative_sample(const float *target_logits,
+                                const float *draft_logits,
+                                uint32_t n_vocab,
+                                float temperature,
+                                int top_k,
+                                float top_p,
+                                float min_p,
+                                uint64_t *rng,
+                                float *target_probs,
+                                float *draft_probs);
+int ds4_test_speculative_delta_sample(const float *target_logits,
+                                      uint32_t n_vocab,
+                                      int draft_token,
+                                      float temperature,
+                                      int top_k,
+                                      float top_p,
+                                      float min_p,
+                                      uint64_t *rng,
+                                      float *target_probs);
+int ds4_test_argmax_excluding_logits(const float *logits, uint32_t n_vocab,
+                                     int excluded_id);
 uint64_t ds4_test_mixed_native_count(void);
 int ds4_test_qwen35_layer_is_recurrent(uint32_t layer);
 bool ds4_test_constraint_trie_mask(void);
@@ -569,6 +596,15 @@ int ds4_session_eval_speculative_sample(
         int max_tokens, int eos_token,
         int *accepted, int accepted_cap, int *next_token,
         char *err, size_t errlen);
+/* Evaluate one already-sampled target token and speculatively extend it.
+ * Positive-temperature DSpark normally commits greedily verified draft
+ * tokens; dspark_exact_sampling selects exact stochastic p/q acceptance. */
+int ds4_session_eval_speculative(ds4_session *s, int first_token,
+                                 int max_tokens, int eos_token,
+                                 float temperature, int top_k,
+                                 float top_p, float min_p, uint64_t *rng,
+                                 int *accepted, int accepted_cap,
+                                 char *err, size_t errlen);
 /* TP worker side of a mirrored speculative-verify block: run its half of the
  * batch verify for KV side effects, then obey the leader's commit frame
  * (keep, or roll back and replay). Only called from ds4_tp_worker_run. */

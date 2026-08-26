@@ -222,6 +222,12 @@ static std::string render_glm_ds4_prompt(const std::string &prompt) {
            "<|assistant|><think></think>";
 }
 
+static std::string render_deepseek_ds4_prompt(const std::string &prompt) {
+    return std::string(u8"<\uFF5Cbegin\u2581of\u2581sentence\uFF5C>"
+                       u8"<\uFF5CUser\uFF5C>") + prompt +
+           u8"<\uFF5CAssistant\uFF5C></think>";
+}
+
 static std::string render_template_prompt(
         const char *tmpl,
         const std::string &prompt,
@@ -400,7 +406,8 @@ int main(int argc, char **argv) {
     if ((!token_manifest_mode && argc != 4 && argc != 5 && argc != 6) ||
         (token_manifest_mode && argc != 4 && argc != 5)) {
         std::fprintf(stderr,
-                     "usage: %s MODEL manifest.tsv OUT.tsv [ctx] [auto|glm-ds4]\n"
+                     "usage: %s MODEL manifest.tsv OUT.tsv [ctx] "
+                     "[auto|deepseek-ds4|glm-ds4]\n"
                      "       %s --token-manifest MODEL cases.tsv [ctx]\n",
                      argv[0],
                      argv[0]);
@@ -413,8 +420,9 @@ int main(int argc, char **argv) {
     int ctx_size = argc > base + (token_manifest_mode ? 2 : 3) ? std::atoi(argv[base + (token_manifest_mode ? 2 : 3)]) : 4096;
     if (ctx_size < 1024) ctx_size = 1024;
     const std::string template_mode = !token_manifest_mode && argc == 6 ? argv[5] : "auto";
-    if (template_mode != "auto" && template_mode != "glm-ds4") {
-        die("template mode must be auto or glm-ds4");
+    if (template_mode != "auto" && template_mode != "deepseek-ds4" &&
+        template_mode != "glm-ds4") {
+        die("template mode must be auto, deepseek-ds4, or glm-ds4");
     }
 
     ggml_backend_load_all();
@@ -508,6 +516,13 @@ int main(int argc, char **argv) {
         bool used_template = false;
         if (template_mode == "auto" && tmpl) {
             rendered = render_template_prompt(tmpl, prompt_text, &used_template);
+        }
+        if (template_mode == "deepseek-ds4") {
+            rendered = render_deepseek_ds4_prompt(prompt_text);
+            used_template = true;
+        } else if (template_mode == "glm-ds4") {
+            rendered = render_glm_ds4_prompt(prompt_text);
+            used_template = true;
         }
         if (!used_template) {
             if (template_mode == "auto" && !warned_template_fallback) {

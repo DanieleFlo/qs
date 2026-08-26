@@ -3,7 +3,7 @@ param(
     [string]$MtpModel = "",
     [ValidateSet("all", "cold", "warm")]
     [string]$MtpPhase = "all",
-    [int]$Context = 30000,
+    [int]$Context = 22593,
     [int]$Port = 18082,
     [ValidateSet("all", "system", "hds", "skill")]
     [string]$Group = "all"

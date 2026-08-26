@@ -1,7 +1,7 @@
 """Live, model-backed adversarial tests for constrained DSML and JSON output.
 
 The suite is opt-in because every matrix case performs real inference. Start the
-server with exactly ``--ctx 32768`` and set ``DS4_CONSTRAINED_BASE_URL``.  Each
+server with exactly ``--ctx 22593`` and set ``DS4_CONSTRAINED_BASE_URL``.  Each
 model scenario runs twice: once without history and once after a synthetic,
 multi-message history whose serialized UTF-8 size is kept below 18,000 bytes.
 That byte ceiling is also a conservative tokenizer-independent upper bound below
@@ -19,8 +19,8 @@ from urllib.request import Request, urlopen
 
 BASE_URL = os.environ.get("DS4_CONSTRAINED_BASE_URL", "").rstrip("/")
 MODEL = os.environ.get("DS4_CONSTRAINED_MODEL", "Qwen3.6-27B-Q4_K_S")
-SERVER_CONTEXT_TOKENS = int(os.environ.get("DS4_CONSTRAINED_SERVER_CTX", "32768"))
-REQUIRED_SERVER_CONTEXT_TOKENS = 32768
+SERVER_CONTEXT_TOKENS = int(os.environ.get("DS4_CONSTRAINED_SERVER_CTX", "22593"))
+REQUIRED_SERVER_CONTEXT_TOKENS = 22593
 HISTORY_MAX_UTF8_BYTES = 18_000
 HTTP_TIMEOUT_SECONDS = 900
 
@@ -551,7 +551,7 @@ class ConstrainedJsonFixtureTests(unittest.TestCase):
         self.assertTrue(any("</parameter>" in message["content"] for message in history))
 
     def test_live_contract_fixes_context_and_output_budgets(self) -> None:
-        self.assertEqual(REQUIRED_SERVER_CONTEXT_TOKENS, 32768)
+        self.assertEqual(REQUIRED_SERVER_CONTEXT_TOKENS, 22593)
         messages = variants("final request")[1][1]
         tool_payload = responses_tool_payload(
             messages, function_tool("get_weather", "weather", WEATHER_SCHEMA)
@@ -593,7 +593,7 @@ class ConstrainedJsonLiveTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if SERVER_CONTEXT_TOKENS != REQUIRED_SERVER_CONTEXT_TOKENS:
             raise AssertionError(
-                "live constrained tests require the server to use --ctx 32768; "
+                "live constrained tests require the server to use --ctx 22593; "
                 f"DS4_CONSTRAINED_SERVER_CTX={SERVER_CONTEXT_TOKENS}"
             )
         # Fail before expensive inference when the endpoint is unavailable.

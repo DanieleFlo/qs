@@ -1434,7 +1434,6 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
         const double load_ms = (kv_now_sec() - load_t0) * 1000.0;
         kc->continued_last_store_tokens = loaded;
         const char *key_kind = ds4_kvstore_key_kind(hdr.ext_flags);
-        bool consumed = false;
         const bool persistent_agent_checkpoint =
             hdr.reason == DS4_KVSTORE_REASON_AGENT_SYSTEM ||
             hdr.reason == DS4_KVSTORE_REASON_AGENT_SESSION ||
@@ -1442,7 +1441,6 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
         if (!persistent_agent_checkpoint && kc->opt.cold_max_tokens > 0 &&
             loaded > kc->opt.cold_max_tokens) {
             unlink(path);
-            consumed = true;
             kv_logf(kc, DS4_KVSTORE_LOG_KVCACHE,
                     "%s: kv cache hit text%s%s tokens=%d text=%u quant=%u key=%s load=%.1f ms consumed file=%s",
                     kv_log_name(kc),
@@ -1464,7 +1462,6 @@ int ds4_kvstore_try_load_text(ds4_kvstore *kc,
             result->quant_bits = hdr.quant_bits;
             result->ext_flags = hdr.ext_flags;
             result->load_ms = load_ms;
-            result->consumed = consumed;
             result->path = kv_xstrdup(path);
         }
     }

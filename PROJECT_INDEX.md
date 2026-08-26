@@ -206,11 +206,15 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 
 - `Makefile` — selezione piattaforma, compilazione C/Objective-C/CUDA/ROCm,
   gate rapidi e confronto model-backed `perf-direction-ab` in un comando,
-  linking, target dei binari e suite di test.
+  linking, target dei binari e suite di test; espone anche la parita' CUDA
+  isolata del backend MMQ vendorizzato tramite `test-mmq-parity`.
 - `download_model.sh` — download dei modelli e support model conosciuti dal
-  progetto.
+  progetto: DeepSeek Flash 0731/DSpark, PRO 0813, GLM e gli artefatti Qwen3.6
+  e Qwen3.8 fissati con revisione e checksum.
 - `ds4_cli.c` — eseguibile `ds4`: parsing opzioni, modalità one-shot e REPL,
-  prompt, generazione, sampling, perplexity e dump diagnostici.
+  prompt, generazione, sampling, perplexity e dump diagnostici. `--mtp` senza
+  argomento seleziona il sidecar Qwen auditato; `--mtp FILE` e l'alias
+  `--mtp-model FILE` scelgono un support model esplicito, incluso DSpark.
 - `ds4_server.c` — eseguibile `ds4-server`: API HTTP compatibili, code, worker,
   session batching, streaming, tool-call mapping e policy della KV su disco;
   espone per Qwen ID API canonici senza l'estensione `.gguf`, mantenendo gli ID
@@ -219,7 +223,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   nomi e le frame gerarchiche delle skill. Per Qwen3.6 Q4_K_S abilita
   automaticamente una cache durevole con budget condiviso fra sessioni,
   prefissi di sistema e checkpoint delle skill; le history Responses vengono
-  canonicalizzate senza reasoning storico prima della persistenza.
+  canonicalizzate senza reasoning storico prima della persistenza. La
+  canonicalizzazione accetta la riscrittura dell'ultimo token BPE Qwen solo se
+  il KV live conserva l'intero prompt byte per byte; le continuazioni agentiche
+  riconoscono il tail tool anche dopo lo scope di sistema sintetico.
 - `ds4_agent.c` — eseguibile `ds4-agent`: TUI, transcript, sessioni persistenti,
   ciclo tool, file/shell/web tools e orchestrazione della generazione.
 - `ds4_bench.c` — benchmark di prefill/decode a diverse frontiere di contesto;
@@ -300,6 +307,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   comprende inoltre timeline, logits, stato GDN, KV full-attention e stato MTP,
   e rifiuta il restore quando payload e runtime non concordano sulla modalita'
   MTP.
+  Il batching CUDA nativo basato sul raw-KV DeepSeek e' separato dal grafo
+  ibrido Qwen: Qwen usa il fallback multi-sessione serializzato e corretto finche'
+  non esiste un encoder batch dedicato, evitando accessi al raw-KV non allocato.
   Il fork Qwen in memoria resta escluso. Lo scheduler distingue esplicitamente
   decode, prefill, verifica MTP, draft, replay e catch-up; il profiler Qwen
   opzionale emette tempi strutturati attention/FFN per fase e layer, consumati
@@ -349,7 +359,12 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   range device distinti per target e sidecar, kernel warp-8 Q4_0 del drafter e
   Q4_K/Q5_K/Q6_K microbatch del verifier. I Qwen single-GPU che entrano in VRAM sono copiati per
   default sul device; `DS4_CUDA_NO_MODEL_COPY=1` conserva il percorso host-map
-  diagnostico.
+  diagnostico. I matmul Q8_0, inclusi quelli usati dal support model Qwen MTP,
+  possono usare il tier MMQ upstream; i kernel del decode condividono lo stream
+  coordinato necessario alla cattura e al replay dei grafi CUDA.
+- `cuda/mmq/` — port locale e documentato dei matmul quantizzati CUDA upstream:
+  ABI C sottile, repack/allineamento, dense e MoE Q8/Q2/Q4/IQ2/MXFP4, con
+  provenienza in `VENDOR.md` e test standalone nella sottodirectory `test/`.
 - `ds4_iq2_tables_cuda.inc` — tabelle costanti per dequantizzazione/calcolo IQ2
   nel backend CUDA.
 
@@ -478,7 +493,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   accettazione completa, rifiuto e rollback parziale.
 - `tests/test_constrained_json_api.py` — suite HTTP live e model-backed per
   masking DSML/JSON Schema: matrice senza/con history sotto 20k token, prompt
-  di injection ostili, duplicati, Unicode/escape e validazione degli output.
+  di injection ostili, duplicati, Unicode/escape e validazione degli output;
+  usa un'allocazione CUDA Qwen di 22.593 token per restare sotto il limite VRAM
+  osservato oltre la frontiera effettiva di 22K.
 - `tests/test_perf_harness.py` e `tests/test_jsonschemabench_subset.py` — test
   dell'harness constrained, delle metriche di fase e dell'import esterno pinned.
 - `tests/test-vectors/` — prompt corti/lunghi, vettori ufficiali e golden locali
@@ -495,29 +512,41 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   dequantizzazione CPU.
 - `tests/glm_long_context_smoke.sh` — integrazione GLM su prompt lunghi.
 - `tests/test_server_batching.py` — concorrenza e batching osservati tramite
-  API server.
+  API server, con coppie deterministiche a lunghezze corte, medie e lunghe sia
+  non-streaming sia streaming.
 - `tests/test_agentic_api.py` — suite HTTP sottile e concatenabile per API
   Responses agentiche: compatibilità standard, capability dinamiche, masking
   avversariale, distinzione tool/skill, nesting/ricorsione, restore e rifiuto
-  atomico dei checkpoint mancanti, corrotti o troncati.
+  atomico dei checkpoint mancanti, corrotti o troncati; i casi che verificano
+  un nome preciso usano `tool_choice=required` con un unico nome consentito,
+  separando il protocollo dalla propensione del modello a chiamare un tool.
 - `tests/test_agentic_checkpoint.c` — gate model-backed CUDA Q4_K_S per
   checkpoint/return: casi lunghi 10k, confronto full-vocabulary bit-exact,
   isolamento sessioni, cancellazione, nesting, context boundary, rollback MTP
   e ripristino del payload generale fra oggetti sessione distinti.
 - `tests/run_agentic_checkpoint.sh` — runner riproducibile del gate precedente
-  nelle varianti target-only e target con sidecar MTP, con report JSON e log.
+  nelle varianti target-only e target con sidecar MTP, con report JSON e log;
+  `DS4_AGENTIC_CHECKPOINT_BIN` permette di provare una build isolata senza
+  sovrascrivere l'eseguibile locale preesistente.
+- `tests/ds4_test.c --mtp-verify-depth` — verifica model-backed di accettazione,
+  rollback e identità autoregressiva MTP; centralizza il contesto predefinito
+  Qwen a 22.593 token, ancora sovrascrivibile con `DS4_TEST_MTP_CTX`.
 - `tests/test_agent_ssd_live.py`, `tests/run_agent_ssd_live.ps1` e
   `tests/agent_ssd_live/ssd-canary.txt` — gate live sul runtime installato in
   `/agent` e sul suo prompt `bootstrap-wiki` da oltre 10k token: matrice degli
-  anchor SSD target-only/MTP nelle due direzioni, regressione con un vecchio
-  anchor BOS da un token e save/restore request-local dei checkpoint HDS
-  `.dsh` e deep-skill `.dsk` in un workroot isolato.
+  anchor SSD target-only/MTP nelle due direzioni, regressione con un anchor di
+  sistema ChatML deliberatamente corto e save/restore request-local dei checkpoint HDS
+  `.dsh` e deep-skill `.dsk` in un workroot isolato; il runner usa la stessa
+  allocazione Qwen 22K-safe di 22.593 token.
 - `tests/test_qwen36_fixtures.py`, `tests/test_qwen36_equivalence.py`,
   `tests/test_qwen36_numerics.py` — schema, staging, checksum, metriche/gate e
   classificazione sintetica dell'inviluppo numerico Qwen3.6.
 - `tests/qwen_numerics_probe.c` — oracle CPU indipendente per GDN, full
   attention Qwen e matvec Q4_K/Q5_K/Q6_K contro i kernel CUDA DS4, incluse le
   politiche Q8_1 e Q8_1-R8; eseguibile con `make qwen-numerics CUDA_ARCH=sm_86`.
+- `cuda/mmq/test/test_mmq_parity.cu` — parita' sintetica CPU/CUDA delle primitive
+  dense, MoE, pair e vector MMQ; eseguibile con
+  `make test-mmq-parity CUDA_ARCH=sm_86`.
 - `tests/test_sampling.c` — comportamento deterministico e filtri del sampling.
 - `tests/test_gpu_args.c`, `tests/test_gpu_args_cli.sh` — parsing e propagazione
   della configurazione GPU.

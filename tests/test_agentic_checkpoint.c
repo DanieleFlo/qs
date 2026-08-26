@@ -490,7 +490,7 @@ int main(void) {
                                     NULL, true,
                                     DS4_KVSTORE_REASON_ALL) == portable_live->len,
           "Qwen visible session cache reload failed");
-    CHECK(!reload_result.consumed,
+    CHECK(reload_result.path && access(reload_result.path, F_OK) == 0,
           "persistent Qwen session cache was consumed on reload");
     CHECK(tokens_equal(ds4_session_tokens(isolated), portable_live),
           "reloaded Qwen visible session tokens differ");

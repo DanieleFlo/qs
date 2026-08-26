@@ -54,6 +54,7 @@ def response_payload(
     operation: str | None = None,
     skill_call_id: str | None = None,
     max_output_tokens: int = 160,
+    tool_choice: str = "auto",
 ) -> dict:
     agentic: dict = {
         "allowed_tools": allowed_tools,
@@ -68,7 +69,7 @@ def response_payload(
                                 "Qwen3.6-27B-Q4_K_S"),
         "input": input_items,
         "tools": REGISTRY,
-        "tool_choice": "auto",
+        "tool_choice": tool_choice,
         "temperature": 0,
         "max_output_tokens": max_output_tokens,
         "stream": False,
@@ -249,6 +250,7 @@ class AgenticResponsesApiTests(unittest.TestCase):
                 [user_item("Call safe_tool exactly.")],
                 allowed_tools=["safe_tool"],
                 allowed_skills=[],
+                tool_choice="required",
             )
         )
         first = require_single_call(first_response, "safe_tool")
@@ -257,6 +259,7 @@ class AgenticResponsesApiTests(unittest.TestCase):
                 [call_output(first["call_id"], "Now call safe_tool/child exactly.")],
                 allowed_tools=["safe_tool/child"],
                 allowed_skills=[],
+                tool_choice="required",
             )
         )
         require_single_call(second_response, "safe_tool/child")
@@ -270,8 +273,10 @@ class AgenticResponsesApiTests(unittest.TestCase):
             [user_item("Call exactly safe_tool now. Do not answer in prose.")],
             allowed_tools=["safe_tool"],
             allowed_skills=[],
+            tool_choice="required",
         )
         payload.pop("agentic")
+        payload["tools"] = [function_tool("safe_tool")]
         response = post_response(payload)
         require_single_call(response, "safe_tool")
         if CHECKPOINT_ROOT:
@@ -351,6 +356,7 @@ class AgenticResponsesApiTests(unittest.TestCase):
                 [user_item("Call skill-A exactly.")],
                 allowed_tools=[],
                 allowed_skills=["skill-A"],
+                tool_choice="required",
             )
         )
         first = require_single_call(first_response, "skill-A")
@@ -364,6 +370,7 @@ class AgenticResponsesApiTests(unittest.TestCase):
                 child_history,
                 allowed_tools=["skill-A/read"],
                 allowed_skills=["skill-B"],
+                tool_choice="required",
             )
         )
         second = require_single_call(second_response, "skill-B")
@@ -399,6 +406,7 @@ class AgenticResponsesApiTests(unittest.TestCase):
                 [user_item("Call skill-A exactly.")],
                 allowed_tools=[],
                 allowed_skills=["skill-A"],
+                tool_choice="required",
             )
         )
         outer = require_single_call(outer_response, "skill-A")
@@ -411,6 +419,7 @@ class AgenticResponsesApiTests(unittest.TestCase):
                 history,
                 allowed_tools=[],
                 allowed_skills=["skill-A"],
+                tool_choice="required",
             )
         )
         inner = require_single_call(inner_response, "skill-A")

@@ -544,7 +544,7 @@ static int run_sampled_generation(ds4_engine *engine, const cli_config *cfg, con
     uint64_t rng = cfg->gen.seed ? cfg->gen.seed :
         ((uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32) ^ (uint64_t)clock());
     int generated = 0;
-    const bool mtp_speculative =
+    const bool qwen_mtp_speculative = ds4_engine_is_qwen(engine) &&
         ds4_engine_mtp_draft_tokens(engine) > 1 &&
         getenv("DS4_MTP_SPEC_DISABLE") == NULL;
     bool have_speculative_next = false;
@@ -563,7 +563,7 @@ static int run_sampled_generation(ds4_engine *engine, const cli_config *cfg, con
 
         int toks[17];
         int ntok = 0;
-        if (mtp_speculative) {
+        if (qwen_mtp_speculative) {
             int next_token = -1;
             cli_dist_busy_set(cfg, true);
             ntok = ds4_session_eval_speculative_sample(
@@ -581,6 +581,21 @@ static int run_sampled_generation(ds4_engine *engine, const cli_config *cfg, con
             if (next_token >= 0) {
                 speculative_next = next_token;
                 have_speculative_next = true;
+            }
+        } else if (ds4_engine_mtp_draft_tokens(engine) > 1 &&
+            getenv("DS4_MTP_SPEC_DISABLE") == NULL) {
+            cli_dist_busy_set(cfg, true);
+            ntok = ds4_session_eval_speculative(
+                session, token, max_tokens - generated,
+                ds4_token_eos(engine), cfg->gen.temperature, 0,
+                cfg->gen.top_p, cfg->gen.min_p, &rng,
+                toks, (int)(sizeof(toks) / sizeof(toks[0])),
+                err, sizeof(err));
+            cli_dist_busy_set(cfg, false);
+            if (ntok < 0) {
+                fprintf(stderr, "ds4: decode failed: %s\n", err);
+                ds4_session_free(session);
+                return 1;
             }
         } else {
             size_t piece_len = 0;
@@ -1447,7 +1462,7 @@ static int run_chat_turn(ds4_engine *engine, cli_config *cfg, repl_chat *chat, c
     uint64_t rng = cfg->gen.seed ? cfg->gen.seed :
         ((uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32) ^ (uint64_t)clock());
     int generated = 0;
-    const bool mtp_speculative =
+    const bool qwen_mtp_speculative = ds4_engine_is_qwen(engine) &&
         ds4_engine_mtp_draft_tokens(engine) > 1 &&
         getenv("DS4_MTP_SPEC_DISABLE") == NULL;
     bool have_speculative_next = false;
@@ -1470,7 +1485,7 @@ static int run_chat_turn(ds4_engine *engine, cli_config *cfg, repl_chat *chat, c
 
         int toks[17];
         int ntok = 0;
-        if (mtp_speculative) {
+        if (qwen_mtp_speculative) {
             int next_token = -1;
             cli_dist_busy_set(cfg, true);
             ntok = ds4_session_eval_speculative_sample(
@@ -1487,6 +1502,20 @@ static int run_chat_turn(ds4_engine *engine, cli_config *cfg, repl_chat *chat, c
             if (next_token >= 0) {
                 speculative_next = next_token;
                 have_speculative_next = true;
+            }
+        } else if (ds4_engine_mtp_draft_tokens(engine) > 1 &&
+            getenv("DS4_MTP_SPEC_DISABLE") == NULL) {
+            cli_dist_busy_set(cfg, true);
+            ntok = ds4_session_eval_speculative(
+                chat->session, token, max_tokens - generated,
+                ds4_token_eos(engine), cfg->gen.temperature, 0,
+                cfg->gen.top_p, cfg->gen.min_p, &rng,
+                toks, (int)(sizeof(toks) / sizeof(toks[0])),
+                err, sizeof(err));
+            cli_dist_busy_set(cfg, false);
+            if (ntok < 0) {
+                fprintf(stderr, "ds4: decode failed: %s\n", err);
+                return 1;
             }
         } else {
             size_t piece_len = 0;
@@ -1805,8 +1834,13 @@ static cli_config parse_options(int argc, char **argv) {
         } else if (!strcmp(arg, "-m") || !strcmp(arg, "--model")) {
             c.engine.model_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--mtp")) {
-            c.engine.mtp_auto = true;
-            c.engine.mtp_path = NULL;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                c.engine.mtp_auto = false;
+                c.engine.mtp_path = argv[++i];
+            } else {
+                c.engine.mtp_auto = true;
+                c.engine.mtp_path = NULL;
+            }
         } else if (!strcmp(arg, "--mtp-model")) {
             c.engine.mtp_auto = false;
             c.engine.mtp_path = need_arg(&i, argc, argv, arg);
@@ -1829,6 +1863,9 @@ static cli_config parse_options(int argc, char **argv) {
         } else if (!strcmp(arg, "--dspark-strict")) {
             c.engine.dspark = true;
             c.engine.dspark_strict = true;
+        } else if (!strcmp(arg, "--mtp-exact-sampling")) {
+            c.engine.dspark = true;
+            c.engine.dspark_exact_sampling = true;
         } else if (!strcmp(arg, "-n") || !strcmp(arg, "--tokens")) {
             c.gen.n_predict = parse_int(need_arg(&i, argc, argv, arg), arg);
         } else if (!strcmp(arg, "-c") || !strcmp(arg, "--ctx")) {

@@ -103,11 +103,14 @@ def run_scenario(log_path: Path, name: str, action) -> tuple[str, str]:
 
 
 def seed_short_agent_anchor(base_url: str, log_path: Path, model_id: str) -> None:
-    """Create the one-token system anchor that previously masked long prompts."""
+    """Create a deliberately short system anchor before the long agent prompt."""
     payload = json.dumps(
         {
             "model": model_id,
-            "messages": [{"role": "user", "content": "Reply SEED_OK."}],
+            "messages": [
+                {"role": "system", "content": "S"},
+                {"role": "user", "content": "Reply SEED_OK."},
+            ],
             "max_tokens": 16,
             "temperature": 0.0,
             "think": False,
@@ -122,10 +125,19 @@ def seed_short_agent_anchor(base_url: str, log_path: Path, model_id: str) -> Non
     with urllib.request.urlopen(request, timeout=300.0) as response:
         response.read()
     segment = read_log_from(log_path, offset)
+    boundary = re.search(r"agent-system boundary system_tokens=(\d+)", segment)
+    if boundary is None:
+        raise AssertionError("failed to identify the short agent-system anchor")
+    anchor_tokens = int(boundary.group(1))
+    if anchor_tokens <= 0 or anchor_tokens >= MIN_SYSTEM_TOKENS:
+        raise AssertionError(
+            f"short agent-system anchor has unexpected size: {anchor_tokens}"
+        )
     if not re.search(
-        r"kv cache stored tokens=1 .*reason=agent-system", segment
+        rf"kv cache stored tokens={anchor_tokens} .*reason=agent-system",
+        segment,
     ):
-        raise AssertionError("failed to seed the one-token agent-system anchor")
+        raise AssertionError("failed to store the short agent-system anchor")
 
 
 def assert_system_cache(
