@@ -12690,6 +12690,17 @@ typedef struct {
     size_t visible_len;
 } visible_live_state;
 
+/* Compact, resident Qwen frontier.  Full-attention KV rows are position
+ * addressed and remain in the session graph; this snapshot only carries the
+ * recurrent/MTP state needed to return to an earlier prefix without reading a
+ * complete KV payload from the disk cache. */
+typedef struct {
+    bool valid;
+    ds4_tokens tokens;
+    ds4_session_device_frontier *device_state;
+    ds4_session_snapshot state;
+} resident_kv_frontier;
+
 typedef struct skill_frame skill_frame;
 struct skill_frame {
     char *call_id;
@@ -12723,6 +12734,7 @@ struct server_slot {
     live_tool_state responses_live;
     live_tool_state anthropic_live;
     visible_live_state thinking_live;
+    resident_kv_frontier system_frontier;
     subagent_checkpoint subagent;
     ds4_tokens active_system_prefix;
     int continued_last_store_tokens;
@@ -13233,8 +13245,10 @@ static bool skill_frames_consume_through_locked(server *s, server_slot *slot,
 struct job {
     int fd;
     request req;
+    resident_kv_frontier response_frontier;
     bool done;
     bool cancelled;
+    bool response_published;
     pthread_mutex_t mu;
     pthread_cond_t cv;
     job *next;
@@ -13244,7 +13258,7 @@ static bool job_cancelled(void *ud) {
     job *j = ud;
     if (!j) return false;
     pthread_mutex_lock(&j->mu);
-    bool cancelled = j->cancelled;
+    bool cancelled = j->cancelled && !j->response_published;
     pthread_mutex_unlock(&j->mu);
     return cancelled;
 }
@@ -13524,6 +13538,157 @@ static void visible_live_free(visible_live_state *st) {
     if (!st) return;
     visible_live_clear_locked(st);
     memset(st, 0, sizeof(*st));
+}
+
+static void job_mark_response_published(job *j) {
+    if (!j) return;
+    pthread_mutex_lock(&j->mu);
+    j->response_published = true;
+    pthread_mutex_unlock(&j->mu);
+}
+
+static bool job_response_published(job *j) {
+    if (!j) return false;
+    pthread_mutex_lock(&j->mu);
+    bool published = j->response_published;
+    pthread_mutex_unlock(&j->mu);
+    return published;
+}
+
+static void resident_kv_frontier_clear(resident_kv_frontier *frontier) {
+    if (!frontier) return;
+    frontier->valid = false;
+    ds4_tokens_free(&frontier->tokens);
+    ds4_session_device_frontier_free(frontier->device_state);
+    frontier->device_state = NULL;
+    ds4_session_snapshot_free(&frontier->state);
+}
+
+static uint64_t resident_kv_frontier_bytes(
+        const resident_kv_frontier *frontier) {
+    if (!frontier) return 0;
+    uint64_t device = ds4_session_device_frontier_bytes(
+        frontier->device_state);
+    return device ? device : frontier->state.len;
+}
+
+static const char *resident_kv_frontier_location(
+        const resident_kv_frontier *frontier) {
+    return frontier && frontier->device_state ? "vram" : "host";
+}
+
+static bool tokens_start_with(const ds4_tokens *tokens,
+                              const ds4_tokens *prefix) {
+    if (!tokens || !prefix || prefix->len <= 0 || tokens->len < prefix->len)
+        return false;
+    return memcmp(tokens->v, prefix->v,
+                  (size_t)prefix->len * sizeof(prefix->v[0])) == 0;
+}
+
+static bool resident_kv_frontier_matches(
+        const resident_kv_frontier *frontier,
+        const ds4_tokens *prefix,
+        const ds4_tokens *prompt) {
+    if (!frontier || !frontier->valid || !prefix ||
+        frontier->tokens.len != prefix->len ||
+        !tokens_start_with(&frontier->tokens, prefix)) {
+        return false;
+    }
+    return !prompt || tokens_start_with(prompt, prefix);
+}
+
+/* ds4_session_save_skill_state() is deliberately a compact Qwen checkpoint:
+ * it omits position-addressed full-attention rows and serializes only the
+ * recurrent frontier, logits, and MTP state.  Back it with memory here so the
+ * hot system prompt never has to make a round trip through the SSD cache. */
+static bool resident_kv_frontier_capture(ds4_session *session,
+                                         resident_kv_frontier *frontier,
+                                         bool prefer_device,
+                                         char *err, size_t errlen) {
+    if (!session || !frontier) return false;
+    frontier->valid = false;
+    if (prefer_device) {
+        if (ds4_session_capture_device_frontier(session,
+                                                &frontier->device_state,
+                                                err, errlen) == 0) {
+            ds4_tokens_copy(&frontier->tokens, ds4_session_tokens(session));
+            frontier->valid = true;
+            return true;
+        }
+
+        /* Device allocation can legitimately fail under a tight multi-slot
+         * VRAM budget. Release a partial allocation and retain the host-RAM
+         * compact checkpoint as a correctness fallback. */
+        ds4_session_device_frontier_free(frontier->device_state);
+        frontier->device_state = NULL;
+    } else if (frontier->device_state) {
+        ds4_session_device_frontier_free(frontier->device_state);
+        frontier->device_state = NULL;
+    }
+    const uint64_t bytes = ds4_session_skill_state_bytes(session);
+    if (bytes == 0 || bytes > (uint64_t)SIZE_MAX) return false;
+    if (frontier->state.cap < bytes) {
+        uint8_t *ptr = realloc(frontier->state.ptr, (size_t)bytes);
+        if (!ptr) {
+            if (errlen) snprintf(err, errlen,
+                                 "out of memory for resident KV frontier");
+            return false;
+        }
+        frontier->state.ptr = ptr;
+        frontier->state.cap = bytes;
+    }
+
+    frontier->valid = false;
+    FILE *fp = fmemopen(frontier->state.ptr, (size_t)bytes, "wb");
+    if (!fp) {
+        if (errlen) snprintf(err, errlen,
+                             "failed to open resident KV memory stream");
+        return false;
+    }
+    uint64_t written = 0;
+    int rc = ds4_session_save_skill_state(session, fp, &written, NULL,
+                                           err, errlen);
+    if (fclose(fp) != 0 && rc == 0) {
+        if (errlen) snprintf(err, errlen,
+                             "failed to finalize resident KV frontier");
+        rc = 1;
+    }
+    if (rc != 0 || written != bytes) return false;
+
+    ds4_tokens_copy(&frontier->tokens, ds4_session_tokens(session));
+    frontier->state.len = bytes;
+    frontier->valid = true;
+    return true;
+}
+
+static bool resident_kv_frontier_restore(ds4_session *session,
+                                         const resident_kv_frontier *frontier,
+                                         char *err, size_t errlen) {
+    if (!session || !frontier || !frontier->valid) {
+        return false;
+    }
+    if (frontier->device_state) {
+        return ds4_session_restore_device_frontier(
+                   session, frontier->device_state, &frontier->tokens,
+                   err, errlen) == 0;
+    }
+    if (!frontier->state.ptr || frontier->state.len == 0 ||
+        frontier->state.len > (uint64_t)SIZE_MAX) return false;
+    FILE *fp = fmemopen(frontier->state.ptr,
+                        (size_t)frontier->state.len, "rb");
+    if (!fp) {
+        if (errlen) snprintf(err, errlen,
+                             "failed to open resident KV frontier");
+        return false;
+    }
+    int rc = ds4_session_load_skill_state(session, fp, &frontier->tokens,
+                                           NULL, err, errlen);
+    if (fclose(fp) != 0 && rc == 0) {
+        if (errlen) snprintf(err, errlen,
+                             "failed to close resident KV frontier");
+        rc = 1;
+    }
+    return rc == 0;
 }
 
 static void thinking_live_clear(server *s, server_slot *slot) {
@@ -15458,6 +15623,89 @@ static int server_session_sync(server *s, server_slot *slot,
            DS4_SESSION_SYNC_INTERRUPTED : 0;
 }
 
+#define RESIDENT_SYSTEM_MIN_TOKENS 128
+
+static bool resident_system_boundary_needs_sync(int live_pos,
+                                                int common,
+                                                int system_len) {
+    return live_pos != system_len || common != system_len;
+}
+
+static bool server_resident_frontier_capture(
+        server *s, server_slot *slot, resident_kv_frontier *frontier,
+        bool prefer_device,
+        char *err, size_t errlen) {
+    if (!s || !slot || !frontier || !server_prefill_enter(s, slot))
+        return false;
+    bool ok = resident_kv_frontier_capture(slot->session, frontier,
+                                           prefer_device,
+                                           err, errlen);
+    server_prefill_leave(s);
+    return ok;
+}
+
+static bool server_resident_frontier_restore(
+        server *s, server_slot *slot, const resident_kv_frontier *frontier,
+        char *err, size_t errlen) {
+    if (!s || !slot || !frontier || !server_prefill_enter(s, slot))
+        return false;
+    bool ok = resident_kv_frontier_restore(slot->session, frontier,
+                                           err, errlen);
+    server_prefill_leave(s);
+    return ok;
+}
+
+/* Capture the stable system boundary once per resident slot.  Splitting the
+ * first prefill at this boundary does not evaluate any token twice; it merely
+ * gives us a compact recurrent frontier that later chats sharing the same
+ * system prompt can restore from RAM instead of loading a multi-GiB KV file. */
+static bool ensure_resident_system_frontier(
+        server *s, server_slot *slot, const ds4_tokens *prompt,
+        char *err, size_t errlen) {
+    if (!s || !slot || !prompt || !ds4_engine_is_qwen(s->engine)) return false;
+    const ds4_tokens *system = &slot->active_system_prefix;
+    if (system->len < RESIDENT_SYSTEM_MIN_TOKENS ||
+        !tokens_start_with(prompt, system)) {
+        return false;
+    }
+    if (resident_kv_frontier_matches(&slot->system_frontier,
+                                     system, prompt)) {
+        return true;
+    }
+
+    int live_pos = ds4_session_pos(slot->session);
+    int system_common = ds4_session_common_prefix(slot->session, system);
+    if (resident_system_boundary_needs_sync(live_pos, system_common,
+                                            system->len)) {
+        /* The slot may still contain the health probe or a previous chat.  The
+         * cold-cache path below is about to build this exact prefix anyway, so
+         * establish the resident boundary here instead of silently skipping
+         * capture whenever the old live frontier is unrelated or longer. */
+        if (server_session_sync(s, slot, system, err, errlen) != 0)
+            return false;
+        live_pos = ds4_session_pos(slot->session);
+    }
+    if (live_pos != system->len ||
+        ds4_session_common_prefix(slot->session, system) != system->len) {
+        return false;
+    }
+
+    const double t0 = now_sec();
+    if (!server_resident_frontier_capture(s, slot, &slot->system_frontier,
+                                          false,
+                                          err, errlen)) {
+        return false;
+    }
+    server_log(DS4_LOG_KVCACHE,
+               "ds4-server: resident system frontier captured tokens=%d bytes=%.2f MiB location=%s %.3fms",
+               system->len,
+               (double)resident_kv_frontier_bytes(&slot->system_frontier) /
+                   (1024.0 * 1024.0),
+               resident_kv_frontier_location(&slot->system_frontier),
+               (now_sec() - t0) * 1000.0);
+    return true;
+}
+
 static bool append_rendered_suffix_to_live_session(server *s, server_slot *slot,
                                                    const char *suffix,
                                                    int *tokens_appended,
@@ -15849,6 +16097,13 @@ static bool should_remember_thinking_checkpoint(const request *r,
     return true;
 }
 
+static bool request_uses_prethinking_frontier(const request *r) {
+    if (!r || r->kind != REQ_CHAT) return false;
+    if (r->api == API_RESPONSES) return true;
+    return r->api == API_OPENAI &&
+           (r->has_tools || ds4_think_mode_enabled(r->think_mode));
+}
+
 static void log_tool_calls_summary(const char *ctx, const tool_calls *calls,
                                    bool responses_protocol) {
     if (!calls || calls->len == 0) return;
@@ -16054,18 +16309,14 @@ static bool canonical_rewrite_has_safe_prompt_prefix(const request *r,
 }
 
 /* In thinking mode without tools, old assistant reasoning is intentionally not
- * rendered back into later prompts.  The sampled live graph still contains the
- * reasoning bytes, so the next request would miss the session cache even though
- * the visible conversation prefix is logically the same.
+ * rendered back into later prompts.  After publishing the response, restore the
+ * pre-thinking device frontier and evaluate the visible assistant suffix below:
  *
  *   prompt-without-final-<think> + </think> + visible-content + eos
  *
  * is exactly the visible prefix that render_chat_prompt_text() will produce on
- * the next turn.  Do not rebuild the KV cache to erase hidden reasoning here:
- * that caused long post-answer pauses and threw away useful sampled state.
- * Instead, remember the visible bytes as a key for the current sampled frontier.
- * The next request can then continue from live KV while tokenizing only the new
- * visible suffix. */
+ * the next turn.  The visible-text binding lets that renderer reuse the cleaned
+ * live frontier even though the device session retains an empty think block. */
 static char *build_toolless_thinking_visible_text(const request *r,
                                                   const char *content) {
     if (!r || !r->prompt_text) return NULL;
@@ -16110,26 +16361,81 @@ static void remember_thinking_checkpoint(server *s, server_slot *slot,
 /* After a successful tool-call finish, make the live checkpoint match what the
  * next request will render.  Usually that is just the exact DSML remembered by
  * tool id.  If a client sends a tool call without an id we know, the fallback
- * renderer still builds valid DSML from JSON, and this function either rewrites
- * the short suffix in place or reloads an older disk checkpoint before replay. */
+ * renderer still builds valid DSML from JSON.  The fast path restores the
+ * request's pre-thinking device frontier and evaluates only the visible suffix;
+ * resident system state and then the disk cache are compatibility fallbacks. */
 static bool canonicalize_tool_checkpoint(server *s, server_slot *slot,
                                          job *j, const char *ctx,
                                          uint64_t trace_id, const char *content,
-                                         const char *reasoning, const tool_calls *calls) {
-    if (!j->req.prompt_text) return false;
-    if (j->req.api != API_RESPONSES && (!calls || calls->len == 0)) return false;
+                                         const char *reasoning,
+                                         const tool_calls *calls,
+                                         const char *rendered_override,
+                                         const resident_kv_frontier *response_frontier) {
+    /* Hard ordering invariant: neither Responses nor chat/completions may hold
+     * back their terminal event/body for checkpoint cleanup. */
+    if (!job_response_published(j)) return false;
+    if (!rendered_override && !j->req.prompt_text) return false;
+    if (!rendered_override && j->req.api != API_RESPONSES &&
+        (!calls || calls->len == 0)) return false;
 
-    char *suffix_text = j->req.api == API_RESPONSES ?
-        build_responses_visible_assistant_suffix(&j->req, content, NULL, calls) :
-        build_tool_checkpoint_suffix(&j->req, content, reasoning, calls);
+    char *suffix_text = rendered_override ? NULL :
+        (j->req.api == API_RESPONSES ?
+         build_responses_visible_assistant_suffix(&j->req, content, NULL, calls) :
+         build_tool_checkpoint_suffix(&j->req, content, reasoning, calls));
     bool canonicalized = false;
-
     buf rendered = {0};
-    buf_puts(&rendered, j->req.prompt_text);
-    buf_puts(&rendered, suffix_text);
-
     ds4_tokens canonical = {0};
-    ds4_tokenize_rendered_chat(s->engine, rendered.ptr ? rendered.ptr : "", &canonical);
+    char *rollback_suffix = NULL;
+
+    if (rendered_override) {
+        buf_puts(&rendered, rendered_override);
+    } else {
+        buf_puts(&rendered, j->req.prompt_text);
+        buf_puts(&rendered, suffix_text);
+    }
+    ds4_tokenize_rendered_chat(s->engine,
+                               rendered.ptr ? rendered.ptr : "", &canonical);
+
+    /* Restore the exact pre-thinking Gated DeltaNet frontier, discard sampled
+     * reasoning/output, and evaluate only the visible assistant suffix.  For
+     * tool-less chat/completions the stateless visible renderer omits the
+     * opening think marker, so retain an empty live think block and bind it to
+     * the visible transcript through thinking_live below. */
+    if (rendered_override && j->req.api == API_OPENAI &&
+        j->req.kind == REQ_CHAT) {
+        rollback_suffix = build_tool_checkpoint_suffix(
+            &j->req, content, NULL, NULL);
+    }
+    const char *live_suffix = rollback_suffix ? rollback_suffix : suffix_text;
+    if (live_suffix && live_suffix[0] && response_frontier &&
+        response_frontier->valid) {
+        char request_err[160] = {0};
+        const double request_t0 = now_sec();
+        int appended = 0;
+        if (server_resident_frontier_restore(s, slot, response_frontier,
+                                             request_err,
+                                             sizeof(request_err)) &&
+            append_rendered_suffix_to_live_session(s, slot, live_suffix,
+                                                   &appended,
+                                                   request_err,
+                                                   sizeof(request_err))) {
+            canonicalized = true;
+            server_log(DS4_LOG_KVCACHE,
+                       "ds4-server: post-response checkpoint rebuilt source=memory-request cached=%d response_prefill=%d target=%d location=%s %.3fms",
+                       response_frontier->tokens.len, appended,
+                       ds4_session_pos(slot->session),
+                       resident_kv_frontier_location(response_frontier),
+                       (now_sec() - request_t0) * 1000.0);
+            trace_event(s, trace_id,
+                        "post-response checkpoint rebuilt via request frontier: cached=%d response_prefill=%d target=%d",
+                        response_frontier->tokens.len, appended,
+                        ds4_session_pos(slot->session));
+            goto done;
+        }
+        server_log(DS4_LOG_WARNING,
+                   "ds4-server: resident request frontier restore failed ctx=%s error=\"%s\"; falling back",
+                   ctx, request_err[0] ? request_err : "unknown error");
+    }
     const int live_len = ds4_session_pos(slot->session);
     const int common = ds4_session_common_prefix(slot->session, &canonical);
     if (common == live_len && canonical.len == live_len) {
@@ -16184,13 +16490,25 @@ static bool canonicalize_tool_checkpoint(server *s, server_slot *slot,
     } else if (rr == DS4_SESSION_REWRITE_REBUILD_NEEDED) {
         /* The generated DSML suffix and the canonical prompt share a prefix,
          * but the generated tail is too large to overwrite safely inside the
-         * live raw-window ring.  Prefer an older disk checkpoint over replaying
-         * a very long conversation from token zero. */
+         * live raw-window ring.  Prefer the resident system frontier, with disk
+         * as the last compatibility fallback, over replaying from token zero. */
         char *path = NULL;
         ds4_tokens effective = {0};
-        int loaded = kv_cache_try_load_text(s, slot,
-                                            rendered.ptr ? rendered.ptr : "",
-                                            &effective, &path, NULL, false);
+        int loaded = 0;
+        bool restored_resident_system = false;
+        if (resident_kv_frontier_matches(&slot->system_frontier,
+                                         &slot->active_system_prefix,
+                                         &canonical)) {
+            restored_resident_system = server_resident_frontier_restore(
+                s, slot, &slot->system_frontier, err, sizeof(err));
+            if (restored_resident_system)
+                loaded = slot->system_frontier.tokens.len;
+        }
+        if (!restored_resident_system) {
+            loaded = kv_cache_try_load_text(s, slot,
+                                             rendered.ptr ? rendered.ptr : "",
+                                             &effective, &path, NULL, false);
+        }
         if (loaded == 0) {
             pthread_mutex_lock(&s->inference_mu);
             ds4_session_invalidate(slot->session);
@@ -16198,7 +16516,9 @@ static bool canonicalize_tool_checkpoint(server *s, server_slot *slot,
         }
 
         char sync_err[160] = {0};
-        const ds4_tokens *sync_prompt = loaded > 0 ? &effective : &canonical;
+        const ds4_tokens *sync_prompt =
+            restored_resident_system ? &canonical :
+            (loaded > 0 ? &effective : &canonical);
         char rebuild_ctx[48];
         request_ctx_span(rebuild_ctx, sizeof(rebuild_ctx), loaded, sync_prompt->len);
         int replay_tokens = sync_prompt->len - loaded;
@@ -16207,7 +16527,8 @@ static bool canonicalize_tool_checkpoint(server *s, server_slot *slot,
         if (canonical_tail_tokens < 0) canonical_tail_tokens = canonical.len;
         int discarded_live_tokens = live_len - common;
         if (discarded_live_tokens < 0) discarded_live_tokens = 0;
-        const char *source = loaded > 0 ? "disk" : "full";
+        const char *source = restored_resident_system ? "memory-system" :
+                             (loaded > 0 ? "disk" : "full");
         const double rebuild_t0 = now_sec();
         server_log(DS4_LOG_KVCACHE,
                    "ds4-server: tool checkpoint canonicalization needs %d tokens rebuild ctx=%s request_ctx=%s reason=canonical-tail-rewrite tail=%d discard=%d common=%d live=%d target=%d cached=%d source=%s%s%s",
@@ -16251,7 +16572,15 @@ static bool canonicalize_tool_checkpoint(server *s, server_slot *slot,
             ds4_session_set_progress(slot->session, NULL, NULL);
             ds4_session_set_display_progress(slot->session, NULL, NULL);
             const double rebuild_sec = now_sec() - rebuild_t0;
-            if (loaded > 0) {
+            if (restored_resident_system) {
+                server_log(DS4_LOG_KVCACHE,
+                           "ds4-server: tool checkpoint rebuild done ctx=%s request_ctx=%s source=memory-system cached=%d replay=%d target=%d %.3fs",
+                           rebuild_ctx, ctx, loaded, replay_tokens,
+                           canonical.len, rebuild_sec);
+                trace_event(s, trace_id,
+                            "tool checkpoint canonicalized via resident system: common=%d live=%d canonical=%d cached=%d",
+                            common, live_len, canonical.len, loaded);
+            } else if (loaded > 0) {
                 server_log(DS4_LOG_KVCACHE,
                            "ds4-server: tool checkpoint rebuild done ctx=%s request_ctx=%s source=disk cached=%d replay=%d target=%d %.3fs",
                            rebuild_ctx, ctx, loaded, replay_tokens, canonical.len, rebuild_sec);
@@ -16287,6 +16616,7 @@ static bool canonicalize_tool_checkpoint(server *s, server_slot *slot,
 done:
     ds4_tokens_free(&canonical);
     buf_free(&rendered);
+    free(rollback_suffix);
     free(suffix_text);
     return canonicalized;
 }
@@ -16901,6 +17231,27 @@ static void generate_job_inner(server *s, server_slot *slot, job *j) {
             prompt_for_sync = &effective_prompt;
         }
     }
+    if (cached == 0 &&
+        resident_kv_frontier_matches(&slot->system_frontier,
+                                     &slot->active_system_prefix,
+                                     &j->req.prompt)) {
+        const double restore_t0 = now_sec();
+        if (server_resident_frontier_restore(s, slot,
+                                             &slot->system_frontier,
+                                             err, sizeof(err))) {
+            cached = slot->system_frontier.tokens.len;
+            cache_source = "memory-system";
+            prompt_for_sync = &j->req.prompt;
+            server_log(DS4_LOG_KVCACHE,
+                       "ds4-server: resident system frontier restored tokens=%d %.3fms",
+                       cached, (now_sec() - restore_t0) * 1000.0);
+        } else if (!job_cancelled(j)) {
+            server_log(DS4_LOG_WARNING,
+                       "ds4-server: resident system frontier restore failed: %s",
+                       err[0] ? err : "unknown error");
+            resident_kv_frontier_clear(&slot->system_frontier);
+        }
+    }
     if (cached == 0 && old_pos > 0) {
         server_log(DS4_LOG_WARNING,
                    "ds4-server: live kv cache miss%s live=%d prompt=%d common=%d reason=%s",
@@ -17005,6 +17356,21 @@ static void generate_job_inner(server *s, server_slot *slot, job *j) {
                req_flags);
     ds4_session_set_progress(slot->session, server_progress_cb, &progress);
     ds4_session_set_display_progress(slot->session, server_progress_cb, &progress);
+
+    /* Keep the shared agent/system prefix hot in RAM before the request tail
+     * overwrites the recurrent state.  Failure is non-fatal: the ordinary disk
+     * cache remains the compatibility fallback for unsupported backends. */
+    char resident_err[160] = {0};
+    if (!ensure_resident_system_frontier(s, slot, prompt_for_sync,
+                                         resident_err,
+                                         sizeof(resident_err)) &&
+        slot->active_system_prefix.len >= RESIDENT_SYSTEM_MIN_TOKENS &&
+        tokens_start_with(prompt_for_sync, &slot->active_system_prefix) &&
+        !job_cancelled(j)) {
+        server_log(DS4_LOG_WARNING,
+                   "ds4-server: resident system frontier capture failed: %s",
+                   resident_err[0] ? resident_err : "boundary unavailable");
+    }
 
     bool cold_store_is_system = false;
     int cold_store_len = 0;
@@ -17166,6 +17532,37 @@ static void generate_job_inner(server *s, server_slot *slot, job *j) {
                                              cold_store_len);
         }
     }
+
+    /* This is the pre-thinking rollback point only. Keep its recurrent Gated
+     * DeltaNet state in VRAM; system, skill, and subagent checkpoints retain
+     * their independent storage policies. */
+    const bool needs_post_response_frontier =
+        ds4_engine_is_qwen(s->engine) &&
+        request_uses_prethinking_frontier(&j->req);
+    if (needs_post_response_frontier) {
+        char frontier_err[160] = {0};
+        const double frontier_t0 = now_sec();
+        if (server_resident_frontier_capture(s, slot,
+                                             &j->response_frontier,
+                                             true,
+                                             frontier_err,
+                                             sizeof(frontier_err))) {
+            server_log(DS4_LOG_KVCACHE,
+                       "ds4-server: response frontier captured tokens=%d bytes=%.2f MiB location=%s %.3fms",
+                       j->response_frontier.tokens.len,
+                       (double)resident_kv_frontier_bytes(
+                           &j->response_frontier) /
+                           (1024.0 * 1024.0),
+                       resident_kv_frontier_location(
+                           &j->response_frontier),
+                       (now_sec() - frontier_t0) * 1000.0);
+        } else if (!job_cancelled(j)) {
+            server_log(DS4_LOG_WARNING,
+                       "ds4-server: response frontier capture failed: %s",
+                       frontier_err[0] ? frontier_err : "unknown error");
+        }
+    }
+
     const uint64_t response_seq = server_next_sequence(s);
     char id[96];
     snprintf(id, sizeof(id), "%s-%llu",
@@ -18244,38 +18641,29 @@ decode_again:
                  parsed_content ? parsed_content : (text.ptr ? text.ptr : ""),
                  parsed_reasoning, &parsed_calls, now_sec() - t0);
 
-    if (j->req.api == API_RESPONSES) {
-        if (strcmp(final_finish, "error") && strcmp(final_finish, "length")) {
-            /* Rewrite the sampled frontier to the exact visible transcript.
-             * Historical reasoning must not remain in KV, otherwise a page
-             * reload and an in-memory continuation predict from different
-             * histories. */
-            bool canonicalized = canonicalize_tool_checkpoint(
-                s, slot, j, ctx_span, trace_id,
+    const bool post_canonicalize_responses =
+        j->req.api == API_RESPONSES &&
+        strcmp(final_finish, "error") && strcmp(final_finish, "length");
+    char *responses_visible_suffix = NULL;
+    buf responses_visible = {0};
+    if (post_canonicalize_responses) {
+        responses_visible_suffix =
+            build_responses_visible_assistant_suffix(&j->req,
                 parsed_content ? parsed_content : "", NULL, &parsed_calls);
-            char *visible_suffix =
-                build_responses_visible_assistant_suffix(&j->req,
-                    parsed_content ? parsed_content : "",
-                    NULL,
-                    &parsed_calls);
-            buf visible = {0};
-            buf_puts(&visible, j->req.prompt_text ? j->req.prompt_text : "");
-            buf_puts(&visible, visible_suffix ? visible_suffix : "");
-            if (canonicalized) {
-                responses_live_remember(s, slot,
-                                        visible.ptr ? visible.ptr : "",
-                                        parsed_calls.len ? &parsed_calls : NULL);
-            } else {
-                responses_live_clear(s, slot);
-                server_log(DS4_LOG_WARNING,
-                           "ds4-server: Responses visible checkpoint canonicalization failed ctx=%s",
-                           ctx_span);
-            }
-            buf_free(&visible);
-            free(visible_suffix);
-        } else {
-            responses_live_clear(s, slot);
-        }
+        buf_puts(&responses_visible,
+                 j->req.prompt_text ? j->req.prompt_text : "");
+        buf_puts(&responses_visible,
+                 responses_visible_suffix ? responses_visible_suffix : "");
+        /* Publish the call-id binding before the final SSE/HTTP bytes.  A
+         * client is then free to submit a tool result as soon as it receives
+         * response.completed; the worker will canonicalize the KV frontier
+         * afterwards while that continuation waits for this slot. */
+        responses_live_remember(s, slot,
+                                responses_visible.ptr ?
+                                    responses_visible.ptr : "",
+                                parsed_calls.len ? &parsed_calls : NULL);
+    } else if (j->req.api == API_RESPONSES) {
+        responses_live_clear(s, slot);
     }
     if (j->req.api == API_ANTHROPIC) {
         if (parsed_calls.len && strcmp(final_finish, "error") &&
@@ -18287,23 +18675,18 @@ decode_again:
         }
     }
 
-    if (j->req.kind == REQ_CHAT && parsed_calls.len &&
+    const bool post_canonicalize_chat_tools =
+        j->req.kind == REQ_CHAT && parsed_calls.len &&
         j->req.api != API_RESPONSES &&
-        should_canonicalize_tool_checkpoint(s, &parsed_calls))
-    {
-        /* Chat/completions has no protocol object that binds the next request
-         * to this live KV state.  Canonicalize only the fallback tool-call
-         * path where we lack exact sampled DSML replay; when raw DSML is known,
-         * replaying those bytes keeps future prompts aligned without rebuilding
-         * hidden reasoning. Responses was canonicalized above. */
-        canonicalize_tool_checkpoint(s, slot, j, ctx_span, trace_id,
-                                     parsed_content ? parsed_content : "",
-                                     parsed_reasoning, &parsed_calls);
+        should_canonicalize_tool_checkpoint(s, &parsed_calls);
+    const bool post_canonicalize_chat_thinking =
+        j->req.api == API_OPENAI && !parsed_calls.len &&
+        should_remember_thinking_checkpoint(&j->req, &thinking, final_finish);
+    if (parsed_calls.len) {
         thinking_live_clear(s, slot);
-    } else if (parsed_calls.len) {
-        thinking_live_clear(s, slot);
-    } else if (!parsed_calls.len &&
-               should_remember_thinking_checkpoint(&j->req, &thinking, final_finish)) {
+    } else if (post_canonicalize_chat_thinking ||
+               should_remember_thinking_checkpoint(&j->req, &thinking,
+                                                    final_finish)) {
         remember_thinking_checkpoint(s, slot, j, ctx_span, trace_id,
                                      parsed_content ? parsed_content : "");
     } else if (!parsed_calls.len) {
@@ -18364,6 +18747,13 @@ decode_again:
                                      prompt_tokens, completion);
     }
     if (job_cancelled(j)) response_ok = false;
+    if (response_ok) {
+        /* From this point on the complete HTTP body or terminal SSE event is
+         * visible to the client.  Cleanup prefill must not delay delivery, and
+         * a normal client close after receiving it must not cancel the resident
+         * KV canonicalization that follows. */
+        job_mark_response_published(j);
+    }
     if (!response_ok) {
         job_mark_cancelled(j);
         final_finish = "error";
@@ -18435,6 +18825,63 @@ decode_again:
                        now_sec() - t0);
         }
     }
+
+    /* The response is already complete on the wire.  Only now rewrite hidden
+     * reasoning/generated tails into the transcript the next request will
+     * render.  On Qwen the request's pre-thinking device frontier is preferred;
+     * the resident host-RAM system frontier is only a fallback.  This path never
+     * delays response.completed and normally performs no SSD read. */
+    if (response_ok && post_canonicalize_responses) {
+        bool canonicalized = canonicalize_tool_checkpoint(
+            s, slot, j, ctx_span, trace_id,
+            parsed_content ? parsed_content : "", NULL, &parsed_calls, NULL,
+            &j->response_frontier);
+        if (canonicalized) {
+            responses_live_remember(s, slot,
+                                    responses_visible.ptr ?
+                                        responses_visible.ptr : "",
+                                    parsed_calls.len ? &parsed_calls : NULL);
+        } else {
+            /* Keep the provisional sampled binding.  It is safe for a live
+             * continuation and is preferable to rejecting a tool result after
+             * the client has already received its call_id. */
+            server_log(DS4_LOG_WARNING,
+                       "ds4-server: Responses post-response visible checkpoint canonicalization failed ctx=%s",
+                       ctx_span);
+        }
+    }
+    if (response_ok && post_canonicalize_chat_tools) {
+        /* Chat/completions lacks a call-id-to-session protocol binding.  The
+         * fallback canonical DSML path therefore still rewrites its tail, but
+         * only after the final chunk/body has been published. */
+        (void)canonicalize_tool_checkpoint(
+            s, slot, j, ctx_span, trace_id,
+            parsed_content ? parsed_content : "",
+            parsed_reasoning, &parsed_calls, NULL, &j->response_frontier);
+        thinking_live_clear(s, slot);
+    }
+    if (response_ok && post_canonicalize_chat_thinking) {
+        char *visible = build_toolless_thinking_visible_text(
+            &j->req, parsed_content ? parsed_content : "");
+        bool canonicalized = visible && canonicalize_tool_checkpoint(
+            s, slot, j, ctx_span, trace_id,
+            parsed_content ? parsed_content : "", NULL, &parsed_calls,
+            visible, &j->response_frontier);
+        if (canonicalized) {
+            /* The resident session contains no sampled reasoning.  Keep the
+             * visible transcript binding because the fast request-frontier
+             * path deliberately retains an empty live think block. */
+            thinking_live_remember(s, slot, visible);
+        } else {
+            server_log(DS4_LOG_WARNING,
+                       "ds4-server: chat/completions post-response thinking checkpoint canonicalization failed ctx=%s",
+                       ctx_span);
+        }
+        free(visible);
+    }
+
+    buf_free(&responses_visible);
+    free(responses_visible_suffix);
     free(parsed_content);
     free(parsed_reasoning);
     tool_calls_free(&parsed_calls);
@@ -18995,6 +19442,7 @@ static void *client_main(void *arg) {
     }
     wait_for_job_or_disconnect(s, &j);
 
+    resident_kv_frontier_clear(&j.response_frontier);
     pthread_cond_destroy(&j.cv);
     pthread_mutex_destroy(&j.mu);
     request_free(&j.req);
@@ -19144,6 +19592,7 @@ static void server_close_resources(server *s) {
         live_tool_state_free(&slot->responses_live);
         live_tool_state_free(&slot->anthropic_live);
         visible_live_free(&slot->thinking_live);
+        resident_kv_frontier_clear(&slot->system_frontier);
         subagent_checkpoint_clear(&slot->subagent, true);
         ds4_tokens_free(&slot->active_system_prefix);
         skill_frames_clear_locked(s, slot);
@@ -22731,6 +23180,102 @@ static void test_tool_checkpoint_canonicalization_gate_exact_replay(void) {
     tool_calls_free(&calls);
 }
 
+static void test_resident_system_frontier_matches_shared_prompt_only(void) {
+    int system_ids[] = {11, 22, 33, 44};
+    int same_chat_ids[] = {11, 22, 33, 44, 50, 60};
+    int other_chat_ids[] = {11, 22, 33, 44, 70, 80};
+    int other_system_ids[] = {11, 22, 99, 44, 70};
+    ds4_tokens system = {
+        .v = system_ids, .len = 4, .cap = 4,
+    };
+    ds4_tokens same_chat = {
+        .v = same_chat_ids, .len = 6, .cap = 6,
+    };
+    ds4_tokens other_chat = {
+        .v = other_chat_ids, .len = 6, .cap = 6,
+    };
+    ds4_tokens other_system = {
+        .v = other_system_ids, .len = 5, .cap = 5,
+    };
+    resident_kv_frontier frontier = {
+        .valid = true,
+        .tokens = {.v = system_ids, .len = 4, .cap = 4},
+    };
+
+    /* Continuations and independent chats sharing the agent system prefix both
+     * use RAM; a genuinely different system prompt must fall back safely. */
+    TEST_ASSERT(resident_kv_frontier_matches(&frontier, &system,
+                                             &same_chat));
+    TEST_ASSERT(resident_kv_frontier_matches(&frontier, &system,
+                                             &other_chat));
+    TEST_ASSERT(!resident_kv_frontier_matches(&frontier, &system,
+                                              &other_system));
+    system_ids[3] = 45;
+    TEST_ASSERT(!resident_kv_frontier_matches(&frontier, &system,
+                                              &same_chat));
+}
+
+static void test_resident_system_frontier_replaces_unrelated_live_state(void) {
+    const int system_len = 10589;
+
+    /* A startup health probe used to leave an unrelated 27-token frontier.
+     * Capture then silently skipped the agent system boundary and every
+     * post-response rebuild fell back to the SSD checkpoint. */
+    TEST_ASSERT(resident_system_boundary_needs_sync(27, 3, system_len));
+    TEST_ASSERT(resident_system_boundary_needs_sync(system_len + 200,
+                                                    system_len,
+                                                    system_len));
+    TEST_ASSERT(!resident_system_boundary_needs_sync(system_len,
+                                                     system_len,
+                                                     system_len));
+}
+
+static void test_response_publish_precedes_checkpoint_cleanup(void) {
+    const api_style apis[] = {API_OPENAI, API_RESPONSES};
+    for (size_t i = 0; i < sizeof(apis) / sizeof(apis[0]); i++) {
+        job j;
+        memset(&j, 0, sizeof(j));
+        j.req.api = apis[i];
+        pthread_mutex_init(&j.mu, NULL);
+
+        job_mark_cancelled(&j);
+        TEST_ASSERT(job_cancelled(&j));
+        pthread_mutex_lock(&j.mu);
+        j.cancelled = false;
+        pthread_mutex_unlock(&j.mu);
+
+        job_mark_response_published(&j);
+        TEST_ASSERT(job_response_published(&j));
+        job_mark_cancelled(&j);
+        /* Once the terminal body/event is published, a normal socket close
+         * cannot cancel the deferred KV cleanup for either OpenAI endpoint. */
+        TEST_ASSERT(!job_cancelled(&j));
+        pthread_mutex_destroy(&j.mu);
+    }
+}
+
+static void test_prethinking_frontier_covers_openai_endpoints(void) {
+    request r;
+    request_init(&r, REQ_CHAT, 128);
+
+    r.api = API_RESPONSES;
+    TEST_ASSERT(request_uses_prethinking_frontier(&r));
+
+    r.api = API_OPENAI;
+    r.think_mode = DS4_THINK_HIGH;
+    TEST_ASSERT(request_uses_prethinking_frontier(&r));
+    r.think_mode = DS4_THINK_NONE;
+    r.has_tools = true;
+    TEST_ASSERT(request_uses_prethinking_frontier(&r));
+    r.has_tools = false;
+    TEST_ASSERT(!request_uses_prethinking_frontier(&r));
+
+    r.api = API_ANTHROPIC;
+    r.think_mode = DS4_THINK_HIGH;
+    TEST_ASSERT(!request_uses_prethinking_frontier(&r));
+    request_free(&r);
+}
+
 static void test_responses_live_tail_renders_tool_outputs_only(void) {
     request r;
     request_init(&r, REQ_CHAT, 128);
@@ -23852,8 +24397,8 @@ static void test_canonical_rewrite_rebuilds_when_live_tail_changes(void) {
      * live suffix looks tempting because the raw SWA ring may still contain the
      * needed rows, but compressed KV counters and compressor/indexer frontiers
      * are already past the shared prefix.  Until those graph frontiers can be
-     * restored exactly, every rewrite behind the live end must rebuild or load a
-     * disk checkpoint. */
+     * restored exactly, every rewrite behind the live end must rebuild or
+     * restore an earlier recurrent checkpoint. */
     TEST_ASSERT(ds4_session_rewrite_requires_rebuild(19296, 19290, 19081));
     TEST_ASSERT(ds4_session_rewrite_requires_rebuild(1024, 1030, 1000));
     TEST_ASSERT(ds4_session_rewrite_requires_rebuild(1024, 900, 900));
@@ -26856,6 +27401,10 @@ static void ds4_server_unit_tests_run(void) {
     test_anthropic_full_replay_allows_unknown_live_id();
     test_anthropic_tool_use_parses_before_role();
     test_tool_checkpoint_canonicalization_gate_exact_replay();
+    test_resident_system_frontier_matches_shared_prompt_only();
+    test_resident_system_frontier_replaces_unrelated_live_state();
+    test_response_publish_precedes_checkpoint_cleanup();
+    test_prethinking_frontier_covers_openai_endpoints();
     test_responses_live_tail_renders_tool_outputs_only();
     test_responses_tool_output_id_validation();
     test_responses_stateless_tool_replay_ignores_reasoning();

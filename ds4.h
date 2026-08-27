@@ -685,6 +685,22 @@ int ds4_session_load_skill_state(ds4_session *s, FILE *fp,
                                  ds4_skill_state_metrics *metrics,
                                  char *err, size_t errlen);
 
+/* In-process Qwen frontier kept on the accelerator.  This is the same compact
+ * recurrent/MTP state as a skill checkpoint, but Gated DeltaNet tensors are
+ * copied device-to-device so response cleanup never crosses PCIe or storage.
+ * Host RAM is used only for the small CPU-side logits and metadata. */
+typedef struct ds4_session_device_frontier ds4_session_device_frontier;
+int ds4_session_capture_device_frontier(
+        ds4_session *s, ds4_session_device_frontier **frontier,
+        char *err, size_t errlen);
+int ds4_session_restore_device_frontier(
+        ds4_session *s, const ds4_session_device_frontier *frontier,
+        const ds4_tokens *tokens, char *err, size_t errlen);
+uint64_t ds4_session_device_frontier_bytes(
+        const ds4_session_device_frontier *frontier);
+void ds4_session_device_frontier_free(
+        ds4_session_device_frontier *frontier);
+
 uint64_t ds4_session_layer_payload_bytes(ds4_session *s,
                                          uint32_t layer_start,
                                          uint32_t layer_end);

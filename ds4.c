@@ -55726,6 +55726,240 @@ int ds4_session_load_skill_state(ds4_session *s, FILE *fp,
 #endif
 }
 
+struct ds4_session_device_frontier {
+#ifndef DS4_NO_GPU
+    ds4_gpu_tensor *conv_state[DS4_MAX_LAYER];
+    ds4_gpu_tensor *recurrent_state[DS4_MAX_LAYER];
+    ds4_gpu_tensor *mtp_pending_h;
+#endif
+    float *logits;
+    float *mtp_logits;
+    uint64_t device_bytes;
+    uint64_t session_id;
+    uint64_t model_bytes;
+    uint64_t token_hash;
+    uint32_t token_count;
+    uint32_t ctx_size;
+    uint32_t mtp_cache_len;
+    int mtp_draft_token;
+    bool saved_mtp;
+    bool mtp_draft_valid;
+    bool valid;
+};
+
+void ds4_session_device_frontier_free(
+        ds4_session_device_frontier *frontier) {
+    if (!frontier) return;
+#ifndef DS4_NO_GPU
+    for (uint32_t il = 0; il < DS4_MAX_LAYER; il++) {
+        ds4_gpu_tensor_free(frontier->conv_state[il]);
+        ds4_gpu_tensor_free(frontier->recurrent_state[il]);
+    }
+    ds4_gpu_tensor_free(frontier->mtp_pending_h);
+#endif
+    free(frontier->logits);
+    free(frontier->mtp_logits);
+    free(frontier);
+}
+
+uint64_t ds4_session_device_frontier_bytes(
+        const ds4_session_device_frontier *frontier) {
+    return frontier ? frontier->device_bytes : 0;
+}
+
+#ifndef DS4_NO_GPU
+static bool qwen_device_frontier_alloc_tensor(ds4_gpu_tensor **dst,
+                                               uint64_t bytes) {
+    if (!dst || bytes == 0) return false;
+    if (*dst && ds4_gpu_tensor_bytes(*dst) == bytes) return true;
+    ds4_gpu_tensor_free(*dst);
+    *dst = ds4_gpu_tensor_alloc(bytes);
+    return *dst != NULL;
+}
+#endif
+
+int ds4_session_capture_device_frontier(
+        ds4_session *s, ds4_session_device_frontier **frontier_out,
+        char *err, size_t errlen) {
+#ifdef DS4_NO_GPU
+    (void)s; (void)frontier_out;
+    payload_set_err(err, errlen,
+                    "device frontiers require the Qwen GPU backend");
+    return 1;
+#else
+    if (!s || !frontier_out || !ds4_session_is_qwen(s) ||
+        !s->qwen_graph_ready || !s->checkpoint_valid || !s->logits) {
+        payload_set_err(err, errlen, "invalid Qwen device frontier capture");
+        return 1;
+    }
+    ds4_session_device_frontier *frontier = *frontier_out;
+    if (!frontier) {
+        frontier = calloc(1, sizeof(*frontier));
+        if (!frontier) {
+            payload_set_err(err, errlen, "out of memory for device frontier");
+            return 1;
+        }
+        *frontier_out = frontier;
+    }
+    frontier->valid = false;
+
+    ds4_qwen_gpu_graph *g = &s->qwen_graph;
+    uint64_t device_bytes = 0;
+    bool ok = true;
+    for (uint32_t il = 0; il < DS4_N_LAYER && ok; il++) {
+        if (!qwen_layer_is_recurrent(il)) continue;
+        const uint64_t conv_bytes = ds4_gpu_tensor_bytes(g->conv_state[il]);
+        const uint64_t recurrent_bytes =
+            ds4_gpu_tensor_bytes(g->recurrent_state[il]);
+        ok = g->conv_state[il] && g->recurrent_state[il] &&
+             qwen_device_frontier_alloc_tensor(&frontier->conv_state[il],
+                                               conv_bytes) &&
+             qwen_device_frontier_alloc_tensor(
+                 &frontier->recurrent_state[il], recurrent_bytes);
+        if (ok) device_bytes += conv_bytes + recurrent_bytes;
+    }
+    if (ok && g->mtp_ready) {
+        const uint64_t pending_bytes =
+            ds4_gpu_tensor_bytes(g->mtp_pending_h);
+        ok = g->mtp_pending_h && s->mtp_logits &&
+             qwen_device_frontier_alloc_tensor(&frontier->mtp_pending_h,
+                                               pending_bytes);
+        if (ok) device_bytes += pending_bytes;
+    } else if (ok) {
+        ds4_gpu_tensor_free(frontier->mtp_pending_h);
+        frontier->mtp_pending_h = NULL;
+    }
+    const size_t logits_bytes =
+        (size_t)DS4_N_VOCAB * sizeof(float);
+    if (ok && !frontier->logits) {
+        frontier->logits = malloc(logits_bytes);
+        ok = frontier->logits != NULL;
+    }
+    if (ok && g->mtp_ready && !frontier->mtp_logits) {
+        frontier->mtp_logits = malloc(logits_bytes);
+        ok = frontier->mtp_logits != NULL;
+    }
+    if (!ok) {
+        payload_set_err(err, errlen,
+                        "failed to allocate Qwen device frontier tensors");
+        return 1;
+    }
+    if (ds4_session_cancelled(s)) {
+        payload_set_err(err, errlen, "Qwen device frontier capture cancelled");
+        return DS4_SESSION_SYNC_INTERRUPTED;
+    }
+
+    for (uint32_t il = 0; il < DS4_N_LAYER && ok; il++) {
+        if (!qwen_layer_is_recurrent(il)) continue;
+        ok = ds4_gpu_tensor_copy(frontier->conv_state[il], 0,
+                                 g->conv_state[il], 0,
+                                 ds4_gpu_tensor_bytes(g->conv_state[il])) &&
+             ds4_gpu_tensor_copy(frontier->recurrent_state[il], 0,
+                                 g->recurrent_state[il], 0,
+                                 ds4_gpu_tensor_bytes(g->recurrent_state[il]));
+    }
+    if (ok && g->mtp_ready) {
+        ok = ds4_gpu_tensor_copy(frontier->mtp_pending_h, 0,
+                                 g->mtp_pending_h, 0,
+                                 ds4_gpu_tensor_bytes(g->mtp_pending_h));
+    }
+    if (ok) ok = ds4_gpu_synchronize() != 0;
+    if (!ok) {
+        payload_set_err(err, errlen,
+                        "failed to copy Qwen device frontier tensors");
+        return 1;
+    }
+
+    memcpy(frontier->logits, s->logits, logits_bytes);
+    if (g->mtp_ready)
+        memcpy(frontier->mtp_logits, s->mtp_logits, logits_bytes);
+    frontier->device_bytes = device_bytes;
+    frontier->session_id = s->skill_state_session_id;
+    frontier->model_bytes = s->engine->model.size;
+    frontier->token_hash = skill_state_token_hash(&s->checkpoint);
+    frontier->token_count = (uint32_t)s->checkpoint.len;
+    frontier->ctx_size = (uint32_t)s->ctx_size;
+    frontier->mtp_cache_len = g->mtp_ready ? g->mtp_cache_len : 0;
+    frontier->mtp_draft_token = s->mtp_draft_token;
+    frontier->saved_mtp = g->mtp_ready;
+    frontier->mtp_draft_valid = s->mtp_draft_valid;
+    frontier->valid = true;
+    return 0;
+#endif
+}
+
+int ds4_session_restore_device_frontier(
+        ds4_session *s, const ds4_session_device_frontier *frontier,
+        const ds4_tokens *tokens, char *err, size_t errlen) {
+#ifdef DS4_NO_GPU
+    (void)s; (void)frontier; (void)tokens;
+    payload_set_err(err, errlen,
+                    "device frontiers require the Qwen GPU backend");
+    return 1;
+#else
+    if (!s || !frontier || !frontier->valid || !frontier->logits ||
+        !tokens || tokens->len <= 0 || !ds4_session_is_qwen(s) ||
+        !s->qwen_graph_ready || !s->logits ||
+        frontier->session_id != s->skill_state_session_id ||
+        frontier->model_bytes != s->engine->model.size ||
+        frontier->ctx_size != (uint32_t)s->ctx_size ||
+        frontier->token_count != (uint32_t)tokens->len ||
+        frontier->token_hash != skill_state_token_hash(tokens)) {
+        payload_set_err(err, errlen, "incompatible Qwen device frontier");
+        return 1;
+    }
+    ds4_qwen_gpu_graph *g = &s->qwen_graph;
+    if (frontier->saved_mtp != g->mtp_ready ||
+        (frontier->saved_mtp &&
+         (!frontier->mtp_pending_h || !frontier->mtp_logits ||
+          frontier->mtp_cache_len > (uint32_t)tokens->len))) {
+        payload_set_err(err, errlen, "incompatible Qwen MTP device frontier");
+        return 1;
+    }
+    if (ds4_session_cancelled(s)) {
+        payload_set_err(err, errlen, "Qwen device frontier restore cancelled");
+        return DS4_SESSION_SYNC_INTERRUPTED;
+    }
+
+    bool ok = true;
+    for (uint32_t il = 0; il < DS4_N_LAYER && ok; il++) {
+        if (!qwen_layer_is_recurrent(il)) continue;
+        ok = frontier->conv_state[il] && frontier->recurrent_state[il] &&
+             ds4_gpu_tensor_copy(g->conv_state[il], 0,
+                                 frontier->conv_state[il], 0,
+                                 ds4_gpu_tensor_bytes(g->conv_state[il])) &&
+             ds4_gpu_tensor_copy(g->recurrent_state[il], 0,
+                                 frontier->recurrent_state[il], 0,
+                                 ds4_gpu_tensor_bytes(g->recurrent_state[il]));
+    }
+    if (ok && frontier->saved_mtp) {
+        ok = ds4_gpu_tensor_copy(g->mtp_pending_h, 0,
+                                 frontier->mtp_pending_h, 0,
+                                 ds4_gpu_tensor_bytes(g->mtp_pending_h));
+    }
+    if (ok) ok = ds4_gpu_synchronize() != 0;
+    if (!ok) {
+        ds4_session_invalidate(s);
+        payload_set_err(err, errlen,
+                        "failed to restore Qwen device frontier tensors");
+        return 1;
+    }
+
+    const size_t logits_bytes =
+        (size_t)DS4_N_VOCAB * sizeof(float);
+    ds4_tokens_copy(&s->checkpoint, tokens);
+    memcpy(s->logits, frontier->logits, logits_bytes);
+    if (frontier->saved_mtp)
+        memcpy(s->mtp_logits, frontier->mtp_logits, logits_bytes);
+    s->checkpoint_valid = true;
+    s->mtp_draft_token = frontier->mtp_draft_token;
+    s->mtp_draft_valid = frontier->mtp_draft_valid;
+    g->mtp_cache_len = frontier->saved_mtp ? frontier->mtp_cache_len : 0;
+    ds4_session_dspark_capture_invalidate(s);
+    return 0;
+#endif
+}
+
 void ds4_engine_dump_tokens(ds4_engine *e, const ds4_tokens *tokens) {
     dump_tokens(&e->vocab, tokens);
 }

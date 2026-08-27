@@ -93,10 +93,21 @@ def read_log_from(path: Path, offset: int) -> str:
     return text
 
 
-def run_scenario(log_path: Path, name: str, action) -> tuple[str, str]:
+def run_scenario(
+    log_path: Path, name: str, action, *, log_settled=None
+) -> tuple[str, str]:
     offset = log_path.stat().st_size if log_path.exists() else 0
     response = action()
     segment = read_log_from(log_path, offset)
+    if log_settled is not None:
+        deadline = time.monotonic() + 30.0
+        while not log_settled(segment) and time.monotonic() < deadline:
+            time.sleep(0.1)
+            segment = (log_path.read_bytes() if log_path.exists() else b"")[
+                offset:
+            ].decode("utf-8", errors="replace")
+        if not log_settled(segment):
+            raise AssertionError(f"{name}: post-response checkpoint did not settle")
     if not segment:
         raise AssertionError(f"{name}: server emitted no log lines")
     return response, segment
@@ -184,6 +195,60 @@ def assert_system_cache(
             raise AssertionError(f"{name}: warm run unexpectedly re-prefilled the system prompt")
 
 
+def assert_resident_post_response_checkpoint(segment: str, name: str) -> None:
+    captured = segment.find("resident system frontier captured")
+    if captured < 0:
+        raise AssertionError(f"{name}: long system frontier was not captured in RAM")
+    if "response frontier captured" not in segment[captured:] or not re.search(
+        r"response frontier captured .*location=vram", segment[captured:]
+    ):
+        raise AssertionError(
+            f"{name}: pre-thinking Gated DeltaNet frontier was not kept in VRAM"
+        )
+
+    finishes = [
+        match.start()
+        for match in re.finditer(
+            r" finish=(?:stop|tool_calls)", segment[captured:]
+        )
+    ]
+    cleanups = [
+        match.start()
+        for match in re.finditer(
+            r"post-response checkpoint rebuilt source=memory-request",
+            segment[captured:],
+        )
+    ]
+    if not finishes or len(cleanups) < len(finishes) or any(
+        cleanup < finish for finish, cleanup in zip(finishes, cleanups)
+    ):
+        raise AssertionError(
+            f"{name}: checkpoint cleanup did not finish after publishing each response"
+        )
+
+    post_response = segment[captured + finishes[0] :]
+    if "kv cache hit text" in post_response or "source=disk" in post_response:
+        raise AssertionError(
+            f"{name}: post-response checkpoint reloaded the system prompt from SSD"
+        )
+    request_rebuilds = re.findall(
+        r"source=memory-request cached=(\d+) response_prefill=(\d+) "
+        r"target=(\d+) location=vram",
+        post_response,
+    )
+    if len(request_rebuilds) < len(finishes):
+        raise AssertionError(
+            f"{name}: post-response checkpoint did not restore the request frontier"
+        )
+    for cached, response_prefill, target in request_rebuilds:
+        cached_n, response_n, target_n = map(int, (cached, response_prefill, target))
+        if response_n <= 0 or cached_n + response_n != target_n:
+            raise AssertionError(
+                f"{name}: expected only the visible response prefill, got "
+                f"cached={cached_n} response={response_n} target={target_n}"
+            )
+
+
 def assert_short_return(segment: str, marker: str, name: str) -> None:
     match = re.search(
         rf"{marker} .*restored_tokens=(\d+).*result_prefill_tokens=(\d+)",
@@ -221,9 +286,17 @@ def run_system_cases(
                 f"{SYSTEM_RESPONSE}. Do not inspect or modify files."
             )
         ).response,
+        log_settled=lambda log: (
+            log.count(" finish=tool_calls") + log.count(" finish=stop") >= 2
+            and log.count(
+                "post-response checkpoint rebuilt source=memory-request"
+            )
+            >= log.count(" finish=tool_calls") + log.count(" finish=stop")
+        ),
     )
     assert_response(response, SYSTEM_RESPONSE)
     assert_system_cache(segment, phase, "bootstrap-wiki-system", warm_cache)
+    assert_resident_post_response_checkpoint(segment, "bootstrap-wiki-system")
     return [{"case": "bootstrap-wiki-system", "response": response}]
 
 
