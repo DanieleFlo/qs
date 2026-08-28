@@ -1,5 +1,5 @@
 @echo off
-echo Starting ds4-server Inference Engine via WSL on http://127.0.0.1:8000 ...
+echo Starting ds4-server Inference Engine via WSL on http://127.0.0.1:8080 ...
 
 set "ABS_ROOT_DIR=%~dp0"
 
@@ -13,7 +13,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo CUDA decode baseline: Q8_1-R8, split-K32 and GQA2
-wsl --cd "%ABS_ROOT_DIR%" ./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf --ctx 100000 --kv-disk-dir ~/.ds4/server-kv --kv-disk-space-mb 8192 %*
+echo CUDA decode baseline: Qwen3.8 target-only, Q8_1-R8, split-K32 and GQA2
+wsl --cd "%ABS_ROOT_DIR%" ./ds4-server --cuda -m gguf/Qwen3.8-27B-UD-Q4_K_S.gguf --ctx 22593 --host 0.0.0.0 --port 8080 --kv-disk-dir ~/.ds4/server-kv --kv-disk-space-mb 8192 %*
 
 pause

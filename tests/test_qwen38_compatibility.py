@@ -378,6 +378,14 @@ class Qwen38CompatibilityTests(unittest.TestCase):
             encoding="utf-8")
         agent_ssd_runner = (PROJECT_ROOT / "tests" / "run_agent_ssd_live.ps1").read_text(
             encoding="utf-8")
+        story_runner = (PROJECT_ROOT / "tests" / "run_agent_story_live.ps1").read_text(
+            encoding="utf-8")
+        sampling_runner = (
+            PROJECT_ROOT / "tests" / "run_server_sampling_matrix.ps1"
+        ).read_text(encoding="utf-8")
+        sampling_matrix = (
+            PROJECT_ROOT / "tests" / "test_server_sampling_matrix.py"
+        ).read_text(encoding="utf-8")
         agent_server_launcher = (
             PROJECT_ROOT / "agent" / "start-ds4-server.bat"
         ).read_text(encoding="utf-8")
@@ -399,11 +407,27 @@ class Qwen38CompatibilityTests(unittest.TestCase):
         self.assertIn("ds4_engine_is_qwen_q4_k_s(engine)", kvstore)
         self.assertIn("ds4_engine_is_qwen_q4_k_s(engine)", checkpoint)
         self.assertIn("mtp-Qwen3.8-27B-Q4_0.gguf", checkpoint_runner)
+        self.assertIn("mtp-Qwen3.6-27B-Q4_0.gguf", checkpoint_runner)
         self.assertIn("--model-id $ModelId", agent_ssd_runner)
+        self.assertIn("Qwen3.8-27B-UD-Q4_K_S.gguf", agent_ssd_runner)
+        self.assertIn("Qwen3.8-27B-UD-Q4_K_S.gguf", story_runner)
+        self.assertIn("mtp-Qwen3.8-27B-Q4_0.gguf", story_runner)
+        self.assertIn('"--scenario", "plain-story"', story_runner)
+        self.assertIn("DS4_SERVER_PHASE_PROFILE=1", story_runner)
+        self.assertIn("Qwen3.8-27B-UD-Q4_K_S.gguf", sampling_runner)
+        self.assertIn("DS4_MTP_CYCLE_TRACE=1", sampling_runner)
+        self.assertIn('"greedy_nothink"', sampling_matrix)
+        self.assertIn('"sampled_nothink"', sampling_matrix)
+        self.assertIn('"greedy_think"', sampling_matrix)
+        self.assertIn('"sampled_think"', sampling_matrix)
+        self.assertIn(
+            'SCENARIOS = ("plain", "optional_text", "required_tool")',
+            sampling_matrix,
+        )
         self.assertIn("--ctx 22593", agent_server_launcher)
         self.assertNotIn("--ctx 24768", agent_server_launcher)
         self.assertIn(
-            'default="Qwen3.6-27B-Q4_K_S"', agent_profiler
+            'default="Qwen3.8-27B-UD-Q4_K_S"', agent_profiler
         )
 
     @unittest.skipUnless(os.environ.get("DS4_TEST_QWEN38_SHA") == "1",

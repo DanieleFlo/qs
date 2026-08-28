@@ -4,7 +4,7 @@ set -u
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_dir"
 
-model="${DS4_TEST_MODEL:-gguf/Qwen3.6-27B-Q4_K_S.gguf}"
+model="${DS4_TEST_MODEL:-gguf/Qwen3.8-27B-UD-Q4_K_S.gguf}"
 test_dir="${DS4_AGENTIC_TEST_DIR:-$repo_dir/tests}"
 test_binary="${DS4_AGENTIC_CHECKPOINT_BIN:-$repo_dir/tests/test_agentic_checkpoint}"
 suffix=""

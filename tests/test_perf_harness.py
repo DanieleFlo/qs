@@ -242,6 +242,8 @@ class PerfHarnessTests(unittest.TestCase):
             "parser_bytes_visited=5678 trie_nodes_visited=321 "
             "subtrees_pruned=77 trie_leaf_tokens_emitted=19 mask_cache_hit=0 "
             "mask_cache_miss=40 grammar_compile_ms=0.000 grammar_jit_ms=0.000 "
+            "search_static_steps=37 search_static_fallbacks=3 "
+            "mtp_constrained_target_only_steps=40 "
             "constraint_state_checkpoint=9932800 constraint_state_rollback=9932800 "
             "exhaustive_fallback_steps=3\n"
         )
@@ -255,6 +257,9 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(rows[0]["trie_leaf_tokens_emitted"], 19)
         self.assertEqual(rows[0]["constraint_state_checkpoint"], 9932800)
         self.assertEqual(rows[0]["exhaustive_fallback_steps"], 3)
+        self.assertEqual(rows[0]["search_static_steps"], 37)
+        self.assertEqual(rows[0]["search_static_fallbacks"], 3)
+        self.assertEqual(rows[0]["mtp_constrained_target_only_steps"], 40)
         self.assertEqual(rows[0]["oracle_compare_calls"], 40)
         self.assertEqual(rows[0]["oracle_divergences"], 0)
 

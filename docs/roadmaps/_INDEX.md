@@ -199,31 +199,34 @@ Portare `Qwen3.8-27B-UD-Q4_K_S.gguf` allo stesso livello funzionale del target
 Questo diario separa il lavoro sulle prestazioni del server agentico dal lavoro
 
 - righe 5–24: **Scopo e vincoli** — Questo diario separa il lavoro sulle prestazioni del server agentico dal lavoro
-- righe 25–36: **Stato sintetico** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 37–115: **Baseline iniziale ricavata dai log** — Questi numeri sono osservazioni preliminari, non ancora un benchmark controllato.
-  - righe 70–88: **Baseline controllata del server** — Payload fisso: Qwen3.6-27B Q4_K_S, contesto 32768, tool
-  - righe 89–115: **Confronto Qwen3.8/Qwen3.6 dopo la correzione ChatML** — Il confronto del 2026-08-25 usa lo stesso binario, RTX 3090, contesto 32768,
-- righe 116–149: **Punto 1 — Strumentazione e benchmark ripetibile** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
-  - righe 118–135: **Telemetria da aggiungere** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
-  - righe 136–149: **Matrice minima di misura** — build/commit, flags, modello, hardware e correttezza.
-- righe 150–225: **Punto 2 — Rendere efficiente il constrained decoding DSML/JSON** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
-  - righe 152–173: **Risultato della ricerca in letteratura** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
-  - righe 174–225: **Sequenza sperimentale** — massima invece di richiamare e ricopiare il testo per ogni sampling.
-    - righe 176–190: **2A — Eliminare lavoro ripetuto senza cambiare l'algoritmo** — massima invece di richiamare e ricopiare il testo per ogni sampling.
-    - righe 191–206: **2B — Ridurre i candidati visitati** — engine/vocabolario.
-    - righe 207–215: **2C — Cache adattiva per stato e schemi dinamici** — schema dinamici, seguendo l'idea di cache cross-grammar.
-    - righe 216–225: **2D — Parallelismo e tecniche più invasive, solo se ancora necessarie** — token appena committato: le dipendenze lo permettono, ma serve un protocollo
-- righe 226–308: **Punto 3 — Sincronizzazione efficiente dei piccoli suffissi** — Questo punto resta deliberatamente dopo la telemetria e il primo intervento
-  - righe 233–247: **Requisito esplicito per sessioni live e MTP** — Per preparare il percorso MTP, un prefill live di **2 token o più** deve essere
-  - righe 248–259: **Audit storico completato prima del codice** — il fast-forward DSML (`git log`, `git blame`, diff e test associati).
-  - righe 260–267: **Matrice di crossover da misurare** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 268–287: **Misure mirate del crossover live a contesto 8k** — La prima variante, che selezionava il percorso in base al solo `suffix_len`, ha
-  - righe 288–308: **Gate finali eseguiti** — normale roundoff del probe.
-- righe 309–333: **Ledger degli esperimenti e dei tentativi** — Stati ammessi:
-- righe 334–369: **Registro cronologico** — 27.08 tok/s a 16k.
-  - righe 336–348: **2026-08-12 — Apertura** — 27.08 tok/s a 16k.
-  - righe 349–369: **2026-08-12 — Implementazione e chiusura del ciclo** — DSML controllato è passato da circa 12.47 a circa 22.3 tok/s.
-- righe 370–376: **Prossima azione** — Il ciclo corrente è chiuso.
+- righe 25–43: **Stato sintetico** — target-only/MTP su Chat e Responses agentiche.
+- righe 44–150: **Baseline iniziale ricavata dai log** — Questi numeri sono osservazioni preliminari, non ancora un benchmark controllato.
+  - righe 77–95: **Baseline controllata del server** — Payload fisso: Qwen3.6-27B Q4_K_S, contesto 32768, tool
+  - righe 96–122: **Confronto Qwen3.8/Qwen3.6 dopo la correzione ChatML** — Il confronto del 2026-08-25 usa lo stesso binario, RTX 3090, contesto 32768,
+  - righe 123–150: **Ciclo Qwen3.8 del 2026-08-27: storia agentica senza tool call** — Il nuovo fixture usa il vero `DeepAgent` `bootstrap-wiki`, tool disponibili con
+- righe 151–184: **Punto 1 — Strumentazione e benchmark ripetibile** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
+  - righe 153–170: **Telemetria da aggiungere** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
+  - righe 171–184: **Matrice minima di misura** — build/commit, flags, modello, hardware e correttezza.
+- righe 185–262: **Punto 2 — Rendere efficiente il constrained decoding DSML/JSON** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
+  - righe 187–208: **Risultato della ricerca in letteratura** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
+  - righe 209–262: **Sequenza sperimentale** — massima invece di richiamare e ricopiare il testo per ogni sampling.
+    - righe 211–225: **2A — Eliminare lavoro ripetuto senza cambiare l'algoritmo** — massima invece di richiamare e ricopiare il testo per ogni sampling.
+    - righe 226–241: **2B — Ridurre i candidati visitati** — engine/vocabolario.
+    - righe 242–252: **2C — Cache adattiva per stato e schemi dinamici** — quando tracker e frontiera non contengono marker parziali.
+    - righe 253–262: **2D — Parallelismo e tecniche più invasive, solo se ancora necessarie** — token appena committato: le dipendenze lo permettono, ma serve un protocollo
+- righe 263–345: **Punto 3 — Sincronizzazione efficiente dei piccoli suffissi** — Questo punto resta deliberatamente dopo la telemetria e il primo intervento
+  - righe 270–284: **Requisito esplicito per sessioni live e MTP** — Per preparare il percorso MTP, un prefill live di **2 token o più** deve essere
+  - righe 285–296: **Audit storico completato prima del codice** — il fast-forward DSML (`git log`, `git blame`, diff e test associati).
+  - righe 297–304: **Matrice di crossover da misurare** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 305–324: **Misure mirate del crossover live a contesto 8k** — La prima variante, che selezionava il percorso in base al solo `suffix_len`, ha
+  - righe 325–345: **Gate finali eseguiti** — normale roundoff del probe.
+- righe 346–375: **Ledger degli esperimenti e dei tentativi** — Stati ammessi:
+- righe 376–445: **Registro cronologico** — 27.08 tok/s a 16k.
+  - righe 378–390: **2026-08-12 — Apertura** — 27.08 tok/s a 16k.
+  - righe 391–411: **2026-08-12 — Implementazione e chiusura del ciclo** — DSML controllato è passato da circa 12.47 a circa 22.3 tok/s.
+  - righe 412–426: **2026-08-27 — Qwen3.8, `SEARCH` statico e storia live** — target-only/MTP con phase profiling e KV SSD.
+  - righe 427–445: **2026-08-28 — Matrice sampling, thinking e MTP** — temperatura zero e non coprivano il prodotto cartesiano richiesto.
+- righe 446–453: **Prossima azione** — Il ciclo corrente è chiuso.
 
 ## [TODO — GPU Kernel Engineering Harness per DS4 / Qwen 3.6 27B](todo-harness.md)
 

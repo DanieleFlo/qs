@@ -172,3 +172,15 @@ Ogni riga segue:
 - righe 583–628: **MTP long-context e crossover split-K, 2026-08-13** — La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per
 - righe 629–651: **Coda ordinata** — 1.
 - righe 652–669: **Template per il prossimo record** — ID / data / commit / dirty state:
+
+## [Qwen3.8 agentico: partizione statica DSML `SEARCH`](qwen38-agent-search-static-2026-08-27.md)
+
+Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del
+
+- righe 3–17: **Obiettivo e invarianti** — Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del
+- righe 18–40: **Baseline prima della modifica** — Hardware: RTX 3090, build CUDA `sm_86`, contesto allocato 22.593, prompt
+- righe 41–63: **Risultato appaiato** — Il masking target-only scende del 99,21%.
+- righe 64–95: **Gate di correttezza** — La storia completa è stata ripetuta con `compare_new_vs_oracle`: 433 confronti
+- righe 96–148: **Matrice temperatura, thinking e MTP** — Il gate `tests/test_server_sampling_matrix.py` esplicita il prodotto cartesiano
+- righe 149–182: **Fonti primarie e scelte implementative** — I valori campionati non sono inventati dal benchmark.
+- righe 183–198: **Test live ripetibile** — `tests/run_agent_story_live.ps1` avvia in sequenza target-only e MTP, abilita il

@@ -1,5 +1,5 @@
 param(
-    [string]$Model = "gguf/Qwen3.6-27B-Q4_K_S.gguf",
+    [string]$Model = "gguf/Qwen3.8-27B-UD-Q4_K_S.gguf",
     [string]$MtpModel = "",
     [ValidateSet("all", "cold", "warm")]
     [string]$MtpPhase = "all",

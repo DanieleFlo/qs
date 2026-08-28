@@ -55330,21 +55330,24 @@ int ds4_session_save_snapshot(ds4_session *s, ds4_session_snapshot *snap, char *
         payload_set_err(err, errlen, "session has no valid checkpoint to snapshot");
         return 1;
     }
-    if (bytes > (uint64_t)SIZE_MAX) {
+    if (bytes >= (uint64_t)SIZE_MAX) {
         payload_set_err(err, errlen, "session snapshot is too large for this platform");
         return 1;
     }
-    if (snap->cap < bytes) {
-        uint8_t *p = realloc(snap->ptr, (size_t)bytes);
+    const size_t stream_bytes = (size_t)bytes + 1;
+    if (snap->cap < (uint64_t)stream_bytes) {
+        uint8_t *p = realloc(snap->ptr, stream_bytes);
         if (!p) {
             payload_set_err(err, errlen, "out of memory while allocating session snapshot");
             return 1;
         }
         snap->ptr = p;
-        snap->cap = bytes;
+        snap->cap = (uint64_t)stream_bytes;
     }
 
-    FILE *fp = fmemopen(snap->ptr, (size_t)bytes, "wb");
+    /* fmemopen() needs one physical byte beyond the binary payload for the
+     * NUL it writes on flush/close.  snap->len remains the payload length. */
+    FILE *fp = fmemopen(snap->ptr, stream_bytes, "wb");
     if (!fp) {
         payload_set_err(err, errlen, "failed to open memory stream for session snapshot");
         return 1;

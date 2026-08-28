@@ -2085,6 +2085,67 @@
               "summary": "ID / data / commit / dirty state:"
             }
           ]
+        },
+        {
+          "path": "docs/performance/qwen38-agent-search-static-2026-08-27.md",
+          "sections": [
+            {
+              "title": "Qwen3.8 agentico: partizione statica DSML `SEARCH`",
+              "level": 1,
+              "start": 1,
+              "end": 198,
+              "summary": "Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del"
+            },
+            {
+              "title": "Obiettivo e invarianti",
+              "level": 2,
+              "start": 3,
+              "end": 17,
+              "summary": "Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del"
+            },
+            {
+              "title": "Baseline prima della modifica",
+              "level": 2,
+              "start": 18,
+              "end": 40,
+              "summary": "Hardware: RTX 3090, build CUDA `sm_86`, contesto allocato 22.593, prompt"
+            },
+            {
+              "title": "Risultato appaiato",
+              "level": 2,
+              "start": 41,
+              "end": 63,
+              "summary": "Il masking target-only scende del 99,21%."
+            },
+            {
+              "title": "Gate di correttezza",
+              "level": 2,
+              "start": 64,
+              "end": 95,
+              "summary": "La storia completa è stata ripetuta con `compare_new_vs_oracle`: 433 confronti"
+            },
+            {
+              "title": "Matrice temperatura, thinking e MTP",
+              "level": 2,
+              "start": 96,
+              "end": 148,
+              "summary": "Il gate `tests/test_server_sampling_matrix.py` esplicita il prodotto cartesiano"
+            },
+            {
+              "title": "Fonti primarie e scelte implementative",
+              "level": 2,
+              "start": 149,
+              "end": 182,
+              "summary": "I valori campionati non sono inventati dal benchmark."
+            },
+            {
+              "title": "Test live ripetibile",
+              "level": 2,
+              "start": 183,
+              "end": 198,
+              "summary": "`tests/run_agent_story_live.ps1` avvia in sequenza target-only e MTP, abilita il"
+            }
+          ]
         }
       ]
     },
@@ -3374,8 +3435,8 @@
               "title": "TODO — Prestazioni del server agentico e constrained decoding",
               "level": 1,
               "start": 1,
-              "end": 376,
-              "summary": "Ultimo aggiornamento: 2026-08-25"
+              "end": 453,
+              "summary": "Ultimo aggiornamento: 2026-08-28"
             },
             {
               "title": "Scopo e vincoli",
@@ -3388,175 +3449,196 @@
               "title": "Stato sintetico",
               "level": 2,
               "start": 25,
-              "end": 36,
-              "summary": "Sezione strutturale; consultare il contenuto locale indicato."
+              "end": 43,
+              "summary": "target-only/MTP su Chat e Responses agentiche."
             },
             {
               "title": "Baseline iniziale ricavata dai log",
               "level": 2,
-              "start": 37,
-              "end": 115,
+              "start": 44,
+              "end": 150,
               "summary": "Questi numeri sono osservazioni preliminari, non ancora un benchmark controllato."
             },
             {
               "title": "Baseline controllata del server",
               "level": 3,
-              "start": 70,
-              "end": 88,
+              "start": 77,
+              "end": 95,
               "summary": "Payload fisso: Qwen3.6-27B Q4_K_S, contesto 32768, tool"
             },
             {
               "title": "Confronto Qwen3.8/Qwen3.6 dopo la correzione ChatML",
               "level": 3,
-              "start": 89,
-              "end": 115,
+              "start": 96,
+              "end": 122,
               "summary": "Il confronto del 2026-08-25 usa lo stesso binario, RTX 3090, contesto 32768,"
+            },
+            {
+              "title": "Ciclo Qwen3.8 del 2026-08-27: storia agentica senza tool call",
+              "level": 3,
+              "start": 123,
+              "end": 150,
+              "summary": "Il nuovo fixture usa il vero `DeepAgent` `bootstrap-wiki`, tool disponibili con"
             },
             {
               "title": "Punto 1 — Strumentazione e benchmark ripetibile",
               "level": 2,
-              "start": 116,
-              "end": 149,
+              "start": 151,
+              "end": 184,
               "summary": "(0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);"
             },
             {
               "title": "Telemetria da aggiungere",
               "level": 3,
-              "start": 118,
-              "end": 135,
+              "start": 153,
+              "end": 170,
               "summary": "(0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);"
             },
             {
               "title": "Matrice minima di misura",
               "level": 3,
-              "start": 136,
-              "end": 149,
+              "start": 171,
+              "end": 184,
               "summary": "build/commit, flags, modello, hardware e correttezza."
             },
             {
               "title": "Punto 2 — Rendere efficiente il constrained decoding DSML/JSON",
               "level": 2,
-              "start": 150,
-              "end": 225,
+              "start": 185,
+              "end": 262,
               "summary": "Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a"
             },
             {
               "title": "Risultato della ricerca in letteratura",
               "level": 3,
-              "start": 152,
-              "end": 173,
+              "start": 187,
+              "end": 208,
               "summary": "Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a"
             },
             {
               "title": "Sequenza sperimentale",
               "level": 3,
-              "start": 174,
-              "end": 225,
+              "start": 209,
+              "end": 262,
               "summary": "massima invece di richiamare e ricopiare il testo per ogni sampling."
             },
             {
               "title": "2A — Eliminare lavoro ripetuto senza cambiare l'algoritmo",
               "level": 4,
-              "start": 176,
-              "end": 190,
+              "start": 211,
+              "end": 225,
               "summary": "massima invece di richiamare e ricopiare il testo per ogni sampling."
             },
             {
               "title": "2B — Ridurre i candidati visitati",
               "level": 4,
-              "start": 191,
-              "end": 206,
+              "start": 226,
+              "end": 241,
               "summary": "engine/vocabolario."
             },
             {
               "title": "2C — Cache adattiva per stato e schemi dinamici",
               "level": 4,
-              "start": 207,
-              "end": 215,
-              "summary": "schema dinamici, seguendo l'idea di cache cross-grammar."
+              "start": 242,
+              "end": 252,
+              "summary": "quando tracker e frontiera non contengono marker parziali."
             },
             {
               "title": "2D — Parallelismo e tecniche più invasive, solo se ancora necessarie",
               "level": 4,
-              "start": 216,
-              "end": 225,
+              "start": 253,
+              "end": 262,
               "summary": "token appena committato: le dipendenze lo permettono, ma serve un protocollo"
             },
             {
               "title": "Punto 3 — Sincronizzazione efficiente dei piccoli suffissi",
               "level": 2,
-              "start": 226,
-              "end": 308,
+              "start": 263,
+              "end": 345,
               "summary": "Questo punto resta deliberatamente dopo la telemetria e il primo intervento"
             },
             {
               "title": "Requisito esplicito per sessioni live e MTP",
               "level": 3,
-              "start": 233,
-              "end": 247,
+              "start": 270,
+              "end": 284,
               "summary": "Per preparare il percorso MTP, un prefill live di **2 token o più** deve essere"
             },
             {
               "title": "Audit storico completato prima del codice",
               "level": 3,
-              "start": 248,
-              "end": 259,
+              "start": 285,
+              "end": 296,
               "summary": "il fast-forward DSML (`git log`, `git blame`, diff e test associati)."
             },
             {
               "title": "Matrice di crossover da misurare",
               "level": 3,
-              "start": 260,
-              "end": 267,
+              "start": 297,
+              "end": 304,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
             },
             {
               "title": "Misure mirate del crossover live a contesto 8k",
               "level": 3,
-              "start": 268,
-              "end": 287,
+              "start": 305,
+              "end": 324,
               "summary": "La prima variante, che selezionava il percorso in base al solo `suffix_len`, ha"
             },
             {
               "title": "Gate finali eseguiti",
               "level": 3,
-              "start": 288,
-              "end": 308,
+              "start": 325,
+              "end": 345,
               "summary": "normale roundoff del probe."
             },
             {
               "title": "Ledger degli esperimenti e dei tentativi",
               "level": 2,
-              "start": 309,
-              "end": 333,
+              "start": 346,
+              "end": 375,
               "summary": "Stati ammessi:"
             },
             {
               "title": "Registro cronologico",
               "level": 2,
-              "start": 334,
-              "end": 369,
+              "start": 376,
+              "end": 445,
               "summary": "27.08 tok/s a 16k."
             },
             {
               "title": "2026-08-12 — Apertura",
               "level": 3,
-              "start": 336,
-              "end": 348,
+              "start": 378,
+              "end": 390,
               "summary": "27.08 tok/s a 16k."
             },
             {
               "title": "2026-08-12 — Implementazione e chiusura del ciclo",
               "level": 3,
-              "start": 349,
-              "end": 369,
+              "start": 391,
+              "end": 411,
               "summary": "DSML controllato è passato da circa 12.47 a circa 22.3 tok/s."
+            },
+            {
+              "title": "2026-08-27 — Qwen3.8, `SEARCH` statico e storia live",
+              "level": 3,
+              "start": 412,
+              "end": 426,
+              "summary": "target-only/MTP con phase profiling e KV SSD."
+            },
+            {
+              "title": "2026-08-28 — Matrice sampling, thinking e MTP",
+              "level": 3,
+              "start": 427,
+              "end": 445,
+              "summary": "temperatura zero e non coprivano il prodotto cartesiano richiesto."
             },
             {
               "title": "Prossima azione",
               "level": 2,
-              "start": 370,
-              "end": 376,
+              "start": 446,
+              "end": 453,
               "summary": "Il ciclo corrente è chiuso."
             }
           ]

@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 
 
 BASE_URL = os.environ.get("DS4_CONSTRAINED_BASE_URL", "").rstrip("/")
-MODEL = os.environ.get("DS4_CONSTRAINED_MODEL", "Qwen3.6-27B-Q4_K_S")
+MODEL = os.environ.get("DS4_CONSTRAINED_MODEL", "Qwen3.8-27B-UD-Q4_K_S")
 SERVER_CONTEXT_TOKENS = int(os.environ.get("DS4_CONSTRAINED_SERVER_CTX", "22593"))
 REQUIRED_SERVER_CONTEXT_TOKENS = 22593
 HISTORY_MAX_UTF8_BYTES = 18_000

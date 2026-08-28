@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import time
 import unittest
 import urllib.request
@@ -360,10 +361,16 @@ def run_skill_cases(
 
 
 def main() -> None:
+    # PowerShell can inherit a legacy CP1252 console although the API and JSON
+    # report are UTF-8. Responses may legitimately contain full-width DSML
+    # marker characters, so report serialization must not depend on that code
+    # page.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("cold", "warm"), required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:18082/v1")
-    parser.add_argument("--model-id", default="Qwen3.6-27B-Q4_K_S")
+    parser.add_argument("--model-id", default="Qwen3.8-27B-UD-Q4_K_S")
     parser.add_argument("--server-log", type=Path, required=True)
     parser.add_argument("--workroot", type=Path, required=True)
     parser.add_argument(

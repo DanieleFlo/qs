@@ -185,6 +185,13 @@ IQ4_NL, and IQ4_XS tensors, so both target-only and MTP inference run through
 the same engine/session API used by Qwen3.6. See the
 [Qwen3.8 compatibility audit](docs/architecture/qwen38-compatibility.md).
 
+Qwen3.8 is the primary operational and performance reference. The local server
+launchers, performance harness, JSONSchemaBench gate, Agent SSD runner, and
+long-story profiler default to `Qwen3.8-27B-UD-Q4_K_S` with a 22,593-token
+allocation. Target-only remains the default; pass `--mtp` or an explicit
+`--mtp-model gguf/mtp-Qwen3.8-27B-Q4_0.gguf` when the sidecar is wanted.
+Qwen3.6 remains supported and keeps its compatibility and smoke gates.
+
 ### Runtime ownership
 
 The CLI and server choose user-facing policy (model, prompt, sampling and
@@ -1077,14 +1084,15 @@ cycle. The target model therefore remains the only sampling authority.
 Start a local OpenAI/Anthropic-compatible server:
 
 ```sh
-./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
-  --ctx 100000 --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192
+./ds4-server --cuda -m gguf/Qwen3.8-27B-UD-Q4_K_S.gguf \
+  --ctx 22593 --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192
 ```
 
 Add `--mtp` to enable Qwen MTP for greedy and ordinary sampled decoding; omit it
-for target-only decoding. Stochastic MTP is conservatively disabled for tool and
+for target-only decoding. MTP is conservatively disabled for tool and
 response-schema requests because their token masks change after each accepted
-token. Greedy constrained phases retain the existing MTP path.
+token. Phase profiling reports these steps as constrained target-only so they
+are not mistaken for sidecar speedups.
 
 Use `--chdir /path/to/ds4` when launching `ds4-server` from another directory,
 so relative runtime files such as `metal/*.metal` resolve from the project tree.
@@ -1241,14 +1249,14 @@ rejected instead of being silently ignored.
 The real-model adversarial suite exercises both tool calls and structured JSON
 with and without a synthetic multi-message history. Its history fixture is
 5,077 UTF-8 bytes (well below 20k tokens even under a pessimistic byte-level
-tokenizer bound), while the server context is fixed at 32,768 tokens:
+tokenizer bound), while the primary Qwen3.8 server context is 22,593 tokens:
 
 ```sh
-./ds4-server --cuda -m gguf/Qwen3.6-27B-Q4_K_S.gguf \
-  --ctx 32768 --host 127.0.0.1 --port 8080
+./ds4-server --cuda -m gguf/Qwen3.8-27B-UD-Q4_K_S.gguf \
+  --ctx 22593 --host 127.0.0.1 --port 8080
 
 DS4_CONSTRAINED_BASE_URL=http://127.0.0.1:8080 \
-DS4_CONSTRAINED_SERVER_CTX=32768 \
+DS4_CONSTRAINED_SERVER_CTX=22593 \
 make test-constrained-json-live
 ```
 
@@ -1266,11 +1274,40 @@ Minimal OpenAI example:
 curl http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"Qwen3.6-27B-Q4_K_S",
+    "model":"Qwen3.8-27B-UD-Q4_K_S",
     "messages":[{"role":"user","content":"List three Redis design principles."}],
     "stream":true
   }'
 ```
+
+The real Agent Wiki long-generation gate measures the optional DSML `SEARCH`
+state when tools are available but the model writes ordinary prose. It runs a
+warm-up and two measured 250--300-word stories, retains KV checkpoints on SSD,
+and verifies `finish=stop`, one model request, at least 400 output tokens, no
+tool call or exposed DSML marker, and an in-memory post-response rebuild:
+
+```powershell
+./tests/run_agent_story_live.ps1 -Mode both
+```
+
+The complementary server sampling matrix covers temperature zero/non-zero,
+thinking enabled/disabled, and target-only/MTP across unconstrained text,
+optional agentic text, and required tool calls. It uses Qwen's documented
+sampled recommendations, fixed seeds where the endpoint supports them, and
+checks the server's MTP/constraint counters as well as the public response:
+
+```powershell
+./tests/run_server_sampling_matrix.ps1 -Mode both
+```
+
+Run the model-free matrix guard with
+`make test-server-sampling-matrix-static`.
+
+On Qwen3.8 at an occupied context of 10,814 tokens, the static `SEARCH`
+partition improved target-only decode from 11.739 to 23.457 tok/s while reducing
+median mask construction from 17,293 ms to 136 ms. Full-vocabulary comparison
+reported zero divergences. See the
+[Qwen3.8 agent SEARCH result](docs/performance/qwen38-agent-search-static-2026-08-27.md).
 
 ### Agent Client Usage
 

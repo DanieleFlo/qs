@@ -1,6 +1,6 @@
 # TODO — Prestazioni del server agentico e constrained decoding
 
-Ultimo aggiornamento: 2026-08-25
+Ultimo aggiornamento: 2026-08-28
 
 ## Scopo e vincoli
 
@@ -33,6 +33,13 @@ Vincoli non negoziabili:
 - [x] Completato l'audit storico e misurato il crossover rilevante del punto 3.
 - [x] Ottimizzato il prefill live di 2--127 token senza toccare i kernel CUDA.
 - [x] Completati i gate finali di regressione e la misura end-to-end del server.
+- [x] Reso Qwen3.8 il riferimento operativo e congelate curve fino a 22K.
+- [x] Ottimizzato lo stato DSML opzionale `SEARCH` con partizione statica sicura.
+- [x] Aggiunto il test live della storia lunga, target-only e MTP.
+- [x] Aggiunta la matrice live temperatura zero/nonzero, thinking on/off e
+  target-only/MTP su Chat e Responses agentiche.
+- [x] Verificato Agent SSD in entrambe le direzioni target-only/MTP e corretto
+  il buffer `fmemopen` del resident frontier host.
 
 ## Baseline iniziale ricavata dai log
 
@@ -112,6 +119,34 @@ Artifact:
 
 - `performance-results/qwen38-chatml-dsml-trie-20260825-002/experiment.json`;
 - `performance-results/qwen36-chatml-dsml-trie-20260825/experiment.json`.
+
+### Ciclo Qwen3.8 del 2026-08-27: storia agentica senza tool call
+
+Il nuovo fixture usa il vero `DeepAgent` `bootstrap-wiki`, tool disponibili con
+scelta automatica e `reasoning.effort=none`. Il prompt occupa 10.814 token e la
+risposta deterministica contiene 432 token e 298 parole, termina con `stop`, usa
+una sola richiesta modello e non emette tool call.
+
+| Mediana, 1 warm-up + 2 run | Baseline | Partizione `SEARCH` | Variazione |
+|---|---:|---:|---:|
+| Target-only decode | 11,739 tok/s | 23,457 tok/s | +99,82% |
+| Target-only masking | 17.293,25 ms | 136,34 ms | -99,21% |
+| MTP caricato, decode constrained target-only | 11,524 tok/s | 23,417 tok/s | +103,21% |
+
+Gli hash delle risposte candidate coincidono con le rispettive baseline. Ogni
+run usa la partizione in tutti i 433 passi `SEARCH`, con zero fallback; stop,
+thinking control, token vuoti e piece contenenti `<` restano dinamici. In
+modalità `compare_new_vs_oracle` la storia completa ha prodotto 433 confronti
+full-vocabulary e zero divergenze. DSML obbligatorio e JSON Schema annidato
+hanno superato lo stesso gate strutturale.
+
+Con MTP caricato, il nuovo contatore riporta 433 passi constrained target-only:
+lo speculative decoding non è stato modificato né usato per rivendicare il
+guadagno. I checkpoint post-risposta sono ricostruiti da `memory-request` in
+VRAM senza rilettura SSD nella finestra di pubblicazione.
+
+Dettagli e artifact sono in
+`docs/performance/qwen38-agent-search-static-2026-08-27.md`.
 
 ## Punto 1 — Strumentazione e benchmark ripetibile
 
@@ -206,6 +241,8 @@ ripetizioni sopra; il fallback esaustivo resta fail-closed.
 
 #### 2C — Cache adattiva per stato e schemi dinamici
 
+- [x] Riutilizzare la partizione statica DSML nello stato opzionale `SEARCH`
+  quando tracker e frontiera non contengono marker parziali.
 - [ ] Identificare una chiave canonica minima dello stato del simulatore.
 - [ ] Separare componenti statiche (marker/wrapper DSML, lessico JSON) da tool e
   schema dinamici, seguendo l'idea di cache cross-grammar.
@@ -322,6 +359,11 @@ layer-major da 128 in su. Il gate numerico obbligatorio è stato superato.
 | OPT-20260812-05 | Omettere i logits intermedi nel micro-prefill | Output head solo sull'ultima riga | stato/KV invariato, regressioni, benchmark | `KEEP` | 2 token 30.63--32.04 -> 31.88--33.86 tok/s; output head finale alimenta direttamente sampling/MTP. |
 | OPT-20260812-06 | Copiare history/raw una sola volta per scansione | Riuso del prefisso nella scratch del filtro | output identico, 5 run | `KEEP` | Filtro mediano circa 0.265 -> 0.246 s; decode mediano statisticamente invariato (2.372 -> 2.377 s). |
 | BENCH-20260812-01 | Matrice ampia parallela 4--512 | Più processi benchmark | CSV completo e isolamento | `REJECT` | Timeout senza dataset valido; sostituita da run seriali mirate per non contaminare la GPU. |
+| BASE-20260827-01 | La storia agentica libera espone il costo residuo di `SEARCH` | Nessuna modifica server | warm-up + 2 run target/MTP, phase profile | `KEEP` | 11,739 tok/s target; masking mediano 17.293 ms su 432 token. |
+| TEST-20260827-01 | Un fixture plain-story deve distinguere risposta testuale e tool call | Solo profiler/runner | stop, una richiesta, >=400 token, >=250 parole, SSD | `KEEP` | 432 token, 298 parole, zero tool call; reasoning none esplicito evita il recupero Agent Wiki. |
+| OPT-20260827-01 | La partizione statica DSML è sicura in `SEARCH` sincronizzato | Eligibility `SEARCH` soltanto | A/B, hash, compare-oracle, SSD | `KEEP` | 23,457 tok/s (+99,82%), masking 136 ms (-99,21%), 433 confronti e zero divergenze. |
+| TEST-20260828-01 | Temperatura, thinking e MTP devono essere assi espliciti del server | Harness Chat/Responses e runner target/MTP | 12 casi per variante, contatori, semantica/contratto | `KEEP` | 12/12 target e 12/12 MTP; confronto 6 semantic-exact + 6 contract, inclusa transizione fallback→SEARCH statico dopo `</think>`. |
+| FIX-20260828-01 | Il frontier host deve sopravvivere al cambio MTP → target | Capacità fisica `payload+1` per `fmemopen`, lunghezza logica invariata | Ultimo byte, checksum, system/HDS/skill cold-warm nelle due direzioni | `KEEP` | Rimossa la corruzione dell'ultimo byte; nessun reload SSD post-risposta e tutti i gruppi Agent SSD passano. |
 
 Stati ammessi:
 
@@ -367,10 +409,45 @@ Stati ammessi:
   miglioramento locale del filtro di circa il 7%, neutro end-to-end entro la
   variabilità dell'eval e registrato senza sovrastimarne l'effetto.
 
+### 2026-08-27 — Qwen3.8, `SEARCH` statico e storia live
+
+- Congelate curve server target-only/MTP a 2K, 8K, 10,8K, 16K e 22K.
+- Aggiunto `plain-story` al profiler reale Agent Wiki e un runner PowerShell per
+  target-only/MTP con phase profiling e KV SSD.
+- Isolato il masking `SEARCH` come collo dominante: circa 17,3 s su 36,8 s di
+  decode per 432 token.
+- Riutilizzata la partizione statica DSML solo con tracker sincronizzato e
+  nessun `<` nella finestra trattenuta; ogni caso non dimostrato sicuro resta
+  dinamico e fail-closed.
+- Misurato un raddoppio stabile del throughput, con hash identici, checkpoint
+  residenti e zero divergenze full-vocabulary.
+- Resi Qwen3.8 e 22.593 token i default operativi di launcher, harness,
+  JSONSchemaBench e runner agentici; Qwen3.6 resta uno smoke di compatibilità.
+
+### 2026-08-28 — Matrice sampling, thinking e MTP
+
+- Auditata la copertura esistente: constrained API, Agent SSD e storia usavano
+  temperatura zero e non coprivano il prodotto cartesiano richiesto.
+- Aggiunto un gate model-free a `make test` e un runner live che esegue 12 casi
+  target-only e 12 con sidecar MTP.
+- Usata Chat con seed per il testo libero e Responses per l'estensione
+  `agentic`, rispettando i campi realmente supportati da ciascun endpoint.
+- Verificati sampling Qwen raccomandato, greedy, thinking on/off, SEARCH
+  opzionale, tool obbligatorio, cicli MTP e fallback constrained target-only.
+- Conservata la distinzione fra identità semantica e contratto pubblico: i
+  near-argmax del verifier batch possono cambiare il reasoning nascosto, mai la
+  validità o la scelta/struttura delle call.
+- Eseguito Agent SSD su system, HDS e deep-skill sia target-only → MTP sia MTP
+  → target-only. Il secondo verso ha scoperto che `fmemopen` richiedeva un byte
+  fisico extra per il terminatore; dopo il fix, checksum residenti,
+  ricostruzioni `memory-request` e tutti i canary sono verdi senza reload SSD
+  post-risposta.
+
 ## Prossima azione
 
-Il ciclo corrente è chiuso. Il collo residuo misurato è ancora la scansione
-esaustiva del vocabolario (circa 0.246 s per la risposta controllata), ma è ormai
-secondario rispetto all'eval. Un ciclo successivo può affrontare 2B con trie
-byte-level e fuzz differenziale, poi 2C con cache adattiva dello stato parser;
-entrambi richiedono una nuova baseline e gli stessi gate di semantica.
+Il ciclo corrente è chiuso. Nella storia libera l'eval GPU è di nuovo il costo
+dominante; il masking `SEARCH` è sceso a circa 0,14 s per 432 token. La prossima
+ottimizzazione server deve partire da una nuova attribuzione su tool payload,
+JSON Schema e prefissi parziali, non da un'altra scorciatoia `SEARCH`. Una cache
+adattiva per stati strutturali o overlap CPU/GPU resta subordinata agli stessi
+gate full-vocabulary e live SSD.

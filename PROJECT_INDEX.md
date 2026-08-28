@@ -247,8 +247,20 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   pinned dell'intero corpus esterno, classificazione fail-closed delle 9.558
   schema e tier `smoke`/`safety`, senza adattare gli schema unsupported.
 - `tools/profile_agent_dsml_story.py` — profilo end-to-end del grafo `/agent`
-  `bootstrap-wiki`: forza il testo libero dentro `exit-with-info-tool`, richiede
-  almeno 10k token di contesto e conserva telemetria e fallimenti funzionali.
+  `bootstrap-wiki`: confronta il payload dentro `exit-with-info-tool` e la
+  nuova `plain-story` senza tool call; richiede almeno 10k token di contesto,
+  invia reasoning none esplicito e conserva risposta, hash, token usage,
+  telemetria di fase, checkpoint post-risposta e fallimenti funzionali.
+- `tests/run_agent_story_live.ps1` — runner live Qwen3.8 target-only/MTP della
+  storia lunga, con KV SSD, phase profiling, un warm-up e due run misurate.
+- `tests/test_server_sampling_matrix.py` e
+  `tests/run_server_sampling_matrix.ps1` — matrice server Qwen3.8 live per
+  temperatura zero/nonzero, thinking on/off e target-only/MTP su testo libero,
+  SEARCH agentico opzionale e tool obbligatorio; verifica contatori interni,
+  semantica deterministica e contratto pubblico dei casi campionati.
+- `docs/performance/qwen38-agent-search-static-2026-08-27.md` — baseline,
+  candidate, gate full-vocabulary, matrice sampling/thinking/MTP, fonti primarie
+  e risultato della partizione DSML `SEARCH`.
 - `performance/constrained-workloads.json` — workload canonici DSML/JSON,
   inclusa la fixture nullable free-string che copre lo schema reale
   `anyOf: [string, null]` dell'agente.
@@ -496,6 +508,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   di injection ostili, duplicati, Unicode/escape e validazione degli output;
   usa un'allocazione CUDA Qwen di 22.593 token per restare sotto il limite VRAM
   osservato oltre la frontiera effettiva di 22K.
+- `tests/test_server_sampling_matrix.py` — fixture model-free incluse in
+  `make test` e gate live Chat/Responses per il prodotto cartesiano
+  temperatura × thinking × MTP, con separazione fra identità semantica e
+  contratto pubblico quando Responses non dispone di seed.
 - `tests/test_perf_harness.py` e `tests/test_jsonschemabench_subset.py` — test
   dell'harness constrained, delle metriche di fase e dell'import esterno pinned.
 - `tests/test-vectors/` — prompt corti/lunghi, vettori ufficiali e golden locali

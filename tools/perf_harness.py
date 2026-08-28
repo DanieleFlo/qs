@@ -533,6 +533,8 @@ def parse_server_phase_profiles(text: str) -> list[dict[str, Any]]:
         "dynamic_frontier_size", "mask_cache_hit",
         "mask_cache_miss", "constraint_state_checkpoint",
         "constraint_state_rollback", "exhaustive_fallback_steps",
+        "search_static_steps", "search_static_fallbacks",
+        "mtp_constrained_target_only_steps",
     )
     for line in text.splitlines():
         marker = line.find(SERVER_PHASE_PREFIX)
@@ -2663,6 +2665,8 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
                 "subtrees_pruned", "trie_leaf_tokens_emitted", "mask_cache_hit",
                 "mask_cache_miss", "constraint_state_checkpoint",
                 "constraint_state_rollback", "exhaustive_fallback_steps",
+                "search_static_steps", "search_static_fallbacks",
+                "mtp_constrained_target_only_steps",
                 "grammar_compile_ms",
                 "grammar_jit_ms", "trie_compile_ms", "trie_compiled_nodes",
                 "trie_memory_bytes", "static_mask_compile_ms",
@@ -3547,7 +3551,7 @@ def build_parser() -> argparse.ArgumentParser:
                  "long-context-direction", "long-context-slow"),
     )
     workflow.add_argument("--id")
-    workflow.add_argument("--model", default=str(ROOT / "gguf" / "Qwen3.6-27B-Q4_K_S.gguf"))
+    workflow.add_argument("--model", default=str(ROOT / "gguf" / "Qwen3.8-27B-UD-Q4_K_S.gguf"))
     workflow.add_argument("--prompt", default=str(ROOT / "tests" / "long_context_story_prompt.txt"))
     workflow.add_argument("--results", default=str(DEFAULT_RESULTS))
     workflow.add_argument("--cuda-arch", default="sm_86")

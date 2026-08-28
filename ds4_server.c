@@ -12489,6 +12489,9 @@ typedef struct {
     uint64_t static_mask_memory_bytes;
     uint64_t mask_cache_hit;
     uint64_t mask_cache_miss;
+    uint64_t search_static_steps;
+    uint64_t search_static_fallbacks;
+    uint64_t mtp_constrained_target_only_steps;
     double grammar_compile_ms;
     double grammar_jit_ms;
     double trie_compile_ms;
@@ -12523,6 +12526,8 @@ typedef struct {
     uint32_t oracle_compare_calls;
     uint32_t oracle_divergences;
     uint32_t exhaustive_fallback_steps;
+    uint32_t search_static_steps;
+    uint32_t search_static_fallbacks;
     bool used_static_mask;
     bool ready;
     bool oracle_equal;
@@ -12827,6 +12832,30 @@ static bool response_json_piece_is_string_interior(const char *piece,
     return response_json_lex_feed(&state, piece, piece_len, &ignored) &&
         state.mode == JSON_LEX_STRING && !state.string_is_key &&
         state.string_epoch == 1;
+}
+
+/* Optional DSML SEARCH accepts ordinary assistant text, but it must retain the
+ * exact dynamic filter at any tokenizer boundary that could continue a tool
+ * marker.  The tracker deliberately keeps a suffix window in SEARCH; requiring
+ * that window to be synchronized and free of '<' proves that a non-empty token
+ * without '<' cannot enter or complete DSML structure.  Required tool choice,
+ * stop/thinking controls and every potentially structural token stay on the
+ * fail-closed dynamic frontier. */
+static bool agentic_search_partition_eligible(
+        const agentic_token_filter *filter) {
+    if (!filter || !filter->req || !filter->tracker ||
+        filter->req->tool_choice_required ||
+        filter->tracker->req != filter->req ||
+        filter->tracker->mode != DSML_TRACK_SEARCH ||
+        filter->tracker->decode != DSML_DECODE_OUTSIDE ||
+        filter->tracker->pos > filter->raw_len ||
+        (!filter->raw && filter->raw_len != 0)) {
+        return false;
+    }
+    const size_t pending = filter->raw_len - filter->tracker->pos;
+    if (pending > dsml_max_tool_start_len()) return false;
+    return pending == 0 ||
+        memchr(filter->raw + filter->tracker->pos, '<', pending) == NULL;
 }
 
 static bool server_constraint_partitions_ensure(server *s,
@@ -13597,6 +13626,37 @@ static bool resident_kv_frontier_matches(
     return !prompt || tokens_start_with(prompt, prefix);
 }
 
+/* fmemopen() writing streams append a NUL byte when flushed or closed.  Keep
+ * that implementation byte outside the binary checkpoint payload; otherwise
+ * a full-sized write can lose its final payload byte on libc implementations
+ * that reserve space for the terminator. */
+static FILE *resident_kv_frontier_open_write(
+        ds4_session_snapshot *state, uint64_t payload_bytes,
+        char *err, size_t errlen) {
+    if (!state || payload_bytes == 0 ||
+        payload_bytes >= (uint64_t)SIZE_MAX) {
+        if (errlen) snprintf(err, errlen,
+                             "invalid resident KV frontier size");
+        return NULL;
+    }
+    const size_t stream_bytes = (size_t)payload_bytes + 1;
+    if (state->cap < (uint64_t)stream_bytes) {
+        uint8_t *ptr = realloc(state->ptr, stream_bytes);
+        if (!ptr) {
+            if (errlen) snprintf(err, errlen,
+                                 "out of memory for resident KV frontier");
+            return NULL;
+        }
+        state->ptr = ptr;
+        state->cap = (uint64_t)stream_bytes;
+    }
+    FILE *fp = fmemopen(state->ptr, stream_bytes, "wb");
+    if (!fp && errlen) {
+        snprintf(err, errlen, "failed to open resident KV memory stream");
+    }
+    return fp;
+}
+
 /* ds4_session_save_skill_state() is deliberately a compact Qwen checkpoint:
  * it omits position-addressed full-attention rows and serializes only the
  * recurrent frontier, logits, and MTP state.  Back it with memory here so the
@@ -13626,25 +13686,10 @@ static bool resident_kv_frontier_capture(ds4_session *session,
         frontier->device_state = NULL;
     }
     const uint64_t bytes = ds4_session_skill_state_bytes(session);
-    if (bytes == 0 || bytes > (uint64_t)SIZE_MAX) return false;
-    if (frontier->state.cap < bytes) {
-        uint8_t *ptr = realloc(frontier->state.ptr, (size_t)bytes);
-        if (!ptr) {
-            if (errlen) snprintf(err, errlen,
-                                 "out of memory for resident KV frontier");
-            return false;
-        }
-        frontier->state.ptr = ptr;
-        frontier->state.cap = bytes;
-    }
-
     frontier->valid = false;
-    FILE *fp = fmemopen(frontier->state.ptr, (size_t)bytes, "wb");
-    if (!fp) {
-        if (errlen) snprintf(err, errlen,
-                             "failed to open resident KV memory stream");
-        return false;
-    }
+    FILE *fp = resident_kv_frontier_open_write(&frontier->state, bytes,
+                                                err, errlen);
+    if (!fp) return false;
     uint64_t written = 0;
     int rc = ds4_session_save_skill_state(session, fp, &written, NULL,
                                            err, errlen);
@@ -15905,9 +15950,13 @@ static int build_constrained_forced_tokens(
              (incremental_free_string &&
               !shadow_json_state.string_escape &&
               shadow_json_state.unicode_remaining == 0) :
-             (tool_filter.incremental_free_string &&
-              shadow_tracker.mode == DSML_TRACK_STRING_BODY &&
-              shadow_tracker.pos == shadow.len));
+             ((tool_filter.incremental_free_string &&
+               shadow_tracker.mode == DSML_TRACK_STRING_BODY &&
+               shadow_tracker.pos == shadow.len) ||
+              agentic_search_partition_eligible(&tool_filter)));
+        const bool optional_search_state = !response_constrained &&
+            !r->tool_choice_required &&
+            shadow_tracker.mode == DSML_TRACK_SEARCH;
         const bool prefer_exhaustive =
             (mode == SERVER_CONSTRAINT_TRIE ||
              mode == SERVER_CONSTRAINT_COMPARE_ORACLE) &&
@@ -15937,6 +15986,10 @@ static int build_constrained_forced_tokens(
                         srv->constraint_partitions_compile_ms;
                 }
             }
+        }
+        if (step && optional_search_state) {
+            if (partition) step->search_static_steps++;
+            else step->search_static_fallbacks++;
         }
         int token = -1;
         const bool primary_analysis = first_analysis;
@@ -17723,6 +17776,10 @@ decode_again:
         const bool constrained_sample =
             agentic_constrained_sample || response_constrained_sample;
         server_constraint_step constraint_step = {0};
+        if (phase_profile && constrained_sample &&
+            ds4_engine_mtp_draft_tokens(s->engine) > 1) {
+            phase.mtp_constrained_target_only_steps++;
+        }
         constraint_parser_metrics sample_parser_metrics = {0};
         agentic_token_filter token_filter = {
             .engine = s->engine,
@@ -17829,6 +17886,10 @@ decode_again:
                 constraint_step.parser_metrics.rollback_count;
             phase.exhaustive_fallback_steps +=
                 constraint_step.exhaustive_fallback_steps;
+            phase.search_static_steps +=
+                constraint_step.search_static_steps;
+            phase.search_static_fallbacks +=
+                constraint_step.search_static_fallbacks;
             if (constraint_step.ready) {
                 phase.filter_setup_ms += constraint_step.metrics.setup_ms;
                 phase.filter_ms += constraint_step.metrics.filter_ms;
@@ -18264,6 +18325,8 @@ decode_again:
             "trie_compile_ms=%.3f trie_compiled_nodes=%llu trie_memory_bytes=%llu "
             "static_mask_compile_ms=%.3f static_mask_memory_bytes=%llu "
             "dynamic_frontier_size=%llu "
+            "search_static_steps=%llu search_static_fallbacks=%llu "
+            "mtp_constrained_target_only_steps=%llu "
             "constraint_state_checkpoint=%llu constraint_state_rollback=%llu "
             "exhaustive_fallback_steps=%llu",
             ctx_span, completion, server_constraint_mode_name(constraint_mode),
@@ -18306,6 +18369,9 @@ decode_again:
             phase.static_mask_compile_ms,
             (unsigned long long)phase.static_mask_memory_bytes,
             (unsigned long long)phase.dynamic_frontier_size,
+            (unsigned long long)phase.search_static_steps,
+            (unsigned long long)phase.search_static_fallbacks,
+            (unsigned long long)phase.mtp_constrained_target_only_steps,
             (unsigned long long)phase.constraint_state_checkpoint,
             (unsigned long long)phase.constraint_state_rollback,
             (unsigned long long)phase.exhaustive_fallback_steps);
@@ -23230,6 +23296,24 @@ static void test_resident_system_frontier_replaces_unrelated_live_state(void) {
                                                      system_len));
 }
 
+static void test_resident_frontier_memory_stream_preserves_last_byte(void) {
+    ds4_session_snapshot state = {0};
+    const uint8_t payload[] = {0x21, 0x7f, 0x00, 0xa5};
+    char err[128] = {0};
+    FILE *fp = resident_kv_frontier_open_write(
+        &state, sizeof(payload), err, sizeof(err));
+    TEST_ASSERT(fp != NULL);
+    if (fp) {
+        TEST_ASSERT(fwrite(payload, 1, sizeof(payload), fp) ==
+                    sizeof(payload));
+        TEST_ASSERT(fclose(fp) == 0);
+        TEST_ASSERT(state.cap >= sizeof(payload) + 1);
+        TEST_ASSERT(memcmp(state.ptr, payload, sizeof(payload)) == 0);
+        TEST_ASSERT(state.ptr[sizeof(payload)] == '\0');
+    }
+    ds4_session_snapshot_free(&state);
+}
+
 static void test_response_publish_precedes_checkpoint_cleanup(void) {
     const api_style apis[] = {API_OPENAI, API_RESPONSES};
     for (size_t i = 0; i < sizeof(apis) / sizeof(apis[0]); i++) {
@@ -26903,6 +26987,48 @@ static void test_required_tool_choice_cannot_escape_to_text(void) {
     request_free(&r);
 }
 
+static void test_agentic_search_static_partition_guard(void) {
+    request r;
+    request_init(&r, REQ_CHAT, 32);
+    test_agentic_add_tool(
+        &r, "run",
+        "{\"name\":\"run\",\"input_schema\":{\"type\":\"object\","
+        "\"properties\":{},\"additionalProperties\":false}}" );
+
+    dsml_decode_tracker tracker;
+    dsml_decode_tracker_init(&tracker, &r);
+    agentic_token_filter filter = {
+        .req = &r, .raw = "", .raw_len = 0, .tracker = &tracker,
+    };
+    TEST_ASSERT(agentic_search_partition_eligible(&filter));
+
+    const char *plain = "ordinary assistant story";
+    dsml_decode_tracker_update(&tracker, plain, strlen(plain));
+    filter.raw = plain;
+    filter.raw_len = strlen(plain);
+    TEST_ASSERT(agentic_search_partition_eligible(&filter));
+
+    const char *partial = "ordinary assistant story<";
+    dsml_decode_tracker_update(&tracker, partial, strlen(partial));
+    filter.raw = partial;
+    filter.raw_len = strlen(partial);
+    TEST_ASSERT(!agentic_search_partition_eligible(&filter));
+
+    const char *structural = DS4_TOOL_CALLS_START;
+    dsml_decode_tracker_init(&tracker, &r);
+    dsml_decode_tracker_update(&tracker, structural, strlen(structural));
+    filter.raw = structural;
+    filter.raw_len = strlen(structural);
+    TEST_ASSERT(!agentic_search_partition_eligible(&filter));
+
+    r.tool_choice_required = true;
+    dsml_decode_tracker_init(&tracker, &r);
+    filter.raw = "";
+    filter.raw_len = 0;
+    TEST_ASSERT(!agentic_search_partition_eligible(&filter));
+    request_free(&r);
+}
+
 static void test_agentic_incremental_free_string(void) {
     request r;
     request_init(&r, REQ_CHAT, 32);
@@ -27321,6 +27447,7 @@ static void ds4_server_unit_tests_run(void) {
     test_json_schema_validator_edges();
     test_agentic_tool_schema_masking();
     test_required_tool_choice_cannot_escape_to_text();
+    test_agentic_search_static_partition_guard();
     test_agentic_incremental_free_string();
     test_agentic_nullable_incremental_free_string();
     test_json_schema_unknown_keywords_fail_closed();
@@ -27403,6 +27530,7 @@ static void ds4_server_unit_tests_run(void) {
     test_tool_checkpoint_canonicalization_gate_exact_replay();
     test_resident_system_frontier_matches_shared_prompt_only();
     test_resident_system_frontier_replaces_unrelated_live_state();
+    test_resident_frontier_memory_stream_preserves_last_byte();
     test_response_publish_precedes_checkpoint_cleanup();
     test_prethinking_frontier_covers_openai_endpoints();
     test_responses_live_tail_renders_tool_outputs_only();

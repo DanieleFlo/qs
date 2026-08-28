@@ -62,7 +62,7 @@ DS4_LINK_LIBS ?= $(CUDA_LDLIBS)
 METAL_LDLIBS := $(LDLIBS)
 endif
 
-.PHONY: all help clean test test-rocm test-qwen38 test-qwen38-perf test-constrained-json-live test-jsonschemabench-safety test-metal-session-batch test-mmq-parity test-mxfp4-cuda test-mxfp4-rocm test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics perf-doctor perf-harness-test perf-fast-test perf-direction-ab perf-slow-test research-fetch research-index research-check docs-index docs-check strix-halo rocm
+.PHONY: all help clean test test-rocm test-qwen38 test-qwen38-perf test-constrained-json-live test-server-sampling-matrix-static test-jsonschemabench-safety test-metal-session-batch test-mmq-parity test-mxfp4-cuda test-mxfp4-rocm test-cuda-session-batch test-cuda-mixed-batch dspark-acceptance dspark-verify-depth mtp-verify-depth cpu cuda cuda-spark cuda-generic cuda-regression qwen-numerics perf-doctor perf-harness-test perf-fast-test perf-direction-ab perf-slow-test research-fetch research-index research-check docs-index docs-check strix-halo rocm
 
 ifeq ($(UNAME_S),Darwin)
 .PHONY: metal-decode-schedule-bench metal-prefill-variant-bench check-mxfp4-half-lut
@@ -76,6 +76,7 @@ help:
 	@echo "  make test         Build and run tests"
 	@echo "  make test-qwen38-perf  Run the opt-in Qwen3.8 CLI/server MTP VRAM-safe context gate"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
+	@echo "  make test-server-sampling-matrix-static  Check the temperature/thinking/MTP server matrix fixtures"
 	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make metal-decode-schedule-bench  Build the balanced Metal decode schedule benchmark"
 	@echo "  make metal-prefill-variant-bench  Build the balanced Metal prefill variant benchmark"
@@ -165,6 +166,7 @@ help:
 	@echo "  make test                Build and run tests"
 	@echo "  make test-qwen38-perf    Run the opt-in Qwen3.8 CLI/server MTP VRAM-safe context gate"
 	@echo "  make test-constrained-json-live  Run opt-in live DSML/JSON Schema adversarial API tests"
+	@echo "  make test-server-sampling-matrix-static  Check the temperature/thinking/MTP server matrix fixtures"
 	@echo "  make test-jsonschemabench-safety  Run the pinned external candidate-vs-oracle safety gate"
 	@echo "  make dspark-verify-depth Run DSpark speculative verification smoke if support GGUF is present"
 	@echo "  make mtp-verify-depth    Run legacy MTP speculative verification smoke if MTP GGUF is present"
@@ -263,7 +265,7 @@ perf-doctor:
 perf-harness-test:
 	python3 -m unittest tests.test_perf_harness tests.test_jsonschemabench_subset -v
 
-JSONSCHEMABENCH_MODEL ?= gguf/Qwen3.6-27B-Q4_K_S.gguf
+JSONSCHEMABENCH_MODEL ?= gguf/Qwen3.8-27B-UD-Q4_K_S.gguf
 JSONSCHEMABENCH_PREFIX_STEPS ?= 8
 
 test-jsonschemabench-safety:
@@ -279,7 +281,7 @@ test-jsonschemabench-safety:
 
 perf-fast-test: perf-harness-test
 
-PERF_MODEL ?= gguf/Qwen3.6-27B-Q4_K_S.gguf
+PERF_MODEL ?= gguf/Qwen3.8-27B-UD-Q4_K_S.gguf
 PERF_PROMPT ?= tests/long_context_story_prompt.txt
 
 perf-direction-ab:
@@ -299,7 +301,7 @@ perf-slow-test: perf-fast-test qwen-numerics
 	python3 -m unittest tests.test_qwen36_fixtures tests.test_qwen36_numerics tests.test_qwen38_compatibility -v
 
 test-qwen38:
-	python3 -m unittest tests.test_qwen38_compatibility -v
+	python3 -m unittest tests.test_qwen38_compatibility tests.test_server_sampling_matrix.SamplingMatrixFixtureTests -v
 
 test-qwen38-perf: ds4 ds4-server
 	DS4_TEST_QWEN38_PERF=1 python3 -m unittest tests.test_qwen38_compatibility.Qwen38CompatibilityTests.test_cli_and_server_mtp_performance_gate -v
@@ -585,7 +587,7 @@ test: ds4_test ds4_agent_test ds4_server_test ds4-eval q4k-dot-test mxfp4-dot-te
 	./ds4-eval --self-test-extractors
 	./ds4_agent_test
 	./ds4_server_test
-	python3 -m unittest tests.test_qwen38_compatibility -v
+	python3 -m unittest tests.test_qwen38_compatibility tests.test_server_sampling_matrix.SamplingMatrixFixtureTests -v
 	./ds4_test
 	./tests/test_layer_pack
 	./tests/test_engine_mgpu_placement
@@ -603,6 +605,9 @@ test-constrained-json-live:
 		exit 2; \
 	fi
 	python3 -m unittest tests.test_constrained_json_api -v
+
+test-server-sampling-matrix-static:
+	python3 -m unittest tests.test_server_sampling_matrix.SamplingMatrixFixtureTests -v
 
 dspark-acceptance: ds4
 	DS4_DSPARK_MODEL="$(DS4_DSPARK_MODEL)" \

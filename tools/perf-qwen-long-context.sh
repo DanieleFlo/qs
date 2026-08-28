@@ -12,7 +12,7 @@ if [ -z "$action" ] || [ -z "$experiment_id" ]; then
 fi
 shift 2
 
-model=${PERF_MODEL:-gguf/Qwen3.6-27B-Q4_K_S.gguf}
+model=${PERF_MODEL:-gguf/Qwen3.8-27B-UD-Q4_K_S.gguf}
 prompt=${PERF_PROMPT:-tests/long_context_story_prompt.txt}
 results=${PERF_RESULTS:-performance-results}
 harness="python3 tools/perf_harness.py"
