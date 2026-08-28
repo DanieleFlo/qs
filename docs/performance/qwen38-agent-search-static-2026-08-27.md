@@ -130,8 +130,10 @@ uguali alla baseline e zero divergenze. Il verdict prestazionale della suite
 rapida è `NEED_MORE_DATA` perché il confronto doppio è rumoroso; il gate di
 correttezza è `PASS`.
 
-Sono inoltre passati `ds4_server_test`, `ds4_test --constraint-trie`, 61 test
-dell'harness e 16 test di compatibilità Qwen3.8. Agent SSD è passato nei gruppi
+Sono inoltre passati la suite aggregata `make test`, la build CUDA completa,
+`ds4_test --constraint-trie`, 66 test harness/matrice, lo smoke CLI Qwen3.8
+target/MTP e il verifier MTP model-backed (231 token, chunk massimo 3, gap
+argmax zero). Agent SSD è passato nei gruppi
 system, HDS e deep-skill in entrambe le direzioni di cambio modalità: cold
 target-only → warm MTP e cold MTP → warm target-only. Metal e distributed non
 sono verificati su questo host.

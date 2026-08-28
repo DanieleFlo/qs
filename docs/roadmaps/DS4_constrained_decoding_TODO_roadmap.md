@@ -1035,7 +1035,8 @@ PSC è molto recente. Non adottarlo come sostituzione globale prima di misurare 
 
 Una volta ridotto il costo algoritmico del constraint engine, togliere dal critical path la quota CPU residua sovrapponendola all'eval GPU quando possibile.
 
-Solo successivamente valutare constrained speculative/MTP.
+La parte constrained speculative/MTP è ora implementata con una policy
+adattiva; overlap e double buffering restano attività separate e aperte.
 
 ## Letteratura di riferimento
 
@@ -1077,49 +1078,49 @@ Non usare MTP per nascondere un constraint engine ancora inefficiente: prima rid
 
 ### 8.3 — Speculative prerequisites
 
-- [ ] Constraint state con checkpoint economico.
-- [ ] Feed di più token in sequenza.
-- [ ] Rollback di draft non accettato.
-- [ ] Validazione batch di draft token.
-- [ ] Nessuna divergenza di tokenizer state.
+- [x] Constraint state con checkpoint economico.
+- [x] Feed di più token in sequenza.
+- [x] Rollback di draft non accettato.
+- [x] Validazione batch di draft token.
+- [x] Nessuna divergenza di tokenizer state.
 
 ### 8.4 — Constrained MTP
 
-- [ ] Fare draft MTP.
-- [ ] Intersecare/validare draft con constraint state.
-- [ ] Accettare prefisso valido.
-- [ ] Rollback al primo token non valido.
-- [ ] Misurare acceptance rate.
-- [ ] Misurare costo constraint per draft token.
-- [ ] Disabilitare automaticamente se il vincolo rende la speculation non conveniente.
+- [x] Fare draft MTP.
+- [x] Intersecare/validare draft con constraint state.
+- [x] Accettare prefisso valido.
+- [x] Rollback al primo token non valido.
+- [x] Misurare acceptance rate.
+- [x] Misurare costo constraint per draft token.
+- [x] Disabilitare automaticamente se il vincolo rende la speculation non conveniente.
 
 ### 8.5 — Benchmark
 
-- [ ] Unconstrained baseline.
-- [ ] Constrained senza overlap.
+- [x] Unconstrained baseline.
+- [x] Constrained senza overlap.
 - [ ] Constrained con overlap.
-- [ ] Constrained + MTP.
-- [ ] Separare workload strutturale da string payload libero.
+- [x] Constrained + MTP.
+- [x] Separare workload strutturale da string payload libero.
 
 ## Criteri di uscita
 
 - [ ] L'overlap riduce wall time, non solo CPU-accounted time.
-- [ ] Speculation è attivata solo quando migliora end-to-end throughput/latency.
-- [ ] Rollback constraint e rollback modello restano coerenti.
+- [x] Speculation è attivata solo quando migliora end-to-end throughput/latency.
+- [x] Rollback constraint e rollback modello restano coerenti.
 
 ## Stato e retrospettiva — MACRO 8
 
-- **Stato:** ⬜ Non iniziato / 🟨 In corso / ✅ Completato / ⛔ Bloccato
-- **Data/commit di riferimento:**
-- **CPU constraint nascosta:**
-- **GPU idle prima/dopo:**
-- **MTP acceptance rate:**
-- **Speedup end-to-end:**
-- **Cosa ha funzionato:**
-- **Cosa non ha funzionato:**
-- **Casi in cui MTP peggiora:**
-- **Gate:** ⬜ GO / ⬜ ITERATE / ⬜ ROLLBACK
-- **Note:**
+- **Stato:** 🟨 In corso: constrained MTP completato; overlap/double buffering aperti.
+- **Data/commit di riferimento:** 2026-08-28, `4cfcb76`.
+- **CPU constraint nascosta:** non rivendicata; il lavoro è stato prima ridotto e poi speculato.
+- **GPU idle prima/dopo:** non misurato per overlap; nessun claim.
+- **MTP acceptance rate:** 65,52% aggregato sulla storia lunga; 12 draft accettati su 19 verifier rows nel caso JSON mediano.
+- **Speedup end-to-end:** storia: +13,16% decode e -9,38% request wall; JSON: +27,43% decode (CV 6,50%) e -6,17% request wall; +9,97--10,60% decode nei required con thinking.
+- **Cosa ha funzionato:** maschera per ogni target/bonus row, stato temporaneo DSML/thinking/JSON, rollback congiunto e boundary token pendente.
+- **Cosa non ha funzionato:** materializzare la maschera esaustiva su ogni riga del tratto DSML required.
+- **Casi in cui MTP peggiora:** required strutturale senza thinking; la policy lo mantiene target-only.
+- **Gate:** ☑ GO per constrained MTP / ☑ ITERATE per overlap.
+- **Note:** matrice 12/12 target + 12/12 MTP, output/schema/contratto invariati e zero fallback. Artifact e fonti sono in `docs/performance/qwen38-agent-search-static-2026-08-27.md`.
 
 ---
 

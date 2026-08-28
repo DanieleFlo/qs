@@ -121,11 +121,19 @@ sampling distribution; masking both models would add work without removing the
 authoritative check.
 
 Grammar, JSON-schema, and tool masks are different because they encode external
-state. They could reject impossible MTP proposals early, but the mask must be
-advanced after every accepted token and the target row must still be filtered.
-Until that state can be checkpointed and advanced inside a speculative batch,
-stochastic MTP is disabled for tool and response-schema requests. Greedy
-constrained phases retain the established behavior.
+state. The shared Qwen server now checkpoints that state for a speculative
+cycle, advances a temporary DSML/thinking/JSON view for every draft prefix, and
+filters every authoritative target row (including the bonus row). Only tokens
+accepted by the target are later committed to the request-owned tracker; a
+failure restores RNG, recurrent state, and the target checkpoint together.
+
+The production Qwen3.8 matrix validates this path for greedy and sampled JSON,
+optional tools, thinking on/off, and the transitions across `</think>`. Required
+DSML remains adaptively target-only once the structural phase starts because an
+exhaustive mask per verifier row regressed throughput; MTP can still accelerate
+the private reasoning before that boundary. Qwen3.6 keeps the same shared
+implementation and its model-level verifier smoke, but no new constrained
+throughput claim is made for it without rerunning the live matrix on that model.
 
 ## CUDA paths
 

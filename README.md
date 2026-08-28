@@ -1089,10 +1089,14 @@ Start a local OpenAI/Anthropic-compatible server:
 ```
 
 Add `--mtp` to enable Qwen MTP for greedy and ordinary sampled decoding; omit it
-for target-only decoding. MTP is conservatively disabled for tool and
-response-schema requests because their token masks change after each accepted
-token. Phase profiling reports these steps as constrained target-only so they
-are not mistaken for sidecar speedups.
+for target-only decoding. Tool and response-schema requests use a grammar-aware
+target verifier: every speculative target row is sampled through the request's
+current DSML/JSON mask, while draft tokens advance only a temporary parser state
+that is rolled back with the model state. Required tool calls use an adaptive
+gate: MTP remains active during private reasoning, then the structural DSML
+phase switches to target-only because exhaustive verifier masks cost more than
+the target rows they save. Phase profiling exposes speculative cycles, masked
+rows, accepted drafts, target-only steps, and fail-closed fallbacks separately.
 
 Use `--chdir /path/to/ds4` when launching `ds4-server` from another directory,
 so relative runtime files such as `metal/*.metal` resolve from the project tree.

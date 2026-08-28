@@ -181,7 +181,7 @@ Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del
 - righe 24–46: **Baseline prima della modifica** — Hardware: RTX 3090, build CUDA `sm_86`, contesto allocato 22.593, prompt
 - righe 47–69: **Risultato appaiato** — Il masking target-only scende del 99,21%.
 - righe 70–122: **MTP grammar-aware: implementazione e vantaggio** — Il server passa al verifier un callback per ogni distribuzione target della
-- righe 123–154: **Gate di correttezza** — La storia completa è stata ripetuta con `compare_new_vs_oracle`: 433 confronti
-- righe 155–222: **Matrice temperatura, thinking e MTP** — Il gate `tests/test_server_sampling_matrix.py` esplicita il prodotto cartesiano
-- righe 223–271: **Fonti primarie e scelte implementative** — I valori campionati non sono inventati dal benchmark.
-- righe 272–287: **Test live ripetibile** — `tests/run_agent_story_live.ps1` avvia in sequenza target-only e MTP, abilita il
+- righe 123–156: **Gate di correttezza** — La storia completa è stata ripetuta con `compare_new_vs_oracle`: 433 confronti
+- righe 157–224: **Matrice temperatura, thinking e MTP** — Il gate `tests/test_server_sampling_matrix.py` esplicita il prodotto cartesiano
+- righe 225–273: **Fonti primarie e scelte implementative** — I valori campionati non sono inventati dal benchmark.
+- righe 274–289: **Test live ripetibile** — `tests/run_agent_story_live.ps1` avvia in sequenza target-only e MTP, abilita il

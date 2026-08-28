@@ -38,6 +38,8 @@ Vincoli non negoziabili:
 - [x] Aggiunto il test live della storia lunga, target-only e MTP.
 - [x] Aggiunta la matrice live temperatura zero/nonzero, thinking on/off e
   target-only/MTP su Chat e Responses agentiche.
+- [x] Integrato MTP grammar-aware per JSON e tool opzionali, con gate adattivo
+  target-only sul tratto DSML required in cui la speculazione regredisce.
 - [x] Verificato Agent SSD in entrambe le direzioni target-only/MTP e corretto
   il buffer `fmemopen` del resident frontier host.
 
@@ -144,6 +146,15 @@ Con MTP caricato, il nuovo contatore riporta 433 passi constrained target-only:
 lo speculative decoding non è stato modificato né usato per rivendicare il
 guadagno. I checkpoint post-risposta sono ricostruiti da `memory-request` in
 VRAM senza rilettura SSD nella finestra di pubblicazione.
+
+Questa misura descrive il primo candidato `SEARCH`. Il successivo commit
+grammar-aware `4cfcb76` abilita invece il verifier constrained quando porta un
+vantaggio: sulla stessa storia lunga passa da 23,756 a 26,882 tok/s (+13,16%);
+su JSON Schema annidato la mediana passa da 29,285 a 37,317 tok/s (+27,43%, CV
+6,50%). Il tratto required senza thinking resta target-only e a parità, mentre
+required con thinking usa MTP soltanto nel reasoning e guadagna 9,97--10,60%.
+Output/hash, schema e contratto pubblico restano invariati e i fallback sono
+zero.
 
 Dettagli e artifact sono in
 `docs/performance/qwen38-agent-search-static-2026-08-27.md`.
@@ -338,10 +349,11 @@ layer-major da 128 in su. Il gate numerico obbligatorio è stato superato.
   2.377 s = 22.30 tok/s perché la variabilità dell'eval ha assorbito circa lo
   stesso margine: `KEEP` per il lavoro CPU eliminato, non come guadagno
   end-to-end rivendicato.
-- La suite aggregata `make test` ha superato il timeout esterno mentre
-  `ds4_test` caricava il modello predefinito (circa 15 GB di RSS); non era un
-  overflow del contesto. I suoi gate pertinenti sono stati rilanciati
-  separatamente con output visibile e sono passati.
+- La suite aggregata `make test` è stata infine lasciata completare sul modello
+  Qwen3.8 locale: exit 0, incluso il prefill long-context a 31.181 token, tool
+  call, constraint-trie, server, layer-pack, placement, CLI e sampling. Sono
+  inoltre passati build CUDA completa, smoke CLI target/MTP e
+  `mtp-verify-depth` esplicito (231 token, chunk massimo 3, gap argmax zero).
 
 ## Ledger degli esperimenti e dei tentativi
 
@@ -364,6 +376,7 @@ layer-major da 128 in su. Il gate numerico obbligatorio è stato superato.
 | OPT-20260827-01 | La partizione statica DSML è sicura in `SEARCH` sincronizzato | Eligibility `SEARCH` soltanto | A/B, hash, compare-oracle, SSD | `KEEP` | 23,457 tok/s (+99,82%), masking 136 ms (-99,21%), 433 confronti e zero divergenze. |
 | TEST-20260828-01 | Temperatura, thinking e MTP devono essere assi espliciti del server | Harness Chat/Responses e runner target/MTP | 12 casi per variante, contatori, semantica/contratto | `KEEP` | 12/12 target e 12/12 MTP; confronto 6 semantic-exact + 6 contract, inclusa transizione fallback→SEARCH statico dopo `</think>`. |
 | FIX-20260828-01 | Il frontier host deve sopravvivere al cambio MTP → target | Capacità fisica `payload+1` per `fmemopen`, lunghezza logica invariata | Ultimo byte, checksum, system/HDS/skill cold-warm nelle due direzioni | `KEEP` | Rimossa la corruzione dell'ultimo byte; nessun reload SSD post-risposta e tutti i gruppi Agent SSD passano. |
+| OPT-20260828-02 | Avanzare la grammatica su ogni verifier row rende MTP utile anche nei vincoli | Stato temporaneo DSML/thinking/JSON e sampling target autorevole | storia, JSON, matrice 24 richieste, fallback e A/B required | `KEEP` | +13,16% sulla storia; +27,43% mediano su JSON; required strutturale resta target-only perché la variante esaustiva regrediva; zero fallback e output invariati. |
 
 Stati ammessi:
 
@@ -434,6 +447,10 @@ Stati ammessi:
   `agentic`, rispettando i campi realmente supportati da ciascun endpoint.
 - Verificati sampling Qwen raccomandato, greedy, thinking on/off, SEARCH
   opzionale, tool obbligatorio, cicli MTP e fallback constrained target-only.
+- Aggiunto il verifier grammar-aware per ogni draft/bonus row, con stato parser
+  temporaneo e rollback congiunto a RNG e stato ricorrente. La policy usa MTP
+  su JSON e tool opzionali, nel reasoning dei required, e passa al target al
+  confine DSML required dove le misure mostrano una regressione.
 - Conservata la distinzione fra identità semantica e contratto pubblico: i
   near-argmax del verifier batch possono cambiare il reasoning nascosto, mai la
   validità o la scelta/struttura delle call.

@@ -123,42 +123,42 @@ Queste regole sono vincolanti per tutti i macro-task.
   - righe 1001–1008: **7.5 — Validazione** — Sezione strutturale; consultare il contenuto locale indicato.
 - righe 1009–1014: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
 - righe 1015–1031: **Stato e retrospettiva — MACRO 7** — ---
-- righe 1032–1125: **MACRO 8 — Sovrapporre constraint computation e inferenza; integrare speculative decoding solo dopo** — Una volta ridotto il costo algoritmico del constraint engine, togliere dal critical path la quota CPU residua sovrapponendola all'eval GPU quando possibile.
-- righe 1034–1039: **Obiettivo** — Una volta ridotto il costo algoritmico del constraint engine, togliere dal critical path la quota CPU residua sovrapponendola all'eval GPU quando possibile.
-- righe 1040–1059: **Letteratura di riferimento** — Il paper descrive il co-design fra grammar engine e inference engine per sovrapporre il grammar processing all'esecuzione GPU.
-  - righe 1042–1048: **XGrammar — Dong et al., 2024** — Il paper descrive il co-design fra grammar engine e inference engine per sovrapporre il grammar processing all'esecuzione GPU.
-  - righe 1049–1055: **DOMINO — Beurer-Kellner et al., 2024** — DOMINO combina pre-computation, allineamento subword e speculative decoding.
-  - righe 1056–1059: **Interpretazione per DS4** — Non usare MTP per nascondere un constraint engine ancora inefficiente: prima ridurre il lavoro; poi sovrapporlo e infine speculare.
-- righe 1060–1103: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1062–1069: **8.1 — Overlap CPU/GPU** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1070–1077: **8.2 — Double buffering** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1078–1085: **8.3 — Speculative prerequisites** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1086–1095: **8.4 — Constrained MTP** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1096–1103: **8.5 — Benchmark** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1104–1109: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1110–1125: **Stato e retrospettiva — MACRO 8** — ---
-- righe 1126–1260: **MACRO 9 — Hardening, adaptive policy e rimozione del full-scan dal percorso normale** — Integrare i backend sviluppati in una policy adattiva e dimostrare che la scansione completa del vocabolario è diventata un fallback eccezionale.
-- righe 1128–1153: **Obiettivo** — Integrare i backend sviluppati in una policy adattiva e dimostrare che la scansione completa del vocabolario è diventata un fallback eccezionale.
-- righe 1154–1166: **Letteratura di riferimento** — Questa macro-task sintetizza i risultati di:
-- righe 1167–1233: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1169–1178: **9.1 — Adaptive backend selection** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1179–1191: **9.2 — Safety** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1192–1207: **9.3 — End-to-end regression suite** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1208–1222: **9.4 — Performance gate** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 1223–1233: **9.5 — Cleanup** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1234–1241: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1242–1260: **Stato e retrospettiva — MACRO 9** — ---
-- righe 1261–1292: **ORDINE VINCOLANTE CONSIGLIATO** — MACRO 0 Baseline + oracle
-- righe 1293–1338: **METRICHE DA MANTENERE FINO ALLA FINE** — ---
-- righe 1295–1303: **Correttezza** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1304–1317: **Constraint engine** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1318–1325: **Compilation** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1326–1338: **Inference end-to-end** — ---
-- righe 1339–1370: **FONTI PRINCIPALI** — 1.
-- righe 1371–1413: **TEMPLATE REPORT FINALE** — Da compilare al termine di MACRO 9.
-- righe 1375–1390: **Risultato complessivo** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1391–1405: **Contributo di ogni macro-task** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 1406–1413: **Conclusioni** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1032–1126: **MACRO 8 — Sovrapporre constraint computation e inferenza; integrare speculative decoding solo dopo** — Una volta ridotto il costo algoritmico del constraint engine, togliere dal critical path la quota CPU residua sovrapponendola all'eval GPU quando possibile.
+- righe 1034–1040: **Obiettivo** — Una volta ridotto il costo algoritmico del constraint engine, togliere dal critical path la quota CPU residua sovrapponendola all'eval GPU quando possibile.
+- righe 1041–1060: **Letteratura di riferimento** — Il paper descrive il co-design fra grammar engine e inference engine per sovrapporre il grammar processing all'esecuzione GPU.
+  - righe 1043–1049: **XGrammar — Dong et al., 2024** — Il paper descrive il co-design fra grammar engine e inference engine per sovrapporre il grammar processing all'esecuzione GPU.
+  - righe 1050–1056: **DOMINO — Beurer-Kellner et al., 2024** — DOMINO combina pre-computation, allineamento subword e speculative decoding.
+  - righe 1057–1060: **Interpretazione per DS4** — Non usare MTP per nascondere un constraint engine ancora inefficiente: prima ridurre il lavoro; poi sovrapporlo e infine speculare.
+- righe 1061–1104: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1063–1070: **8.1 — Overlap CPU/GPU** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1071–1078: **8.2 — Double buffering** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1079–1086: **8.3 — Speculative prerequisites** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1087–1096: **8.4 — Constrained MTP** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1097–1104: **8.5 — Benchmark** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1105–1110: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1111–1126: **Stato e retrospettiva — MACRO 8** — ---
+- righe 1127–1261: **MACRO 9 — Hardening, adaptive policy e rimozione del full-scan dal percorso normale** — Integrare i backend sviluppati in una policy adattiva e dimostrare che la scansione completa del vocabolario è diventata un fallback eccezionale.
+- righe 1129–1154: **Obiettivo** — Integrare i backend sviluppati in una policy adattiva e dimostrare che la scansione completa del vocabolario è diventata un fallback eccezionale.
+- righe 1155–1167: **Letteratura di riferimento** — Questa macro-task sintetizza i risultati di:
+- righe 1168–1234: **Sottotask** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1170–1179: **9.1 — Adaptive backend selection** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1180–1192: **9.2 — Safety** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1193–1208: **9.3 — End-to-end regression suite** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1209–1223: **9.4 — Performance gate** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 1224–1234: **9.5 — Cleanup** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1235–1242: **Criteri di uscita** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1243–1261: **Stato e retrospettiva — MACRO 9** — ---
+- righe 1262–1293: **ORDINE VINCOLANTE CONSIGLIATO** — MACRO 0 Baseline + oracle
+- righe 1294–1339: **METRICHE DA MANTENERE FINO ALLA FINE** — ---
+- righe 1296–1304: **Correttezza** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1305–1318: **Constraint engine** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1319–1326: **Compilation** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1327–1339: **Inference end-to-end** — ---
+- righe 1340–1371: **FONTI PRINCIPALI** — 1.
+- righe 1372–1414: **TEMPLATE REPORT FINALE** — Da compilare al termine di MACRO 9.
+- righe 1376–1391: **Risultato complessivo** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1392–1406: **Contributo di ogni macro-task** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 1407–1414: **Conclusioni** — Sezione strutturale; consultare il contenuto locale indicato.
 
 ## [Constrained JSON e DSML: piano di completamento](constrained-json-decoding-plan.md)
 
@@ -199,34 +199,34 @@ Portare `Qwen3.8-27B-UD-Q4_K_S.gguf` allo stesso livello funzionale del target
 Questo diario separa il lavoro sulle prestazioni del server agentico dal lavoro
 
 - righe 5–24: **Scopo e vincoli** — Questo diario separa il lavoro sulle prestazioni del server agentico dal lavoro
-- righe 25–43: **Stato sintetico** — target-only/MTP su Chat e Responses agentiche.
-- righe 44–150: **Baseline iniziale ricavata dai log** — Questi numeri sono osservazioni preliminari, non ancora un benchmark controllato.
-  - righe 77–95: **Baseline controllata del server** — Payload fisso: Qwen3.6-27B Q4_K_S, contesto 32768, tool
-  - righe 96–122: **Confronto Qwen3.8/Qwen3.6 dopo la correzione ChatML** — Il confronto del 2026-08-25 usa lo stesso binario, RTX 3090, contesto 32768,
-  - righe 123–150: **Ciclo Qwen3.8 del 2026-08-27: storia agentica senza tool call** — Il nuovo fixture usa il vero `DeepAgent` `bootstrap-wiki`, tool disponibili con
-- righe 151–184: **Punto 1 — Strumentazione e benchmark ripetibile** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
-  - righe 153–170: **Telemetria da aggiungere** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
-  - righe 171–184: **Matrice minima di misura** — build/commit, flags, modello, hardware e correttezza.
-- righe 185–262: **Punto 2 — Rendere efficiente il constrained decoding DSML/JSON** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
-  - righe 187–208: **Risultato della ricerca in letteratura** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
-  - righe 209–262: **Sequenza sperimentale** — massima invece di richiamare e ricopiare il testo per ogni sampling.
-    - righe 211–225: **2A — Eliminare lavoro ripetuto senza cambiare l'algoritmo** — massima invece di richiamare e ricopiare il testo per ogni sampling.
-    - righe 226–241: **2B — Ridurre i candidati visitati** — engine/vocabolario.
-    - righe 242–252: **2C — Cache adattiva per stato e schemi dinamici** — quando tracker e frontiera non contengono marker parziali.
-    - righe 253–262: **2D — Parallelismo e tecniche più invasive, solo se ancora necessarie** — token appena committato: le dipendenze lo permettono, ma serve un protocollo
-- righe 263–345: **Punto 3 — Sincronizzazione efficiente dei piccoli suffissi** — Questo punto resta deliberatamente dopo la telemetria e il primo intervento
-  - righe 270–284: **Requisito esplicito per sessioni live e MTP** — Per preparare il percorso MTP, un prefill live di **2 token o più** deve essere
-  - righe 285–296: **Audit storico completato prima del codice** — il fast-forward DSML (`git log`, `git blame`, diff e test associati).
-  - righe 297–304: **Matrice di crossover da misurare** — Sezione strutturale; consultare il contenuto locale indicato.
-  - righe 305–324: **Misure mirate del crossover live a contesto 8k** — La prima variante, che selezionava il percorso in base al solo `suffix_len`, ha
-  - righe 325–345: **Gate finali eseguiti** — normale roundoff del probe.
-- righe 346–375: **Ledger degli esperimenti e dei tentativi** — Stati ammessi:
-- righe 376–445: **Registro cronologico** — 27.08 tok/s a 16k.
-  - righe 378–390: **2026-08-12 — Apertura** — 27.08 tok/s a 16k.
-  - righe 391–411: **2026-08-12 — Implementazione e chiusura del ciclo** — DSML controllato è passato da circa 12.47 a circa 22.3 tok/s.
-  - righe 412–426: **2026-08-27 — Qwen3.8, `SEARCH` statico e storia live** — target-only/MTP con phase profiling e KV SSD.
-  - righe 427–445: **2026-08-28 — Matrice sampling, thinking e MTP** — temperatura zero e non coprivano il prodotto cartesiano richiesto.
-- righe 446–453: **Prossima azione** — Il ciclo corrente è chiuso.
+- righe 25–45: **Stato sintetico** — target-only/MTP su Chat e Responses agentiche.
+- righe 46–161: **Baseline iniziale ricavata dai log** — Questi numeri sono osservazioni preliminari, non ancora un benchmark controllato.
+  - righe 79–97: **Baseline controllata del server** — Payload fisso: Qwen3.6-27B Q4_K_S, contesto 32768, tool
+  - righe 98–124: **Confronto Qwen3.8/Qwen3.6 dopo la correzione ChatML** — Il confronto del 2026-08-25 usa lo stesso binario, RTX 3090, contesto 32768,
+  - righe 125–161: **Ciclo Qwen3.8 del 2026-08-27: storia agentica senza tool call** — Il nuovo fixture usa il vero `DeepAgent` `bootstrap-wiki`, tool disponibili con
+- righe 162–195: **Punto 1 — Strumentazione e benchmark ripetibile** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
+  - righe 164–181: **Telemetria da aggiungere** — (0.3--0.5 ms nel payload controllato, quindi non ulteriormente suddiviso);
+  - righe 182–195: **Matrice minima di misura** — build/commit, flags, modello, hardware e correttezza.
+- righe 196–273: **Punto 2 — Rendere efficiente il constrained decoding DSML/JSON** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
+  - righe 198–219: **Risultato della ricerca in letteratura** — Il percorso corrente ha costo almeno lineare nella dimensione del vocabolario a
+  - righe 220–273: **Sequenza sperimentale** — massima invece di richiamare e ricopiare il testo per ogni sampling.
+    - righe 222–236: **2A — Eliminare lavoro ripetuto senza cambiare l'algoritmo** — massima invece di richiamare e ricopiare il testo per ogni sampling.
+    - righe 237–252: **2B — Ridurre i candidati visitati** — engine/vocabolario.
+    - righe 253–263: **2C — Cache adattiva per stato e schemi dinamici** — quando tracker e frontiera non contengono marker parziali.
+    - righe 264–273: **2D — Parallelismo e tecniche più invasive, solo se ancora necessarie** — token appena committato: le dipendenze lo permettono, ma serve un protocollo
+- righe 274–357: **Punto 3 — Sincronizzazione efficiente dei piccoli suffissi** — Questo punto resta deliberatamente dopo la telemetria e il primo intervento
+  - righe 281–295: **Requisito esplicito per sessioni live e MTP** — Per preparare il percorso MTP, un prefill live di **2 token o più** deve essere
+  - righe 296–307: **Audit storico completato prima del codice** — il fast-forward DSML (`git log`, `git blame`, diff e test associati).
+  - righe 308–315: **Matrice di crossover da misurare** — Sezione strutturale; consultare il contenuto locale indicato.
+  - righe 316–335: **Misure mirate del crossover live a contesto 8k** — La prima variante, che selezionava il percorso in base al solo `suffix_len`, ha
+  - righe 336–357: **Gate finali eseguiti** — normale roundoff del probe.
+- righe 358–388: **Ledger degli esperimenti e dei tentativi** — Stati ammessi:
+- righe 389–462: **Registro cronologico** — 27.08 tok/s a 16k.
+  - righe 391–403: **2026-08-12 — Apertura** — 27.08 tok/s a 16k.
+  - righe 404–424: **2026-08-12 — Implementazione e chiusura del ciclo** — DSML controllato è passato da circa 12.47 a circa 22.3 tok/s.
+  - righe 425–439: **2026-08-27 — Qwen3.8, `SEARCH` statico e storia live** — target-only/MTP con phase profiling e KV SSD.
+  - righe 440–462: **2026-08-28 — Matrice sampling, thinking e MTP** — temperatura zero e non coprivano il prodotto cartesiano richiesto.
+- righe 463–470: **Prossima azione** — Il ciclo corrente è chiuso.
 
 ## [TODO — GPU Kernel Engineering Harness per DS4 / Qwen 3.6 27B](todo-harness.md)
 

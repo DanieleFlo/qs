@@ -10,12 +10,12 @@ DS4 supports native Qwen3.6 Multi-Token Prediction on the single-GPU CUDA
 - righe 26–54: **GGUF and NextN semantics** — The support model is selected structurally, not by filename:
 - righe 55–70: **Session state** — Each enabled Qwen session owns:
 - righe 71–107: **Production adaptive-depth cycle** — Below 2K, the configured depth-two cycle is:
-- righe 108–129: **Sampling and logits masks** — DS4 follows llama.cpp's current sample-and-match contract.
-- righe 130–158: **CUDA paths** — Q4_K, Q5_K, and Q6_K verifier matmuls use Q8_1 plus a second Q8_1 residual.
-  - righe 132–151: **Target verifier** — Q4_K, Q5_K, and Q6_K verifier matmuls use Q8_1 plus a second Q8_1 residual.
-  - righe 152–158: **Support network** — The Q4_0 shared head uses Q8_1+residual DP4A and schedules eight output rows per
-- righe 159–170: **Failure policy** — diagnostic.
-- righe 171–241: **Validation gate** — The production model-backed command is:
+- righe 108–137: **Sampling and logits masks** — DS4 follows llama.cpp's current sample-and-match contract.
+- righe 138–166: **CUDA paths** — Q4_K, Q5_K, and Q6_K verifier matmuls use Q8_1 plus a second Q8_1 residual.
+  - righe 140–159: **Target verifier** — Q4_K, Q5_K, and Q6_K verifier matmuls use Q8_1 plus a second Q8_1 residual.
+  - righe 160–166: **Support network** — The Q4_0 shared head uses Q8_1+residual DP4A and schedules eight output rows per
+- righe 167–178: **Failure policy** — diagnostic.
+- righe 179–249: **Validation gate** — The production model-backed command is:
 
 ## [Qwen3.8 27B UD-Q4_K_S compatibility audit](qwen38-compatibility.md)
 
