@@ -211,6 +211,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `download_model.sh` — download dei modelli e support model conosciuti dal
   progetto: DeepSeek Flash 0731/DSpark, PRO 0813, GLM e gli artefatti Qwen3.6
   e Qwen3.8 fissati con revisione e checksum.
+- `start-ds4-server.sh`, `agent/start-ds4-server.sh`, `agent/start.sh` —
+  launcher eseguibili nativi per server CUDA e Agent Wiki dalla copia WSL2
+  `/home/daniele/ds4`; il progetto non modifica proxy o firewall Windows.
 - `ds4_cli.c` — eseguibile `ds4`: parsing opzioni, modalità one-shot e REPL,
   prompt, generazione, sampling, perplexity e dump diagnostici. `--mtp` senza
   argomento seleziona il sidecar Qwen auditato; `--mtp FILE` e l'alias
@@ -369,9 +372,13 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   `DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1`. Il
   percorso MTP Qwen aggiunge embedding/matvec Q4_0,
   range device distinti per target e sidecar, kernel warp-8 Q4_0 del drafter e
-  Q4_K/Q5_K/Q6_K microbatch del verifier. I Qwen single-GPU che entrano in VRAM sono copiati per
-  default sul device; `DS4_CUDA_NO_MODEL_COPY=1` conserva il percorso host-map
-  diagnostico. I matmul Q8_0, inclusi quelli usati dal support model Qwen MTP,
+  Q4_K/Q5_K/Q6_K microbatch del verifier. I Qwen single-GPU che entrano in VRAM
+  sono copiati per default sul device con letture dirette e quattro buffer pinned
+  asincroni da 64 MiB sovrapposti ai trasferimenti H2D;
+  `DS4_CUDA_MODEL_COPY_CHUNK_MB` regola il chunk diagnostico,
+  `DS4_CUDA_LEGACY_MODEL_COPY=1` ripristina la copia pageable singola e
+  `DS4_CUDA_NO_MODEL_COPY=1` conserva il percorso host-map diagnostico. I matmul
+  Q8_0, inclusi quelli usati dal support model Qwen MTP,
   possono usare il tier MMQ upstream; i kernel del decode condividono lo stream
   coordinato necessario alla cattura e al replay dei grafi CUDA.
 - `cuda/mmq/` — port locale e documentato dei matmul quantizzati CUDA upstream:

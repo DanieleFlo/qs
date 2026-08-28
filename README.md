@@ -1199,6 +1199,21 @@ For browser JavaScript clients served from another origin, start the server with
 headers; it does not expose the server on the LAN. Use `--host 0.0.0.0`
 explicitly when remote machines should be able to connect.
 
+Start the native WSL launcher with `./start-ds4-server.sh`; the MTP launcher used
+by Agent Wiki is `./agent/start-ds4-server.sh`. Both bind the server to
+`0.0.0.0`. Local Windows clients can use `http://127.0.0.1:8080` through WSL's
+localhost forwarding. The project does not modify Windows port-proxy or firewall
+configuration; configure LAN exposure separately only when it is explicitly
+needed.
+
+For fast startup, keep both the repository and GGUF files on the native WSL
+filesystem rather than under `/mnt/c`; the native launchers run directly from
+the project directory. On single-GPU Qwen loads, the CUDA path overlaps
+direct file reads with four asynchronous 64 MiB pinned-memory transfers.
+`DS4_CUDA_MODEL_COPY_CHUNK_MB` changes the diagnostic chunk size, while
+`DS4_CUDA_LEGACY_MODEL_COPY=1` restores the old single pageable-memory copy for
+A/B measurements.
+
 ### Tool call handling and canonicalization
 
 DeepSeek V4 emits tool calls as [DSML text](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/encoding/README.md). Agent clients do not send that

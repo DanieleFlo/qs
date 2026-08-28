@@ -44,4 +44,6 @@ __pycache__/
 /gguf-tools/quality-testing/staging/
 .*.swp
 .DS_Store
-/agent
+/agent/*
+!/agent/start-ds4-server.sh
+!/agent/start.sh

@@ -387,7 +387,7 @@ class Qwen38CompatibilityTests(unittest.TestCase):
             PROJECT_ROOT / "tests" / "test_server_sampling_matrix.py"
         ).read_text(encoding="utf-8")
         agent_server_launcher = (
-            PROJECT_ROOT / "agent" / "start-ds4-server.bat"
+            PROJECT_ROOT / "agent" / "start-ds4-server.sh"
         ).read_text(encoding="utf-8")
         agent_profiler = (
             PROJECT_ROOT / "tools" / "profile_agent_dsml_story.py"
