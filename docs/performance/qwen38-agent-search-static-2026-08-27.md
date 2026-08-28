@@ -1,4 +1,4 @@
-# Qwen3.8 agentico: partizione statica DSML `SEARCH`
+# Qwen3.8 agentico: `SEARCH` statica e MTP grammar-aware
 
 ## Obiettivo e invarianti
 
@@ -14,6 +14,12 @@ piece non vuoti, privi di `<` e non sensibili all'identità. Stop, controlli di
 thinking e token potenzialmente strutturali restano nella frontiera dinamica.
 `tool_choice=required`, marker parziali e stati strutturali continuano sul
 percorso fail-closed completo.
+
+Il passo successivo riabilita MTP anche quando una richiesta usa DSML, JSON
+Schema o attraversa il confine del thinking. Il draft resta libero di proporre;
+ogni riga target del verifier, inclusa la bonus row, viene invece campionata
+con la maschera ricostruita nello stato grammaticale temporaneo corrispondente.
+Solo i token accettati aggiornano il tracker persistente della richiesta.
 
 ## Baseline prima della modifica
 
@@ -60,6 +66,59 @@ Artifact:
 
 - `performance-results/q38-agent-plain-story-target-search-static-candidate-20260827/experiment.json`;
 - `performance-results/q38-agent-plain-story-mtp-search-static-candidate-20260827/experiment.json`.
+
+## MTP grammar-aware: implementazione e vantaggio
+
+Il server passa al verifier un callback per ogni distribuzione target della
+finestra speculativa. Il callback ricostruisce `thinking_state`, tracker DSML e
+lexer JSON a partire dal testo già committato più `first_token` e il solo
+prefisso draft pertinente a quella riga. Applica poi la stessa analisi
+indicizzata usata dal decode ordinario. Se la frontiera richiede il filtro
+esaustivo, materializza la maschera completa; se anche questo fallisce, la riga
+ritorna errore e non viene mai campionata dalla distribuzione non vincolata.
+
+Questo mantiene separati tre stati: la KV speculativa del target, lo stato
+temporaneo della grammatica e il tracker persistente della richiesta. Un draft
+non valido ha probabilità target zero e viene rifiutato; un target sampled che
+diverge diventa il boundary token del ciclo successivo; un bonus token viene
+consumato prima di costruire la successiva analisi. Se il verifier fallisce, RNG
+e stato ricorrente vengono ripristinati insieme.
+
+Benchmark appaiato sullo stesso workload da 10.814 token, un warm-up e due run
+misurati:
+
+| Configurazione | Decode mediano | CV | Delta vs target | Masking mediano |
+|---|---:|---:|---:|---:|
+| Target-only | 23,756 tok/s | 0,45% | — | 143,34 ms |
+| MTP grammar-aware | 26,882 tok/s | 0,88% | **+13,16%** | 136,23 ms |
+
+Entrambe le configurazioni producono lo stesso hash, 432 token, 298 parole e
+`finish=stop`. Ogni run MTP esegue 261 cicli, maschera 432 verifier rows, accetta
+171 draft e registra 90 cicli target-only, senza fallback sulla storia. Il log
+aggregato dei tre run (warm-up incluso) misura acceptance `513/783 = 65,52%`,
+zero fallback del backend e 26,988 token/s netti. La mediana request wall passa
+da 22.906,0 a 20.757,5 ms (-9,38%); il dato è inferiore al guadagno decode
+perché include ripristino del frontier e prefill della richiesta.
+
+Artifact:
+
+- `performance-results/q38-agent-plain-story-grammar-mtp-20260828-001-target/experiment.json`;
+- `performance-results/q38-agent-plain-story-grammar-mtp-20260828-001-mtp/experiment.json`.
+
+Il gate strutturale separa intenzionalmente i casi in cui la speculazione
+conviene. Su JSON Schema annidato, cinque run misurate portano la mediana da
+29,285 a 37,317 tok/s (**+27,43%**), con lo stesso hash, schema valido, 19
+verifier rows, 12 draft accettati e zero fallback; la variabilita del throughput
+resta pero elevata (CV 6,50%), mentre la request wall mediana migliora del
+6,17%. Su DSML `tool_choice=required` senza thinking, l'esplorazione esaustiva
+del vocabolario rendeva invece MTP piu lento: quel tratto usa quindi il target
+solo (21,417 contro 21,692 tok/s, sostanziale parita), mentre MTP rimane attivo
+nel reasoning che precede il confine strutturale.
+
+Artifact:
+
+- `performance-results/q38-constrained-grammar-target-20260828/experiment.json`;
+- `performance-results/q38-constrained-grammar-mtp-stable-20260828/experiment.json`.
 
 ## Gate di correttezza
 
@@ -116,11 +175,17 @@ finge di avere un seed o i knob non supportati.
 Il gate controlla anche il percorso interno:
 
 - il testo libero MTP deve produrre cicli speculativi;
-- le fasi DSML con sidecar caricato devono dichiarare i passi target-only;
+- le fasi opzionali con sidecar caricato devono produrre cicli speculativi e
+  verifier rows realmente mascherate, non soltanto caricare il sidecar;
 - `tool_choice=auto` senza thinking deve usare `search_static_steps` senza
   fallback;
-- con thinking, il `</think>` trattenuto nella finestra SEARCH deve causare
-  prima fallback dinamici fail-closed e poi passi statici;
+- con thinking, una finestra MTP può attraversare `</think>` nel tracker
+  temporaneo; il tracker persistente avanza soltanto sui token accettati e la
+  successiva frontiera SEARCH deve restare valida;
+- `tool_choice=required` senza thinking resta target-only, perche le misure live
+  mostrano che la maschera esaustiva per ogni verifier row annulla il vantaggio;
+  con thinking MTP accelera il reasoning e si arresta esattamente al confine
+  DSML, poi il decode strutturale prosegue target-only;
 - il tool obbligatorio deve attraversare il filtro strutturale completo e
   restituire una sola call con argomenti esatti.
 
@@ -136,6 +201,15 @@ Artifact validati con la stessa revisione del test:
 
 - `performance-results/q38-server-sampling-matrix-search-static-20260828-007/target/matrix.json`;
 - `performance-results/q38-server-sampling-matrix-search-static-20260828-006/mtp/matrix.json`.
+
+La revisione grammar-aware passa inoltre 12/12 casi MTP nel gate intermedio
+`performance-results/q38-server-sampling-matrix-grammar-mtp-20260828-002`. La
+matrice adattiva finale appaiata e conservata in
+`performance-results/q38-server-sampling-matrix-grammar-mtp-adaptive-final-20260828`:
+le quattro varianti opzionali guadagnano dal 15,69% al 40,23%; i due casi
+required senza thinking restano a parita usando il target; i due casi required
+con thinking guadagnano 9,97-10,60% usando MTP solo nel reasoning. Tutti i casi
+registrano zero fallback.
 
 Il runner ripetibile avvia entrambi i server e applica lo stesso confronto:
 
@@ -166,12 +240,27 @@ il modello Qwen MTP di
 e il regression test vLLM che mantiene la grammatica dopo la chiusura del
 reasoning dentro una finestra speculativa
 ([test MTP structured output](https://github.com/vllm-project/vllm/blob/main/tests/v1/spec_decode/test_mtp_structured_output.py)).
+Il dettaglio implementativo decisivo viene dal
+[`StructuredOutputManager.grammar_bitmask`](https://github.com/vllm-project/vllm/blob/main/vllm/v1/structured_output/__init__.py)
+di vLLM: costruisce una riga di maschera per ogni posizione speculativa più la
+bonus row, avanza temporaneamente il matcher sui draft e poi esegue rollback.
+SGLang applica lo stesso contratto lungo l'albero di draft in
+[`spec_utils.py`](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/speculative/spec_utils.py):
+valida il draft contro la maschera del parent, esegue `accept_token`, emette la
+maschera della riga e fa `rollback(1)`. DS4 adatta la stessa idea a DSML,
+thinking e JSON senza introdurre un secondo parser.
+
 I fondamenti sono *Fast Inference from Transformers via Speculative Decoding*
 ([arXiv:2211.17192](https://arxiv.org/abs/2211.17192)) e *Accelerating Large
 Language Model Decoding with Speculative Sampling*
 ([arXiv:2302.01318](https://arxiv.org/abs/2302.01318)): il target resta
 autorevole e gli scostamenti numerici del microbatch non autorizzano mai una
 violazione del contratto pubblico o della grammatica.
+Per la composizione fra vocabolario subword e grammatica sono stati inoltre
+usati *XGrammar* ([arXiv:2411.15100](https://arxiv.org/abs/2411.15100)), che
+separa maschere statiche e frontiera dinamica, e *DOMINO*
+([arXiv:2403.06988](https://arxiv.org/abs/2403.06988)), che tratta
+esplicitamente decoding vincolato subword e speculative decoding.
 
 Per il checkpoint residente è stato seguito il contratto POSIX/glibc di
 [`fmemopen`](https://man7.org/linux/man-pages/man3/fmemopen.3.html): uno stream

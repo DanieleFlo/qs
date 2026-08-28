@@ -12492,6 +12492,10 @@ typedef struct {
     uint64_t search_static_steps;
     uint64_t search_static_fallbacks;
     uint64_t mtp_constrained_target_only_steps;
+    uint64_t mtp_constrained_speculative_cycles;
+    uint64_t mtp_constrained_sampled_rows;
+    uint64_t mtp_constrained_accepted_drafts;
+    uint64_t mtp_constrained_fallbacks;
     double grammar_compile_ms;
     double grammar_jit_ms;
     double trie_compile_ms;
@@ -16125,6 +16129,223 @@ static int build_constrained_forced_tokens(
     return count;
 }
 
+typedef struct {
+    server *srv;
+    ds4_session *session;
+    ds4_engine *engine;
+    const request *req;
+    const char *raw;
+    size_t raw_len;
+    thinking_state thinking;
+    dsml_decode_tracker tracker;
+    response_json_lex_state json_state;
+    server_constraint_mode mode;
+    server_decode_phase_metrics *phase;
+    float temperature;
+    int top_k;
+    float top_p;
+    float min_p;
+    bool profile;
+} constrained_speculative_sampler;
+
+static void constrained_speculative_profile_row(
+        server_decode_phase_metrics *phase,
+        const server_constraint_step *step,
+        double build_ms, bool sampled) {
+    if (!phase || !step) return;
+    const ds4_filtered_sample_metrics *metrics = step->ready ?
+        &step->metrics : &step->forced_metrics;
+    const double analysis_ms = step->ready ?
+        metrics->setup_ms + metrics->filter_ms : 0.0;
+    const double oracle_ms = step->ready ?
+        step->oracle_metrics.setup_ms + step->oracle_metrics.filter_ms : 0.0;
+
+    phase->forced_build_ms += build_ms;
+    phase->forced_build_calls++;
+    phase->sampling_mask_build_ms += analysis_ms;
+    phase->oracle_compare_ms += oracle_ms;
+    phase->forced_prefix_probe_ms +=
+        build_ms > analysis_ms + oracle_ms ?
+            build_ms - analysis_ms - oracle_ms : 0.0;
+    phase->filter_setup_ms += metrics->setup_ms;
+    phase->filter_ms += metrics->filter_ms;
+    if (sampled) {
+        phase->filtered_sample_ms += metrics->sample_ms;
+        phase->filtered_sample_calls++;
+    }
+    phase->vocab_tokens += metrics->vocab_tokens;
+    phase->filter_calls += metrics->filter_calls;
+    phase->accepted_tokens += metrics->accepted_tokens;
+    phase->finite_allowed_tokens += metrics->finite_allowed_tokens;
+    phase->decoded_piece_bytes += metrics->decoded_piece_bytes;
+    phase->candidate_tokens_tested += step->ready ?
+        step->analysis.candidate_tokens_tested :
+        step->forced_candidate_tokens_tested;
+    phase->trie_nodes_visited += metrics->trie_nodes_visited;
+    phase->trie_subtrees_pruned += metrics->trie_subtrees_pruned;
+    phase->trie_leaf_tokens_emitted += metrics->trie_leaf_tokens_emitted;
+    if (metrics->trie_compiled_nodes > phase->trie_compiled_nodes) {
+        phase->trie_compiled_nodes = metrics->trie_compiled_nodes;
+    }
+    if (metrics->trie_memory_bytes > phase->trie_memory_bytes) {
+        phase->trie_memory_bytes = metrics->trie_memory_bytes;
+    }
+    phase->trie_compile_ms += metrics->trie_compile_ms;
+    phase->parser_transition_count +=
+        step->parser_metrics.parser_transition_count;
+    phase->parser_bytes_visited += step->parser_metrics.parser_bytes_visited;
+    phase->constraint_state_checkpoint += step->parser_metrics.checkpoint_count;
+    phase->constraint_state_rollback += step->parser_metrics.rollback_count;
+    phase->search_static_steps += step->search_static_steps;
+    phase->search_static_fallbacks += step->search_static_fallbacks;
+    phase->oracle_compare_calls += step->oracle_compare_calls;
+    phase->oracle_divergences += step->oracle_divergences;
+    phase->exhaustive_fallback_steps += step->exhaustive_fallback_steps;
+    phase->dynamic_frontier_size += step->dynamic_frontier_size;
+    if (step->static_mask_memory_bytes > phase->static_mask_memory_bytes) {
+        phase->static_mask_memory_bytes = step->static_mask_memory_bytes;
+    }
+    phase->static_mask_compile_ms += step->static_mask_compile_ms;
+    if (step->used_static_mask) phase->mask_cache_hit++;
+    else phase->mask_cache_miss++;
+    phase->mtp_constrained_sampled_rows++;
+}
+
+/* Build the exact grammar state for one target-verifier row.  This mirrors the
+ * structured-speculative implementations in vLLM and SGLang: draft tokens
+ * advance only a temporary parser view, every row is masked in that view, and
+ * the request-owned tracker is committed later only for tokens the target
+ * actually accepted. */
+static int constrained_speculative_sample_target(
+        void *ud, const float *target_logits, int n_vocab,
+        const int *prefix, int prefix_len, uint64_t *rng) {
+    constrained_speculative_sampler *ctx = ud;
+    if (!ctx || !ctx->srv || !ctx->session || !ctx->engine || !ctx->req ||
+        !target_logits || n_vocab != ds4_engine_vocab_size(ctx->engine) ||
+        !prefix || prefix_len <= 0) return -1;
+
+    buf shadow = {0};
+    if (ctx->raw_len) buf_append(&shadow, ctx->raw, ctx->raw_len);
+    thinking_state thinking = ctx->thinking;
+    dsml_decode_tracker tracker = ctx->tracker;
+    response_json_lex_state json_state = ctx->json_state;
+
+    for (int i = 0; i < prefix_len; i++) {
+        if (ds4_token_is_stop_for_think_mode(
+                ctx->engine, prefix[i], ctx->req->think_mode)) {
+            buf_free(&shadow);
+            return -1;
+        }
+        size_t piece_len = 0;
+        char *piece = ds4_token_text(ctx->engine, prefix[i], &piece_len);
+        if (!piece || !piece_len) {
+            free(piece);
+            buf_free(&shadow);
+            return -1;
+        }
+        const size_t old_len = shadow.len;
+        buf_append(&shadow, piece, piece_len);
+        thinking_state_feed(&thinking, piece, piece_len);
+        if (ctx->req->response_schema) {
+            (void)response_json_lex_sync(
+                &json_state, shadow.ptr, shadow.len,
+                ctx->req->think_mode != DS4_THINK_NONE);
+        }
+        if (ctx->req->kind == REQ_CHAT && ctx->req->has_tools) {
+            dsml_decode_tracker_update(&tracker, shadow.ptr, shadow.len);
+        }
+        free(piece);
+
+        size_t stop_pos = 0, stop_len = 0;
+        if (stop_list_find_from(&ctx->req->stops, shadow.ptr, old_len,
+                                &stop_pos, &stop_len)) {
+            buf_free(&shadow);
+            return -1;
+        }
+    }
+
+    const dsml_decode_state state =
+        ctx->req->kind == REQ_CHAT && ctx->req->has_tools ?
+            tracker.decode : DSML_DECODE_OUTSIDE;
+    const bool constraint_active =
+        ctx->req->response_schema != NULL ||
+        agentic_should_constrain_sample(ctx->req, state, thinking.inside);
+    if (constraint_active && ctx->req->tool_choice_required) {
+        /* Required DSML is dominated by singleton/structural frontiers.  Live
+         * sweeps show that verifier masking there costs more than the saved
+         * target rows.  Stop a reasoning-window cycle exactly at this boundary
+         * and let the next request iteration use the ordinary target-only
+         * constrained decoder; the verifier restores RNG/recurrent state. */
+        buf_free(&shadow);
+        return -1;
+    }
+
+    server_constraint_step step = {0};
+    int ignored_forced = -1;
+    const double build_t0 = ctx->profile ? now_sec() : 0.0;
+    int forced_count = build_constrained_forced_tokens(
+        ctx->srv, ctx->session, ctx->engine, ctx->req,
+        shadow.ptr ? shadow.ptr : "", shadow.len,
+        &thinking, &tracker, &json_state, ctx->mode,
+        &step, ctx->profile, &ignored_forced, 1);
+    if (constraint_active && !step.ready && forced_count == 0) {
+        /* Some ordinary server modes use a cheap forced-prefix probe and let
+         * the one-row decode path apply its exhaustive callback only when the
+         * probe is not unique.  A verifier row cannot fall through to the
+         * unmasked distribution in that case: materialize the same exhaustive
+         * mask and fail closed if even that analysis is unavailable. */
+        server_constraint_step exhaustive = {0};
+        forced_count = build_constrained_forced_tokens(
+            ctx->srv, ctx->session, ctx->engine, ctx->req,
+            shadow.ptr ? shadow.ptr : "", shadow.len,
+            &thinking, &tracker, &json_state, SERVER_CONSTRAINT_OPTIMIZED,
+            &exhaustive, ctx->profile, &ignored_forced, 1);
+        step = exhaustive;
+        if (ctx->profile && ctx->phase) {
+            ctx->phase->mtp_constrained_fallbacks++;
+        }
+    }
+    const double build_ms = ctx->profile ?
+        (now_sec() - build_t0) * 1000.0 : 0.0;
+
+    int token = -1;
+    bool constrained_row = false;
+    bool sampled_constraint = false;
+    if (forced_count > 0) {
+        /* Match the ordinary constrained decoder: a singleton grammar
+         * frontier is deterministic prefill, not a stochastic draw.  This
+         * preserves the request RNG while still rejecting a different draft
+         * against the authoritative target token. */
+        token = ignored_forced;
+        constrained_row = true;
+    } else if (step.ready) {
+        token = ds4_session_sample_constraint_analysis_logits(
+            ctx->session, target_logits,
+            ctx->temperature, ctx->top_k,
+            ctx->top_p, ctx->min_p, rng,
+            &step.analysis, ctx->profile ? &step.metrics : NULL);
+        constrained_row = true;
+        sampled_constraint = true;
+    }
+    if (constrained_row && ctx->profile && ctx->phase) {
+        constrained_speculative_profile_row(
+            ctx->phase, &step, build_ms, sampled_constraint);
+    } else if (!constraint_active) {
+        const double sample_t0 = ctx->profile ? now_sec() : 0.0;
+        token = ds4_session_sample_logits_row(
+            ctx->session, target_logits,
+            ctx->temperature, ctx->top_k,
+            ctx->top_p, ctx->min_p, rng);
+        if (ctx->profile && ctx->phase) {
+            ctx->phase->plain_sample_ms +=
+                (now_sec() - sample_t0) * 1000.0;
+            ctx->phase->plain_sample_calls++;
+        }
+    }
+    buf_free(&shadow);
+    return token;
+}
+
 static bool continue_after_invalid_dsml(server *s, server_slot *slot,
                                         const request *r,
                                         const thinking_state *thinking,
@@ -17776,10 +17997,6 @@ decode_again:
         const bool constrained_sample =
             agentic_constrained_sample || response_constrained_sample;
         server_constraint_step constraint_step = {0};
-        if (phase_profile && constrained_sample &&
-            ds4_engine_mtp_draft_tokens(s->engine) > 1) {
-            phase.mtp_constrained_target_only_steps++;
-        }
         constraint_parser_metrics sample_parser_metrics = {0};
         agentic_token_filter token_filter = {
             .engine = s->engine,
@@ -17825,15 +18042,18 @@ decode_again:
             .metrics = phase_profile ? &sample_parser_metrics : NULL,
         };
         int toks[129];
+        const bool consume_speculative_next = have_speculative_next;
         const double forced_build_t0 = phase_profile ? now_sec() : 0.0;
-        int ntok = constrained_sample ? build_constrained_forced_tokens(
+        int ntok = constrained_sample && !consume_speculative_next ?
+            build_constrained_forced_tokens(
             s, slot->session, s->engine, &j->req,
             text.ptr ? text.ptr : "", text.len,
             &thinking, &dsml_tracker, &response_json_state, constraint_mode,
             &constraint_step, phase_profile, toks,
             (int)(sizeof(toks) / sizeof(toks[0])) < max_tokens - completion ?
-                (int)(sizeof(toks) / sizeof(toks[0])) : max_tokens - completion) : 0;
-        if (phase_profile && constrained_sample) {
+                (int)(sizeof(toks) / sizeof(toks[0])) : max_tokens - completion) :
+            0;
+        if (phase_profile && constrained_sample && !consume_speculative_next) {
             const double forced_wall_ms =
                 (now_sec() - forced_build_t0) * 1000.0;
             const double analysis_ms = constraint_step.ready ?
@@ -17966,7 +18186,7 @@ decode_again:
             j->req.constrained_prefill_tokens += ntok;
         } else {
             ds4_filtered_sample_metrics filtered = {0};
-            if (!constrained_sample && have_speculative_next) {
+            if (consume_speculative_next) {
                 token = speculative_next;
                 have_speculative_next = false;
             } else if (constrained_sample && constraint_step.ready) {
@@ -17996,7 +18216,8 @@ decode_again:
                     phase.plain_sample_calls++;
                 }
             }
-            if (phase_profile && constrained_sample) {
+            if (phase_profile && constrained_sample &&
+                !consume_speculative_next) {
                 if (!constraint_step.ready) {
                     phase.filter_setup_ms += filtered.setup_ms;
                     phase.filter_ms += filtered.filter_ms;
@@ -18038,18 +18259,73 @@ decode_again:
             }
         }
 
-        const bool speculative_available =
-            ntok == 0 && !constrained_sample && !s->batched_mode &&
+        const bool speculative_base_available =
+            ntok == 0 && !s->batched_mode &&
             ds4_engine_mtp_draft_tokens(s->engine) > 1 &&
-            getenv("DS4_MTP_SPEC_DISABLE") == NULL &&
+            getenv("DS4_MTP_SPEC_DISABLE") == NULL;
+        const bool grammar_aware_speculative =
+            speculative_base_available &&
+            (constrained_sample || j->req.response_schema != NULL ||
+             (j->req.kind == REQ_CHAT && j->req.has_tools)) &&
+            !(j->req.tool_choice_required && constrained_sample);
+        const bool speculative_available =
+            speculative_base_available && !grammar_aware_speculative &&
+            !constrained_sample &&
             (!ds4_engine_is_qwen(s->engine) || temperature <= 0.0f ||
              (j->req.response_schema == NULL && !j->req.has_tools));
-        if (speculative_available) {
+        if (grammar_aware_speculative) {
+            constrained_speculative_sampler spec_sampler = {
+                .srv = s,
+                .session = slot->session,
+                .engine = s->engine,
+                .req = &j->req,
+                .raw = text.ptr ? text.ptr : "",
+                .raw_len = text.len,
+                .thinking = thinking,
+                .tracker = dsml_tracker,
+                .json_state = response_json_state,
+                .mode = constraint_mode,
+                .phase = phase_profile ? &phase : NULL,
+                .temperature = temperature,
+                .top_k = top_k,
+                .top_p = top_p,
+                .min_p = min_p,
+                .profile = phase_profile,
+            };
+            const double eval_t0 = phase_profile ? now_sec() : 0.0;
+            ntok = ds4_session_eval_speculative_constrained_sample(
+                slot->session, token,
+                temperature, top_k, top_p, min_p, &rng,
+                max_tokens - completion, ds4_token_eos(s->engine),
+                toks, (int)(sizeof(toks) / sizeof(toks[0])),
+                &speculative_next,
+                constrained_speculative_sample_target, &spec_sampler,
+                err, sizeof(err));
+            if (speculative_next >= 0) {
+                have_speculative_next = true;
+            }
+            if (phase_profile) {
+                phase.eval_ms += (now_sec() - eval_t0) * 1000.0;
+                phase.eval_calls++;
+                phase.mtp_constrained_speculative_cycles++;
+                if (ntok > 1) {
+                    phase.mtp_constrained_accepted_drafts +=
+                        (uint64_t)(ntok - 1);
+                } else {
+                    phase.mtp_constrained_target_only_steps++;
+                }
+                if (ntok < 0) phase.mtp_constrained_fallbacks++;
+            }
+            if (ntok < 0) {
+                finish = "error";
+                break;
+            }
+        } else if (speculative_available) {
             const double eval_t0 = phase_profile ? now_sec() : 0.0;
             if (ds4_engine_is_qwen(s->engine)) {
                 /* Qwen's verifier returns the sampled boundary token for the
-                 * next cycle. Tool/schema decoding stays target-only because
-                 * its grammar state must advance one committed token at a time. */
+                 * next cycle. Grammar-aware requests use the callback path
+                 * above, including transitions out of hidden reasoning. */
                 int next_token = -1;
                 ntok = ds4_session_eval_speculative_sample(
                     slot->session, token, temperature, top_k, top_p, min_p, &rng,
@@ -18327,6 +18603,10 @@ decode_again:
             "dynamic_frontier_size=%llu "
             "search_static_steps=%llu search_static_fallbacks=%llu "
             "mtp_constrained_target_only_steps=%llu "
+            "mtp_constrained_speculative_cycles=%llu "
+            "mtp_constrained_sampled_rows=%llu "
+            "mtp_constrained_accepted_drafts=%llu "
+            "mtp_constrained_fallbacks=%llu "
             "constraint_state_checkpoint=%llu constraint_state_rollback=%llu "
             "exhaustive_fallback_steps=%llu",
             ctx_span, completion, server_constraint_mode_name(constraint_mode),
@@ -18372,6 +18652,10 @@ decode_again:
             (unsigned long long)phase.search_static_steps,
             (unsigned long long)phase.search_static_fallbacks,
             (unsigned long long)phase.mtp_constrained_target_only_steps,
+            (unsigned long long)phase.mtp_constrained_speculative_cycles,
+            (unsigned long long)phase.mtp_constrained_sampled_rows,
+            (unsigned long long)phase.mtp_constrained_accepted_drafts,
+            (unsigned long long)phase.mtp_constrained_fallbacks,
             (unsigned long long)phase.constraint_state_checkpoint,
             (unsigned long long)phase.constraint_state_rollback,
             (unsigned long long)phase.exhaustive_fallback_steps);

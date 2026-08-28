@@ -64934,6 +64934,15 @@ int ds4_session_sample(ds4_session *s, float temperature, int top_k, float top_p
                               top_p, min_p, rng, s->sample_probs);
 }
 
+int ds4_session_sample_logits_row(
+        ds4_session *s, const float *logits,
+        float temperature, int top_k, float top_p, float min_p,
+        uint64_t *rng) {
+    if (!s || !logits) return -1;
+    return sample_top_p_min_p(logits, DS4_N_VOCAB, temperature, top_k,
+                              top_p, min_p, rng, s->sample_probs);
+}
+
 int ds4_session_sample_filtered_profiled(
         ds4_session *s, float temperature, int top_k,
         float top_p, float min_p, uint64_t *rng,
@@ -65653,6 +65662,35 @@ int ds4_session_sample_constraint_analysis(
                            temperature, top_k, top_p, min_p,
                            rng, s->sample_probs) : -1;
     if (metrics) metrics->sample_ms += (now_sec() - sample_t0) * 1000.0;
+    return token;
+}
+
+int ds4_session_sample_constraint_analysis_logits(
+        ds4_session *s, const float *logits,
+        float temperature, int top_k,
+        float top_p, float min_p, uint64_t *rng,
+        const ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics) {
+    if (!s || !logits || !analysis || !analysis->analysis_complete ||
+        !s->constraint_analysis_valid ||
+        analysis->serial != s->constraint_analysis_serial ||
+        analysis->vocab_tokens != DS4_N_VOCAB) return -1;
+
+    uint32_t finite_allowed = 0;
+    for (uint32_t token = 0; token < analysis->vocab_tokens; token++) {
+        const bool allowed = s->sample_allowed[token] != 0;
+        s->sample_masked[token] = allowed ? logits[token] : DS4_NEG_INF;
+        if (allowed && isfinite(logits[token])) finite_allowed++;
+    }
+    const double sample_t0 = metrics ? now_sec() : 0.0;
+    const int token = finite_allowed ?
+        sample_top_p_min_p(s->sample_masked, analysis->vocab_tokens,
+                           temperature, top_k, top_p, min_p,
+                           rng, s->sample_probs) : -1;
+    if (metrics) {
+        metrics->finite_allowed_tokens = finite_allowed;
+        metrics->sample_ms += (now_sec() - sample_t0) * 1000.0;
+    }
     return token;
 }
 
@@ -71427,6 +71465,8 @@ typedef struct {
     float     min_p;
     uint64_t *rng;
     int      *next_token;
+    ds4_speculative_target_sample_fn sample_target;
+    void     *sample_target_ud;
 } ds4_spec_sampling;
 
 static int ds4_session_qwen_mtp_spec_cycle(
@@ -71444,6 +71484,10 @@ static int ds4_session_qwen_mtp_spec_cycle(
     const int start = s->checkpoint.len;
     const bool stochastic_sampling =
         sampling && sampling->rng && sampling->temperature > 0.0f;
+    const bool constrained_sampling =
+        sampling && sampling->sample_target != NULL;
+    const bool target_row_sampling =
+        stochastic_sampling || constrained_sampling;
     if (sampling && sampling->next_token) *sampling->next_token = -1;
 
     if (!g->mtp_ready || e->support_kind != DS4_SUPPORT_QWEN35_MTP ||
@@ -71470,7 +71514,7 @@ static int ds4_session_qwen_mtp_spec_cycle(
      * authoritative target batch. Split mode remains a diagnostic fallback. */
     /* Sampling needs all target rows so the same sampler can consume them in
      * order. Keep the split layout strictly greedy/diagnostic. */
-    const bool fused_target = stochastic_sampling ||
+    const bool fused_target = target_row_sampling ||
                               getenv("DS4_MTP_SPLIT_TARGET") == NULL;
     const uint64_t hidden_bytes = (uint64_t)DS4_N_EMBD * sizeof(float);
     const double target_t0 = now_sec();
@@ -71633,9 +71677,9 @@ static int ds4_session_qwen_mtp_spec_cycle(
         const bool lean_v2_snapshot =
             draft_n == 1 &&
             getenv("DS4_MTP_QWEN_V2_SAFE_SNAPSHOT") == NULL;
-        const uint64_t verify_rng_start = stochastic_sampling ?
+        const uint64_t verify_rng_start = sampling && sampling->rng ?
             *sampling->rng : 0;
-        if (stochastic_sampling ||
+        if (target_row_sampling ||
             sample_argmax(s->logits, DS4_N_VOCAB) == first_token) {
             const double snapshot_t0 = now_sec();
             snap_ok = lean_v2_snapshot ||
@@ -71657,21 +71701,30 @@ static int ds4_session_qwen_mtp_spec_cycle(
                 bool sampled_rows_ok = true;
                 for (int i = 0; i < draft_n; i++) {
                     int target_token = row_tops[i];
-                    if (stochastic_sampling) {
+                    if (target_row_sampling) {
                         if (!qwen_graph_mtp_read_verifier_row(
                                 g, (uint32_t)i, s->mtp_logits)) {
                             sampled_rows_ok = false;
                             break;
                         }
-                        target_token = sample_top_p_min_p(
-                            s->mtp_logits, DS4_N_VOCAB,
-                            sampling->temperature, sampling->top_k,
-                            sampling->top_p, sampling->min_p,
-                            sampling->rng, s->sample_probs);
+                        target_token = constrained_sampling ?
+                            sampling->sample_target(
+                                sampling->sample_target_ud,
+                                s->mtp_logits, DS4_N_VOCAB,
+                                verify_tokens, i + 1, sampling->rng) :
+                            sample_top_p_min_p(
+                                s->mtp_logits, DS4_N_VOCAB,
+                                sampling->temperature, sampling->top_k,
+                                sampling->top_p, sampling->min_p,
+                                sampling->rng, s->sample_probs);
+                        if (target_token < 0) {
+                            sampled_rows_ok = false;
+                            break;
+                        }
                     }
                     s->qwen_mtp_verified++;
                     if (target_token != drafts[i]) {
-                        if (stochastic_sampling && sampling->next_token) {
+                        if (target_row_sampling && sampling->next_token) {
                             *sampling->next_token = target_token;
                         }
                         break;
@@ -71679,21 +71732,30 @@ static int ds4_session_qwen_mtp_spec_cycle(
                     accepted_drafts++;
                 }
                 if (sampled_rows_ok && accepted_drafts == draft_n &&
-                    stochastic_sampling && drafts[draft_n - 1] != eos_token) {
+                    target_row_sampling && drafts[draft_n - 1] != eos_token) {
                     if (!qwen_graph_mtp_read_verifier_row(
                             g, (uint32_t)draft_n, s->mtp_logits)) {
                         sampled_rows_ok = false;
                     } else if (sampling->next_token) {
-                        *sampling->next_token = sample_top_p_min_p(
-                            s->mtp_logits, DS4_N_VOCAB,
-                            sampling->temperature, sampling->top_k,
-                            sampling->top_p, sampling->min_p,
-                            sampling->rng, s->sample_probs);
+                        *sampling->next_token = constrained_sampling ?
+                            sampling->sample_target(
+                                sampling->sample_target_ud,
+                                s->mtp_logits, DS4_N_VOCAB,
+                                verify_tokens, draft_n + 1,
+                                sampling->rng) :
+                            sample_top_p_min_p(
+                                s->mtp_logits, DS4_N_VOCAB,
+                                sampling->temperature, sampling->top_k,
+                                sampling->top_p, sampling->min_p,
+                                sampling->rng, s->sample_probs);
+                        if (*sampling->next_token < 0) {
+                            sampled_rows_ok = false;
+                        }
                     }
                 }
                 if (!sampled_rows_ok) {
                     accepted_drafts = 0;
-                    if (stochastic_sampling) {
+                    if (sampling && sampling->rng) {
                         *sampling->rng = verify_rng_start;
                         if (sampling->next_token) *sampling->next_token = -1;
                     }
@@ -71716,7 +71778,7 @@ static int ds4_session_qwen_mtp_spec_cycle(
         }
 
         if (!target_done) {
-            if (stochastic_sampling) {
+            if (sampling && sampling->rng) {
                 *sampling->rng = verify_rng_start;
                 if (sampling->next_token) *sampling->next_token = -1;
             }
@@ -72724,6 +72786,41 @@ int ds4_session_eval_speculative_sample(
             s, first_token, max_tokens, eos_token,
             accepted, accepted_cap, &sampling, err, errlen);
     }
+#endif
+    if (ds4_session_eval(s, first_token, err, errlen) != 0) return -1;
+    accepted[0] = first_token;
+    return 1;
+}
+
+int ds4_session_eval_speculative_constrained_sample(
+        ds4_session *s, int first_token,
+        float temperature, int top_k, float top_p, float min_p, uint64_t *rng,
+        int max_tokens, int eos_token,
+        int *accepted, int accepted_cap, int *next_token,
+        ds4_speculative_target_sample_fn sample_target, void *sample_target_ud,
+        char *err, size_t errlen) {
+    if (next_token) *next_token = -1;
+    if (!s || !accepted || accepted_cap <= 0 || max_tokens <= 0 ||
+        !sample_target) return 0;
+#ifndef DS4_NO_GPU
+    if (!s->distributed && !ds4_session_is_cpu(s) && ds4_session_is_qwen(s)) {
+        ds4_spec_sampling sampling = {
+            .temperature = temperature,
+            .top_k = top_k,
+            .top_p = top_p,
+            .min_p = min_p,
+            .rng = rng,
+            .next_token = next_token,
+            .sample_target = sample_target,
+            .sample_target_ud = sample_target_ud,
+        };
+        return ds4_session_qwen_mtp_spec_cycle(
+            s, first_token, max_tokens, eos_token,
+            accepted, accepted_cap, &sampling, err, errlen);
+    }
+#else
+    (void)temperature; (void)top_k; (void)top_p; (void)min_p;
+    (void)rng; (void)eos_token; (void)sample_target_ud;
 #endif
     if (ds4_session_eval(s, first_token, err, errlen) != 0) return -1;
     accepted[0] = first_token;

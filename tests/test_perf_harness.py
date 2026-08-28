@@ -244,6 +244,10 @@ class PerfHarnessTests(unittest.TestCase):
             "mask_cache_miss=40 grammar_compile_ms=0.000 grammar_jit_ms=0.000 "
             "search_static_steps=37 search_static_fallbacks=3 "
             "mtp_constrained_target_only_steps=40 "
+            "mtp_constrained_speculative_cycles=31 "
+            "mtp_constrained_sampled_rows=54 "
+            "mtp_constrained_accepted_drafts=23 "
+            "mtp_constrained_fallbacks=0 "
             "constraint_state_checkpoint=9932800 constraint_state_rollback=9932800 "
             "exhaustive_fallback_steps=3\n"
         )
@@ -260,6 +264,10 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(rows[0]["search_static_steps"], 37)
         self.assertEqual(rows[0]["search_static_fallbacks"], 3)
         self.assertEqual(rows[0]["mtp_constrained_target_only_steps"], 40)
+        self.assertEqual(rows[0]["mtp_constrained_speculative_cycles"], 31)
+        self.assertEqual(rows[0]["mtp_constrained_sampled_rows"], 54)
+        self.assertEqual(rows[0]["mtp_constrained_accepted_drafts"], 23)
+        self.assertEqual(rows[0]["mtp_constrained_fallbacks"], 0)
         self.assertEqual(rows[0]["oracle_compare_calls"], 40)
         self.assertEqual(rows[0]["oracle_divergences"], 0)
 
@@ -476,6 +484,14 @@ class PerfHarnessTests(unittest.TestCase):
         self.assertEqual(args.constraint_mode, "oracle_only")
         self.assertEqual(args.repetitions, 2)
         self.assertEqual(args.context, 4096)
+
+    def test_constrained_server_accepts_explicit_mtp_sidecar(self) -> None:
+        args = HARNESS.build_parser().parse_args([
+            "constrained-server", "--model", "model.gguf",
+            "--mtp-model", "mtp.gguf", "--baseline-run",
+            "--hypothesis", "measure grammar-aware MTP",
+        ])
+        self.assertEqual(args.mtp_model, "mtp.gguf")
 
     def test_constrained_server_accepts_external_subset(self) -> None:
         args = HARNESS.build_parser().parse_args([

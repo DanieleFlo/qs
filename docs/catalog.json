@@ -2090,59 +2090,66 @@
           "path": "docs/performance/qwen38-agent-search-static-2026-08-27.md",
           "sections": [
             {
-              "title": "Qwen3.8 agentico: partizione statica DSML `SEARCH`",
+              "title": "Qwen3.8 agentico: `SEARCH` statica e MTP grammar-aware",
               "level": 1,
               "start": 1,
-              "end": 198,
+              "end": 287,
               "summary": "Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del"
             },
             {
               "title": "Obiettivo e invarianti",
               "level": 2,
               "start": 3,
-              "end": 17,
+              "end": 23,
               "summary": "Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del"
             },
             {
               "title": "Baseline prima della modifica",
               "level": 2,
-              "start": 18,
-              "end": 40,
+              "start": 24,
+              "end": 46,
               "summary": "Hardware: RTX 3090, build CUDA `sm_86`, contesto allocato 22.593, prompt"
             },
             {
               "title": "Risultato appaiato",
               "level": 2,
-              "start": 41,
-              "end": 63,
+              "start": 47,
+              "end": 69,
               "summary": "Il masking target-only scende del 99,21%."
+            },
+            {
+              "title": "MTP grammar-aware: implementazione e vantaggio",
+              "level": 2,
+              "start": 70,
+              "end": 122,
+              "summary": "Il server passa al verifier un callback per ogni distribuzione target della"
             },
             {
               "title": "Gate di correttezza",
               "level": 2,
-              "start": 64,
-              "end": 95,
+              "start": 123,
+              "end": 154,
               "summary": "La storia completa è stata ripetuta con `compare_new_vs_oracle`: 433 confronti"
             },
             {
               "title": "Matrice temperatura, thinking e MTP",
               "level": 2,
-              "start": 96,
-              "end": 148,
+              "start": 155,
+              "end": 222,
               "summary": "Il gate `tests/test_server_sampling_matrix.py` esplicita il prodotto cartesiano"
             },
             {
               "title": "Fonti primarie e scelte implementative",
               "level": 2,
-              "start": 149,
-              "end": 182,
+              "start": 223,
+              "end": 271,
               "summary": "I valori campionati non sono inventati dal benchmark."
             },
             {
               "title": "Test live ripetibile",
               "level": 2,
-              "start": 183,
-              "end": 198,
+              "start": 272,
+              "end": 287,
               "summary": "`tests/run_agent_story_live.ps1` avvia in sequenza target-only e MTP, abilita il"
             }
           ]

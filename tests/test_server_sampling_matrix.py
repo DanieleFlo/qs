@@ -368,6 +368,10 @@ def phase_counters(segment: str) -> dict[str, int]:
         "search_static_steps",
         "search_static_fallbacks",
         "mtp_constrained_target_only_steps",
+        "mtp_constrained_speculative_cycles",
+        "mtp_constrained_sampled_rows",
+        "mtp_constrained_accepted_drafts",
+        "mtp_constrained_fallbacks",
     )
     counters: dict[str, int] = {}
     for field in fields:
@@ -410,6 +414,33 @@ class SamplingMatrixFixtureTests(unittest.TestCase):
         self.assertNotIn("tool_choice", optional)
         self.assertEqual(required["tool_choice"], "required")
         self.assertEqual(plain["seed"], SEED)
+
+    def test_phase_counters_require_constrained_mtp_telemetry(self) -> None:
+        counters = phase_counters(
+            "ds4-server: phase profile ctx=1..5 gen=4 mode=optimized "
+            "filter_calls=12 search_static_steps=3 search_static_fallbacks=0 "
+            "mtp_constrained_target_only_steps=2 "
+            "mtp_constrained_speculative_cycles=4 "
+            "mtp_constrained_sampled_rows=7 "
+            "mtp_constrained_accepted_drafts=2 "
+            "mtp_constrained_fallbacks=0\n"
+            "QWEN_MTP_CYCLE accepted=2\n"
+        )
+        self.assertEqual(counters["mtp_constrained_speculative_cycles"], 4)
+        self.assertEqual(counters["mtp_constrained_sampled_rows"], 7)
+        self.assertEqual(counters["mtp_constrained_accepted_drafts"], 2)
+        self.assertEqual(counters["mtp_constrained_fallbacks"], 0)
+        self.assertEqual(counters["mtp_cycles"], 1)
+
+    def test_phase_counters_fail_closed_when_new_telemetry_is_missing(self) -> None:
+        with self.assertRaisesRegex(
+            AssertionError, "mtp_constrained_speculative_cycles"
+        ):
+            phase_counters(
+                "ds4-server: phase profile filter_calls=1 "
+                "search_static_steps=0 search_static_fallbacks=0 "
+                "mtp_constrained_target_only_steps=1\n"
+            )
 
     def test_sampled_optional_text_compares_the_public_contract(self) -> None:
         def response(text: str) -> dict[str, Any]:
@@ -472,18 +503,56 @@ class SamplingMatrixLiveTests(unittest.TestCase):
                             self.assertEqual(counters["mtp_cycles"], 0)
                     else:
                         self.assertGreater(counters["filter_calls"], 0)
-                        self.assertEqual(
-                            counters["mtp_constrained_target_only_steps"] > 0,
-                            VARIANT == "mtp",
-                        )
+                        if VARIANT == "mtp":
+                            if scenario == "required_tool":
+                                if sampling["thinking"]:
+                                    # MTP accelerates private reasoning, then
+                                    # stops at the required DSML boundary where
+                                    # live sweeps show target-only is faster.
+                                    self.assertGreater(
+                                        counters[
+                                            "mtp_constrained_speculative_cycles"
+                                        ],
+                                        0,
+                                    )
+                                else:
+                                    self.assertEqual(
+                                        counters[
+                                            "mtp_constrained_speculative_cycles"
+                                        ],
+                                        0,
+                                    )
+                                self.assertEqual(
+                                    counters["mtp_constrained_sampled_rows"], 0
+                                )
+                            else:
+                                self.assertGreater(
+                                    counters[
+                                        "mtp_constrained_speculative_cycles"
+                                    ],
+                                    0,
+                                )
+                                self.assertGreater(
+                                    counters["mtp_constrained_sampled_rows"], 0
+                                )
+                        else:
+                            self.assertEqual(
+                                counters["mtp_constrained_speculative_cycles"], 0
+                            )
+                            self.assertEqual(
+                                counters["mtp_constrained_sampled_rows"], 0
+                            )
                     if scenario == "optional_text":
                         if sampling["thinking"]:
                             # The retained SEARCH suffix still contains the
-                            # closing </think> marker for the first few tokens;
-                            # they must remain on the fail-closed dynamic path.
-                            self.assertGreater(
-                                counters["search_static_fallbacks"], 0
-                            )
+                            # closing </think> marker. Target-only decoding
+                            # sees a dynamic frontier before SEARCH becomes
+                            # static; one MTP verifier window may cross that
+                            # boundary entirely in its temporary parser state.
+                            if VARIANT == "target":
+                                self.assertGreater(
+                                    counters["search_static_fallbacks"], 0
+                                )
                             if float(sampling["temperature"]) == 0.0:
                                 self.assertGreater(
                                     counters["search_static_steps"], 0
@@ -495,6 +564,12 @@ class SamplingMatrixLiveTests(unittest.TestCase):
                             self.assertEqual(
                                 counters["search_static_fallbacks"], 0
                             )
+                    if scenario == "required_tool" and VARIANT == "mtp":
+                        # The adaptive gate stops before required DSML; it must
+                        # not enter the exhaustive verifier-mask fallback.
+                        self.assertEqual(
+                            counters["mtp_constrained_fallbacks"], 0
+                        )
 
                     results.append({
                         "id": f"{sampling['id']}::{scenario}",

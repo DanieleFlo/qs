@@ -535,6 +535,10 @@ def parse_server_phase_profiles(text: str) -> list[dict[str, Any]]:
         "constraint_state_rollback", "exhaustive_fallback_steps",
         "search_static_steps", "search_static_fallbacks",
         "mtp_constrained_target_only_steps",
+        "mtp_constrained_speculative_cycles",
+        "mtp_constrained_sampled_rows",
+        "mtp_constrained_accepted_drafts",
+        "mtp_constrained_fallbacks",
     )
     for line in text.splitlines():
         marker = line.find(SERVER_PHASE_PREFIX)
@@ -2538,6 +2542,11 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
         "--ctx", str(args.context), "--host", "127.0.0.1", "--port", str(port),
         "--prefill-chunk", str(args.prefill_chunk),
     ]
+    if args.mtp_model:
+        mtp_model = Path(args.mtp_model)
+        if not mtp_model.exists():
+            raise HarnessError(f"MTP model does not exist: {mtp_model}")
+        command += ["--mtp-model", str(mtp_model)]
     process: subprocess.Popen[Any] | None = None
     log_stream = None
     results = []
@@ -2667,6 +2676,10 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
                 "constraint_state_rollback", "exhaustive_fallback_steps",
                 "search_static_steps", "search_static_fallbacks",
                 "mtp_constrained_target_only_steps",
+                "mtp_constrained_speculative_cycles",
+                "mtp_constrained_sampled_rows",
+                "mtp_constrained_accepted_drafts",
+                "mtp_constrained_fallbacks",
                 "grammar_compile_ms",
                 "grammar_jit_ms", "trie_compile_ms", "trie_compiled_nodes",
                 "trie_memory_bytes", "static_mask_compile_ms",
@@ -3395,6 +3408,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     constrained.add_argument("--id")
     constrained.add_argument("--model", required=True)
+    constrained.add_argument(
+        "--mtp-model",
+        help="explicit MTP sidecar used by the constrained server under test",
+    )
     constrained.add_argument("--binary", default=str(ROOT / "ds4-server"))
     constrained.add_argument(
         "--workloads", default=str(DEFAULT_CONSTRAINED_WORKLOADS)

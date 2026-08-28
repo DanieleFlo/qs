@@ -418,6 +418,12 @@ int ds4_session_argmax_excluding(ds4_session *s, int excluded_id);
 int ds4_sample_logits(const float *logits, int n_vocab, float temperature,
                       int top_k, float top_p, float min_p, uint64_t *rng);
 int ds4_session_sample(ds4_session *s, float temperature, int top_k, float top_p, float min_p, uint64_t *rng);
+/* Sample an arbitrary target-logit row with the session-owned probability
+ * workspace.  Speculative verifiers use this for rows that are not the
+ * session's current public logits. */
+int ds4_session_sample_logits_row(
+        ds4_session *s, const float *logits,
+        float temperature, int top_k, float top_p, float min_p, uint64_t *rng);
 typedef bool (*ds4_token_filter_fn)(void *ud, int token,
                                     const char *piece, size_t piece_len);
 typedef struct {
@@ -498,6 +504,15 @@ int ds4_session_constraint_analyze_partition(
  * incomplete analysis fails closed and returns -1. */
 int ds4_session_sample_constraint_analysis(
         ds4_session *s, float temperature, int top_k,
+        float top_p, float min_p, uint64_t *rng,
+        const ds4_constraint_analysis *analysis,
+        ds4_filtered_sample_metrics *metrics);
+/* Apply the current analysis mask to an arbitrary target-verifier row before
+ * sampling it.  The analysis remains session-owned and stale masks fail
+ * closed exactly like ds4_session_sample_constraint_analysis(). */
+int ds4_session_sample_constraint_analysis_logits(
+        ds4_session *s, const float *logits,
+        float temperature, int top_k,
         float top_p, float min_p, uint64_t *rng,
         const ds4_constraint_analysis *analysis,
         ds4_filtered_sample_metrics *metrics);
@@ -595,6 +610,25 @@ int ds4_session_eval_speculative_sample(
         float temperature, int top_k, float top_p, float min_p, uint64_t *rng,
         int max_tokens, int eos_token,
         int *accepted, int accepted_cap, int *next_token,
+        char *err, size_t errlen);
+/* Target-row sampler for grammar-aware speculative verification.  prefix is
+ * the already selected token sequence within this cycle: first_token followed
+ * by every draft accepted up to the row being sampled.  Returning -1 rejects
+ * the speculative row and makes the verifier fall back without broadening the
+ * target distribution. */
+typedef int (*ds4_speculative_target_sample_fn)(
+        void *ud, const float *target_logits, int n_vocab,
+        const int *prefix, int prefix_len, uint64_t *rng);
+/* Qwen MTP variant whose target verifier delegates every draft and bonus row
+ * to sample_target.  Draft proposals may remain unconstrained: an invalid
+ * draft has zero probability under the masked target row and is rejected.
+ * Other backends conservatively evaluate only first_token. */
+int ds4_session_eval_speculative_constrained_sample(
+        ds4_session *s, int first_token,
+        float temperature, int top_k, float top_p, float min_p, uint64_t *rng,
+        int max_tokens, int eos_token,
+        int *accepted, int accepted_cap, int *next_token,
+        ds4_speculative_target_sample_fn sample_target, void *sample_target_ud,
         char *err, size_t errlen);
 /* Evaluate one already-sampled target token and speculatively extend it.
  * Positive-temperature DSpark normally commits greedily verified draft
