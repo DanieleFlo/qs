@@ -36,6 +36,10 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto 8, Qwen3.8: attention prefill online F32 con tile 64/128
+  scartata al gate bit-exact rispetto a GEMM; max abs 0,0000516125.
+  Nessuna tolleranza modificata e nessuna variante attivata.
+
 - Audit punto 7, Qwen3.8: dequantizzazione IQ4_XS cooperativa F32/F16
   bit-exact; prefill −3,26% a 2K / −3,40% a 8K su cinque coppie.
   REJECT rispetto al 5% richiesto; nessun nuovo dispatch in produzione.

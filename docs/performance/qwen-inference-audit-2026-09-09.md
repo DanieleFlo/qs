@@ -280,3 +280,27 @@ Fonte: decoder locale `dev_iq4_xs_value`, layout/tabelle del vendor llama.cpp
 e scheda della piattaforma; l'upstream fissato dall'audit non è stato scaricato.
 Artefatti in `performance-results/audit-remaining-20260916/`: `dequant.cu`,
 `prepare-dequant.py`, `dequant*.jsonl` e `dequant-session1.summary.json`.
+
+## Punto 8 — attention prefill a tile senza score globali
+
+**REJECT numerico.** Prototipo di fattibilità F32, una query per CTA e tile
+di 64/128 chiavi; KV, causalità, scala 1/16 e gate sono conservati. QK usa
+la riduzione CUDA locale, softmax online aggiorna massimo, denominatore e
+accumulatore fra tile. Nessuna conversione a half. Il riferimento è la
+primitiva GEMM di produzione dopo la normalizzazione/RoPE, con gli stessi
+input congelati e prefisso zero: è il percorso prefill, distinto dal punto 5.
+
+| Query | Tile chiavi | Valori diversi / totali | Max abs |
+|---|---|---|---|
+| 128 | 64 | 786406 / 786432 | 0,0000516125 |
+| 128 | 128 | 786409 / 786432 | 0,0000516125 |
+| 512 | 64 | 3145691 / 3145728 | 0,0000516125 |
+| 512 | 128 | 3145697 / 3145728 | 0,0000516125 |
+
+Il diverso ordine di QK, softmax e PV non conserva il contratto interno
+bit-exact. Il piano impone lo stop a questo gate: nessun tuning o benchmark
+TTFT per promuovere queste varianti. Non si conclude che ogni futura attention
+a tile sia impossibile; queste due implementazioni non sono ammissibili.
+Fonti consultate: scheda llama.cpp/fattn e kernel online già presente in DS4;
+nessun port di un'implementazione con KV half. Artefatti locali:
+`audit-remaining-20260916/attention.cu`, `attention.jsonl`, `attention.log`.
