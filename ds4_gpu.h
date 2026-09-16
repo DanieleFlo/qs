@@ -715,12 +715,17 @@ int ds4_gpu_qwen35_gated_delta_net_rows_tensor(
         uint64_t              norm_offset,
         uint32_t              n_tokens);
 
-/* Qwen graph phase and layer are explicit scheduler inputs. CUDA currently
- * keeps the same calibrated row-count dispatch as before; carrying the phase
- * prevents prefill/verifier work from being mislabeled as "decode" and gives
- * future kernel policy one authoritative extension point. */
+/* Qwen uses explicit execution context; the setter only supports legacy
+ * diagnostic callers of the generic quantized matmul entry point. */
 void ds4_gpu_qwen_set_execution_stage(ds4_qwen_execution_stage stage,
                                       uint32_t layer);
+
+int ds4_gpu_qwen_matmul_tensor(
+        ds4_qwen_execution_context context,
+        ds4_gpu_tensor *out, const void *model_map, uint64_t model_size,
+        uint64_t weight_offset, uint32_t weight_type,
+        uint64_t in_dim, uint64_t out_dim,
+        const ds4_gpu_tensor *x, uint64_t n_tok);
 
 /* Optional fused GPU operations.
  *

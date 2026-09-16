@@ -33206,15 +33206,15 @@ static void qwen35_q8_1_r8_profile_end(qwen35_q8_1_r8_profile *profile,
 }
 
 static qwen35_q8_1_r8_profile qwen35_q8_1_r8_profile_begin(
-        uint32_t weight_type) {
+        uint32_t weight_type, ds4_qwen_execution_context context) {
     qwen35_q8_1_r8_profile result = {
         NULL, NULL, NULL, 0, weight_type,
-        g_cuda_qwen_stage, g_cuda_qwen_layer
+        context.stage, context.layer
     };
     static int profiled[3] = {0, 0, 0};
     const uint32_t slot = weight_type - 12u;
     if (slot >= 3u || profiled[slot] ||
-        g_cuda_qwen_stage != DS4_QWEN_STAGE_DECODE ||
+        context.stage != DS4_QWEN_STAGE_DECODE ||
         getenv("DS4_CUDA_QWEN_DECODE_Q8_1_R8_PROFILE") == NULL) return result;
     if (cudaEventCreate(&result.start) != cudaSuccess ||
         cudaEventCreate(&result.quantized) != cudaSuccess ||
@@ -33247,7 +33247,8 @@ static int qwen35_quant_k_matmul(
         uint64_t              in_dim,
         uint64_t              out_dim,
         const ds4_gpu_tensor *x,
-        uint64_t              n_tok) {
+        uint64_t              n_tok,
+        ds4_qwen_execution_context context) {
     if (!out || !x || !model_map || in_dim == 0 || out_dim == 0 || n_tok == 0 ||
         (in_dim % CUDA_QK_K) != 0 ||
         x->bytes < n_tok * in_dim * sizeof(float) ||
@@ -33278,8 +33279,8 @@ static int qwen35_quant_k_matmul(
         ((adaptive_layers_env != NULL && adaptive_q8_layers <= 64u) ||
          (adaptive_start_env != NULL && adaptive_q8_start <= 64u));
     const bool adaptive_q8_selected =
-        (!adaptive_layers_env || g_cuda_qwen_layer < adaptive_q8_layers) &&
-        (!adaptive_start_env || g_cuda_qwen_layer >= adaptive_q8_start);
+        (!adaptive_layers_env || context.layer < adaptive_q8_layers) &&
+        (!adaptive_start_env || context.layer >= adaptive_q8_start);
     const bool q4_q8_decode =
         getenv("DS4_CUDA_QWEN_DECODE_Q4_Q8") != NULL ||
         (getenv("DS4_CUDA_QWEN_DECODE_Q4_Q8_LSQ") != NULL &&
@@ -33339,9 +33340,9 @@ static int qwen35_quant_k_matmul(
             (qwen35_block_q8_1 *)((char *)xq + xq_bytes) : NULL;
         qwen35_q8_1_r8_profile r8_profile = {
             NULL, NULL, NULL, 0, weight_type,
-            g_cuda_qwen_stage, g_cuda_qwen_layer
+            context.stage, context.layer
         };
-        if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type);
+        if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type, context);
         if (q8_1_r8) {
             qwen35_q8_1_r8_quantize_kernel<<<blocks, 256>>>(
                 xq, xq1, (const float *)x->ptr, blocks);
@@ -33454,9 +33455,9 @@ static int qwen35_quant_k_matmul(
             (qwen35_block_q8_1 *)((char *)xq + xq_bytes) : NULL;
         qwen35_q8_1_r8_profile r8_profile = {
             NULL, NULL, NULL, 0, weight_type,
-            g_cuda_qwen_stage, g_cuda_qwen_layer
+            context.stage, context.layer
         };
-        if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type);
+        if (q8_1_r8) r8_profile = qwen35_q8_1_r8_profile_begin(weight_type, context);
         if (q8_1_r8) {
             qwen35_q8_1_r8_quantize_kernel<<<blocks, 256>>>(
                 xq, xq1, (const float *)x->ptr, blocks);
@@ -33706,7 +33707,7 @@ static int qwen35_quant_k_matmul(
             (getenv("DS4_CUDA_QWEN_PREFILL_F16_DOWN") != NULL &&
              in_dim == 17408u && out_dim == 5120u);
         const bool f16_gemm = f16_requested &&
-            g_cuda_qwen_layer < f16_layers;
+            context.layer < f16_layers;
         const uint64_t weight_tmp_bytes = weight_elems *
             (f16_gemm ? sizeof(__half) : sizeof(float));
         const uint64_t xh_offset = (weight_tmp_bytes + 255u) & ~255ull;
@@ -34776,7 +34777,8 @@ extern "C" int ds4_gpu_qwen35_gated_delta_net_tensor(
         norm_offset, 1u);
 }
 
-extern "C" int ds4_gpu_matmul_quant_tensor(
+extern "C" int ds4_gpu_qwen_matmul_tensor(
+        ds4_qwen_execution_context context,
         ds4_gpu_tensor       *out,
         const void             *model_map,
         uint64_t                model_size,
@@ -34787,6 +34789,9 @@ extern "C" int ds4_gpu_matmul_quant_tensor(
         const ds4_gpu_tensor *x,
         uint64_t                n_tok) {
     switch (weight_type) {
+    case 0u:   /* F32 */
+        return ds4_gpu_matmul_f32_tensor(out, model_map, model_size,
+                                         weight_offset, in_dim, out_dim, x, n_tok);
     case 2u:   /* Q4_0 */
         return qwen35_q4_0_matmul(out, model_map, model_size,
                                   weight_offset, in_dim, out_dim, x, n_tok);
@@ -34803,7 +34808,7 @@ extern "C" int ds4_gpu_matmul_quant_tensor(
     case 14u:  /* Q6_K */
         return qwen35_quant_k_matmul(out, model_map, model_size,
                                      weight_offset, weight_type,
-                                     in_dim, out_dim, x, n_tok);
+                                     in_dim, out_dim, x, n_tok, context);
     case 11u:  /* Q3_K */
     case 17u:  /* IQ2_XS */
     case 18u:  /* IQ3_XXS */
@@ -34819,6 +34824,18 @@ extern "C" int ds4_gpu_matmul_quant_tensor(
                 weight_type);
         return 0;
     }
+}
+
+extern "C" int ds4_gpu_matmul_quant_tensor(
+        ds4_gpu_tensor *out, const void *model_map, uint64_t model_size,
+        uint64_t weight_offset, uint32_t weight_type,
+        uint64_t in_dim, uint64_t out_dim,
+        const ds4_gpu_tensor *x, uint64_t n_tok) {
+    const ds4_qwen_execution_context context = {
+        g_cuda_qwen_stage, g_cuda_qwen_layer
+    };
+    return ds4_gpu_qwen_matmul_tensor(context, out, model_map, model_size,
+        weight_offset, weight_type, in_dim, out_dim, x, n_tok);
 }
 
 extern "C" uint64_t ds4_gpu_recommended_working_set_size(void) {

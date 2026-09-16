@@ -1,13 +1,22 @@
-# Primo intervento utile dall'audit dell'inferenza
+# Audit dell'inferenza Qwen: interventi e risultati
 
 ## Risultato e perimetro
 
-La modifica mantenuta corregge il carry MTP nel prefill token per token:
+Il piano è stato esaminato fino ai punti A–E. Sono mantenuti la correzione
+del carry MTP, la dequantizzazione cooperativa IQ4_XS (punto 7, default
+richiesto dall'utente) e il refactoring del contesto/output Qwen (punto A).
+Gli altri punti sono chiusi ai rispettivi gate, con motivi e misure sotto.
+Restano aperti l'oracolo completo Qwen3.8 e la riqualificazione del ramo
+FP16 già presente: non sono stati dichiarati superati dai confronti interni.
+
+La correzione iniziale riguarda il carry MTP nel prefill token per token:
 `qwen_graph_forward_token_mode` produce `output_norm` anche quando non servono
 logits, se MTP è attivo. Il passo successivo riceve così la coppia corretta
 `(token[p], target_h[p-1])`. La proiezione sul vocabolario e il readback dei
-logits restano saltati sui token intermedi. Nessun quantizzatore, kernel
-numerico, formato KV o dispatch delle proiezioni è cambiato.
+logits restano saltati sui token intermedi. Questa correzione non cambia
+quantizzatore, formato KV o precisione delle proiezioni. Il punto 7 cambia
+il decoder dei pesi mantenendone i bit, il punto A rende esplicite dipendenze
+già esistenti; i loro esiti sono distinti dal beneficio del carry.
 
 Misure GPU del 9 settembre 2026; chiusura e correzioni degli strumenti il
 16 settembre 2026.
@@ -366,6 +375,57 @@ Il confronto di riferimento è la convoluzione causale FLA indicata nell'audit;
 la verifica del kernel DS4 conferma che il tempo è seriale ma non dominante.
 Artefatti: `audit-remaining-20260916/profile-{2048,28672}.{jsonl,log}` e
 `prepare-profile.py`; ogni campione usa il modello residente dopo warm-up.
+
+## Punto A — contesto e output espliciti
+
+**KEEP come refactoring, nessun nuovo speedup rivendicato.** Le proiezioni
+Qwen ricevono `ds4_qwen_execution_context` per valore: stage e layer non
+dipendono più dai globali CUDA del setter legacy. Il vecchio ingresso resta
+per i chiamanti diagnostici del matmul generico. Formato, forma, numero di
+righe e vincoli numerici continuano a scegliere il kernel; lo stage da solo
+non cambia dispatch. I descrittori immutabili sono quelli già risolti e
+validati da `weights_bind` / `weights_validate_qwen38_layout` all'apertura:
+nessuna seconda copia del piano o cache di configurazioni diagnostiche.
+
+`ds4_qwen_output_plan` distingue hidden normalizzato, logits sul device e
+lettura CPU, chiudendo le dipendenze readback → logits → hidden. I chiamanti
+esistenti mantengono gli stessi consumi; il catch-up conserva sempre il carry
+e salta head/readback inutili. Richieste incoerenti sono rifiutate prima di
+modificare lo stato. Metal/ROCm mantengono il wrapper portabile precedente.
+
+La regressione permanente controlla head senza destinazione CPU, hidden senza
+head, dipendenze del readback e carry a 0/1/512/513. Un ulteriore caso confronta
+la proiezione K-quant a 128 righe con il contesto legacy deliberatamente
+alterato: output bit-exact. Anche il confronto residente fra dispatch legacy
+e nuovo passaggio esplicito avvelena il contesto globale a ogni proiezione,
+e confronta prompt e tutti i logits di 128 passi a contesto 128/2048.
+
+Dieci coppie bilanciate in due sessioni dopo warm-up, chunk 512, modello
+residente, capacità 4096; tutti i campioni conservati. Riduzione appaiata del
+tempo (negativa = rallentamento):
+
+| Contesto e fase | Mediana | CI95 | CV baseline/candidate |
+|---|---|---|---|
+| 128, prefill | −0,09% | [−2,72; 2,90]% | 3,45 / 2,16% |
+| 128, decode | +0,94% | [0,11; 3,10]% | 2,42 / 1,42% |
+| 2048, prefill | −0,63% | [−1,18; 0,08]% | 0,37 / 1,06% |
+| 2048, decode | −0,20% | [−1,34; 0,41]% | 1,35 / 1,40% |
+
+Nessuna regressione stabile oltre il 2% osservata; il CI del prefill breve
+rimane ampio, quindi non dimostra equivalenza prestazionale entro il 2% in
+ogni condizione. Il miglioramento non raggiunge la soglia del 2% richiesta
+per chiamarlo ottimizzazione. Distribuzioni complete (min/p10/mediana/media/
+p90/max/deviazione standard/CV) in `context-confirmation.summary.json`.
+
+Il gate MTP passa verifier, rifiuto totale, accettazione parziale, raw-copy,
+128 token a temperatura 1 con seed fisso identici al target, e prompt senza
+MTP bit-exact. Build finale dei cinque frontend CUDA, runtime CPU e
+compilazione host con `DS4_ROCM_BUILD` riuscite; esecuzione Metal/ROCm e
+distribuita non verificata. Suite Python finale: 105 PASS, 3 SKIP; un primo
+tentativo mentre il modello era occupato aveva incontrato il lock, e la
+riesecuzione isolata è verde. Nessuna nuova allocazione o sincronizzazione.
+Artefatti: `audit-remaining-20260916/context*`, `final-build.log`,
+`rocm-host-check.log`. Fonte: contratto degli stage e binding Qwen locale.
 
 ## Punto B — workspace e durata dei buffer
 

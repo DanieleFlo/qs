@@ -52161,7 +52161,25 @@ static void qwen_trace_tensor(
     free(values);
 }
 
-static bool qwen_graph_forward_token_mode(
+/* Model binding already resolves and validates immutable tensor descriptors
+ * once. Keep those descriptors as the projection plan; rows and execution
+ * context stay per-call, including diagnostic dispatch constraints. */
+static bool qwen_graph_matmul(
+        ds4_qwen_execution_context context,
+        ds4_gpu_tensor *out, const ds4_model *model, const ds4_tensor *w,
+        uint64_t in_dim, uint64_t out_dim,
+        const ds4_gpu_tensor *x, uint64_t n_tok) {
+    if (!w || !model) return false;
+#if defined(__APPLE__) || defined(DS4_ROCM_BUILD)
+    (void)context;
+    return metal_graph_matmul_plain_tensor(out, model, w, in_dim, out_dim, x, n_tok);
+#else
+    return ds4_gpu_qwen_matmul_tensor(context, out, model->map, model->size,
+        w->abs_offset, w->type, in_dim, out_dim, x, n_tok) != 0;
+#endif
+}
+
+static bool qwen_graph_forward_token_plan(
         ds4_qwen_gpu_graph *g,
         const ds4_model    *model,
         const ds4_weights  *weights,
@@ -52169,8 +52187,9 @@ static bool qwen_graph_forward_token_mode(
         uint32_t            position,
         ds4_qwen_execution_stage stage,
         float              *logits_out,
-        bool                emit_logits) {
-    if (!g || !model || !weights || (emit_logits && !logits_out) ||
+        ds4_qwen_output_plan output) {
+    if (!g || !model || !weights || (output.read_logits && !logits_out) ||
+        (output.read_logits && !output.logits) || (output.logits && !output.hidden) ||
         position >= g->ctx_cap ||
         token >= DS4_N_VOCAB) return false;
     const char *profile_pos_env =
@@ -52208,8 +52227,9 @@ static bool qwen_graph_forward_token_mode(
             ok = ds4_gpu_begin_commands() != 0;
         }
     }
+    ds4_qwen_execution_context context = {stage, DS4_N_LAYER - 1u};
     for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
-        ds4_gpu_qwen_set_execution_stage(stage, il);
+        context.layer = il;
         const ds4_layer_weights *l = &weights->layer[il];
         const bool recurrent = qwen_layer_is_recurrent(il);
         const double prof_attn_t0 = profile ? now_sec() : 0.0;
@@ -52219,19 +52239,19 @@ static bool qwen_graph_forward_token_mode(
             l->attn_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
         if (ok) qwen_trace_tensor("attn_norm", il, position, g->attn_norm, DS4_N_EMBD);
         if (ok && qwen_layer_is_recurrent(il)) {
-            ok = metal_graph_matmul_plain_tensor(g->qkv, model, l->qwen_attn_qkv,
+            ok = qwen_graph_matmul(context, g->qkv, model, l->qwen_attn_qkv,
                                                   DS4_N_EMBD, 10240u,
                                                   g->attn_norm, 1);
             if (ok) qwen_trace_tensor("qkv", il, position, g->qkv, 10240u);
-            if (ok) ok = metal_graph_matmul_plain_tensor(g->z, model, l->qwen_attn_gate,
+            if (ok) ok = qwen_graph_matmul(context, g->z, model, l->qwen_attn_gate,
                                                           DS4_N_EMBD, 6144u,
                                                           g->attn_norm, 1);
             if (ok) qwen_trace_tensor("z", il, position, g->z, 6144u);
-            if (ok) ok = metal_graph_matmul_plain_tensor(g->alpha, model, l->qwen_ssm_alpha,
+            if (ok) ok = qwen_graph_matmul(context, g->alpha, model, l->qwen_ssm_alpha,
                                                           DS4_N_EMBD, 48u,
                                                           g->attn_norm, 1);
             if (ok) qwen_trace_tensor("alpha", il, position, g->alpha, 48u);
-            if (ok) ok = metal_graph_matmul_plain_tensor(g->beta, model, l->qwen_ssm_beta,
+            if (ok) ok = qwen_graph_matmul(context, g->beta, model, l->qwen_ssm_beta,
                                                           DS4_N_EMBD, 48u,
                                                           g->attn_norm, 1);
             if (ok) qwen_trace_tensor("beta", il, position, g->beta, 48u);
@@ -52252,23 +52272,23 @@ static bool qwen_graph_forward_token_mode(
                                       g->recurrent_state[il],
                                       (uint64_t)DS4_N_GDN_VALUE_HEAD *
                                       DS4_N_GDN_STATE * DS4_N_GDN_STATE);
-            if (ok) ok = metal_graph_matmul_plain_tensor(
+            if (ok) ok = qwen_graph_matmul(context,
                 g->attn_out, model, l->qwen_ssm_out, 6144u, DS4_N_EMBD,
                 g->heads, 1);
         } else if (ok) {
             const double t_qkv = profile ? now_sec() : 0.0;
 
-            ok = metal_graph_matmul_plain_tensor(
+            ok = qwen_graph_matmul(context,
                 g->q_gate, model, l->qwen_attn_q,
                 DS4_N_EMBD, 12288u,
                 g->attn_norm, 1);
 
-            if (ok) ok = metal_graph_matmul_plain_tensor(
+            if (ok) ok = qwen_graph_matmul(context,
                 g->k, model, l->qwen_attn_k,
                 DS4_N_EMBD, 1024u,
                 g->attn_norm, 1);
 
-            if (ok) ok = metal_graph_matmul_plain_tensor(
+            if (ok) ok = qwen_graph_matmul(context,
                 g->v, model, l->qwen_attn_v,
                 DS4_N_EMBD, 1024u,
                 g->attn_norm, 1);
@@ -52313,7 +52333,7 @@ static bool qwen_graph_forward_token_mode(
 
             const double t_out = profile ? now_sec() : 0.0;
 
-            if (ok) ok = metal_graph_matmul_plain_tensor(
+            if (ok) ok = qwen_graph_matmul(context,
                 g->attn_out,
                 model,
                 l->attn_output,
@@ -52360,18 +52380,18 @@ static bool qwen_graph_forward_token_mode(
             g->ffn_norm, g->after_attn, model->map, model->size,
             l->ffn_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
         if (ok) qwen_trace_tensor("ffn_norm", il, position, g->ffn_norm, DS4_N_EMBD);
-        if (ok) ok = metal_graph_matmul_plain_tensor(g->ffn_gate, model, l->ffn_gate,
+        if (ok) ok = qwen_graph_matmul(context, g->ffn_gate, model, l->ffn_gate,
                                                       DS4_N_EMBD, DS4_N_FF_DENSE,
                                                       g->ffn_norm, 1);
         if (ok) qwen_trace_tensor("ffn_gate", il, position, g->ffn_gate, DS4_N_FF_DENSE);
-        if (ok) ok = metal_graph_matmul_plain_tensor(g->ffn_up, model, l->ffn_up,
+        if (ok) ok = qwen_graph_matmul(context, g->ffn_up, model, l->ffn_up,
                                                       DS4_N_EMBD, DS4_N_FF_DENSE,
                                                       g->ffn_norm, 1);
         if (ok) qwen_trace_tensor("ffn_up", il, position, g->ffn_up, DS4_N_FF_DENSE);
         if (ok) ok = ds4_gpu_swiglu_tensor(g->ffn_mid, g->ffn_gate, g->ffn_up,
                                             DS4_N_FF_DENSE, 0.0f, 1.0f) != 0;
         if (ok) qwen_trace_tensor("ffn_mid", il, position, g->ffn_mid, DS4_N_FF_DENSE);
-        if (ok) ok = metal_graph_matmul_plain_tensor(g->ffn_out, model, l->ffn_down,
+        if (ok) ok = qwen_graph_matmul(context, g->ffn_out, model, l->ffn_down,
                                                       DS4_N_FF_DENSE, DS4_N_EMBD,
                                                       g->ffn_mid, 1);
         if (ok) qwen_trace_tensor("ffn_out", il, position, g->ffn_out, DS4_N_EMBD);
@@ -52405,16 +52425,16 @@ static bool qwen_graph_forward_token_mode(
         profile ? now_sec() : 0.0;
     /* Catch-up needs target_h[p] even when an intermediate prefill token does
      * not need logits. Otherwise the next MTP step receives stale scratch. */
-    if (ok && (emit_logits || g->mtp_ready)) ok = ds4_gpu_rms_norm_weight_tensor(
+    if (ok && output.hidden) ok = ds4_gpu_rms_norm_weight_tensor(
         g->output_norm, g->cur, model->map, model->size,
         weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok && emit_logits) qwen_trace_tensor(
+    if (ok && output.logits) qwen_trace_tensor(
         "output_norm", DS4_N_LAYER - 1u, position,
         g->output_norm, DS4_N_EMBD);
-    if (ok && emit_logits) ok = metal_graph_matmul_plain_tensor(
+    if (ok && output.logits) ok = qwen_graph_matmul(context,
         g->logits, model, weights->output, DS4_N_EMBD, DS4_N_VOCAB,
         g->output_norm, 1);
-    if (ok && emit_logits) qwen_trace_tensor(
+    if (ok && output.logits) qwen_trace_tensor(
         "logits", DS4_N_LAYER - 1u, position,
         g->logits, DS4_N_VOCAB);
     if (ok) ok = ds4_gpu_end_commands() != 0;
@@ -52426,7 +52446,7 @@ static bool qwen_graph_forward_token_mode(
 
     const double prof_read_t0 =
         profile ? now_sec() : 0.0;
-    if (ok && emit_logits) ok = ds4_gpu_tensor_read(
+    if (ok && output.read_logits) ok = ds4_gpu_tensor_read(
         g->logits, 0, logits_out,
         (uint64_t)DS4_N_VOCAB * sizeof(float)) != 0;
     if (profile) {
@@ -52458,6 +52478,16 @@ static bool qwen_graph_forward_token_mode(
     return ok;
 }
 
+static bool qwen_graph_forward_token_mode(
+        ds4_qwen_gpu_graph *g, const ds4_model *model,
+        const ds4_weights *weights, uint32_t token, uint32_t position,
+        ds4_qwen_execution_stage stage, float *logits_out, bool emit_logits) {
+    const ds4_qwen_output_plan output = ds4_qwen_plan_outputs(
+        g && g->mtp_ready, emit_logits, emit_logits);
+    return qwen_graph_forward_token_plan(
+        g, model, weights, token, position, stage, logits_out, output);
+}
+
 static bool qwen_graph_forward_token(
         ds4_qwen_gpu_graph *g,
         const ds4_model    *model,
@@ -52474,22 +52504,23 @@ static bool qwen_graph_forward_token(
  * named functions makes the scheduler readable and prevents prefill/MTP call
  * sites from duplicating (or partially updating) a kernel sequence. */
 static bool qwen_graph_recurrent_attention_rows(
+        ds4_qwen_execution_context context,
         ds4_qwen_gpu_graph    *g,
         const ds4_model       *model,
         const ds4_layer_weights *layer,
         uint32_t               layer_index,
         uint32_t               n_tokens,
         bool                   capture_recurrent_rows) {
-    bool ok = metal_graph_matmul_plain_tensor(
+    bool ok = qwen_graph_matmul(context,
         g->qkv, model, layer->qwen_attn_qkv,
         DS4_N_EMBD, 10240u, g->attn_norm, n_tokens);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->z, model, layer->qwen_attn_gate,
         DS4_N_EMBD, 6144u, g->attn_norm, n_tokens);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->alpha, model, layer->qwen_ssm_alpha,
         DS4_N_EMBD, 48u, g->attn_norm, n_tokens);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->beta, model, layer->qwen_ssm_beta,
         DS4_N_EMBD, 48u, g->attn_norm, n_tokens);
     if (ok) ok = ds4_gpu_qwen35_gated_delta_net_rows_tensor(
@@ -52503,26 +52534,27 @@ static bool qwen_graph_recurrent_attention_rows(
         layer->qwen_ssm_conv1d->abs_offset,
         layer->qwen_ssm_dt->abs_offset,
         layer->qwen_ssm_norm->abs_offset, n_tokens) != 0;
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->attn_out, model, layer->qwen_ssm_out,
         6144u, DS4_N_EMBD, g->heads, n_tokens);
     return ok;
 }
 
 static bool qwen_graph_full_attention_rows(
+        ds4_qwen_execution_context context,
         ds4_qwen_gpu_graph    *g,
         const ds4_model       *model,
         const ds4_layer_weights *layer,
         uint32_t               layer_index,
         uint32_t               position_start,
         uint32_t               n_tokens) {
-    bool ok = metal_graph_matmul_plain_tensor(
+    bool ok = qwen_graph_matmul(context,
         g->q_gate, model, layer->qwen_attn_q,
         DS4_N_EMBD, 12288u, g->attn_norm, n_tokens);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->k, model, layer->qwen_attn_k,
         DS4_N_EMBD, 1024u, g->attn_norm, n_tokens);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->v, model, layer->qwen_attn_v,
         DS4_N_EMBD, 1024u, g->attn_norm, n_tokens);
     if (ok) ok = ds4_gpu_qwen35_full_attention_rows_tensor(
@@ -52532,13 +52564,14 @@ static bool qwen_graph_full_attention_rows(
         layer->qwen_attn_q_norm->abs_offset,
         layer->qwen_attn_k_norm->abs_offset,
         position_start, n_tokens, g->ctx_cap) != 0;
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->attn_out, model, layer->attn_output,
         6144u, DS4_N_EMBD, g->heads, n_tokens);
     return ok;
 }
 
 static bool qwen_graph_ffn_rows(
+        ds4_qwen_execution_context context,
         ds4_qwen_gpu_graph    *g,
         const ds4_model       *model,
         const ds4_layer_weights *layer,
@@ -52551,16 +52584,16 @@ static bool qwen_graph_ffn_rows(
         g->ffn_norm, g->after_attn, model->map, model->size,
         layer->ffn_norm->abs_offset, DS4_N_EMBD, n_tokens,
         DS4_RMS_EPS) != 0;
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->ffn_gate, model, layer->ffn_gate,
         DS4_N_EMBD, DS4_N_FF_DENSE, g->ffn_norm, n_tokens);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->ffn_up, model, layer->ffn_up,
         DS4_N_EMBD, DS4_N_FF_DENSE, g->ffn_norm, n_tokens);
     if (ok) ok = ds4_gpu_swiglu_tensor(
         g->ffn_mid, g->ffn_gate, g->ffn_up,
         ffn_elems, 0.0f, 1.0f) != 0;
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->ffn_out, model, layer->ffn_down,
         DS4_N_FF_DENSE, DS4_N_EMBD, g->ffn_mid, n_tokens);
     if (ok) ok = ds4_gpu_add_tensor(
@@ -52622,8 +52655,9 @@ static bool qwen_graph_forward_rows(
         g->cur, g->tokens, model->map, model->size,
         weights->token_embd->abs_offset, weights->token_embd->type,
         DS4_N_VOCAB, n_tokens, DS4_N_EMBD) != 0;
+    ds4_qwen_execution_context context = {stage, DS4_N_LAYER - 1u};
     for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
-        ds4_gpu_qwen_set_execution_stage(stage, il);
+        context.layer = il;
         const ds4_layer_weights *l = &weights->layer[il];
         const double layer_t0 = profile ? now_sec() : 0.0;
         ok = ds4_gpu_rms_norm_weight_rows_tensor(
@@ -52631,15 +52665,15 @@ static bool qwen_graph_forward_rows(
             l->attn_norm->abs_offset, DS4_N_EMBD, n_tokens,
             DS4_RMS_EPS) != 0;
         if (ok && qwen_layer_is_recurrent(il)) {
-            ok = qwen_graph_recurrent_attention_rows(
+            ok = qwen_graph_recurrent_attention_rows(context,
                 g, model, l, il, n_tokens, capture_recurrent_rows);
         } else if (ok) {
-            ok = qwen_graph_full_attention_rows(
+            ok = qwen_graph_full_attention_rows(context,
                 g, model, l, il, position_start, n_tokens);
         }
         if (profile && ok) ok = ds4_gpu_synchronize() != 0;
         const double attn_t1 = profile ? now_sec() : 0.0;
-        if (ok) ok = qwen_graph_ffn_rows(g, model, l, n_tokens);
+        if (ok) ok = qwen_graph_ffn_rows(context, g, model, l, n_tokens);
         if (profile && ok) ok = ds4_gpu_synchronize() != 0;
         if (profile) {
             const double layer_t1 = now_sec();
@@ -52671,7 +52705,7 @@ static bool qwen_graph_forward_rows(
             g->mtp_target_rows, g->cur, model->map, model->size,
             weights->output_norm->abs_offset, DS4_N_EMBD, n_tokens,
             DS4_RMS_EPS) != 0;
-        if (ok) ok = metal_graph_matmul_plain_tensor(
+        if (ok) ok = qwen_graph_matmul(context,
             g->mtp_verify_logits, model, weights->output,
             DS4_N_EMBD, DS4_N_VOCAB, g->mtp_target_rows, n_tokens);
         if (ok) ok = ds4_gpu_indexer_topk_tensor(
@@ -52688,7 +52722,7 @@ static bool qwen_graph_forward_rows(
         if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
             g->output_norm, last, model->map, model->size,
             weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-        if (ok) ok = metal_graph_matmul_plain_tensor(
+        if (ok) ok = qwen_graph_matmul(context,
             g->logits, model, weights->output, DS4_N_EMBD, DS4_N_VOCAB,
             g->output_norm, 1);
     }
@@ -52718,13 +52752,16 @@ static bool qwen_graph_output_head(
         const float        *hidden,
         float              *logits_out) {
     if (!g || !model || !weights || !hidden || !logits_out) return false;
+    const ds4_qwen_execution_context context = {
+        DS4_QWEN_STAGE_DECODE, DS4_N_LAYER - 1u
+    };
     bool ok = ds4_gpu_tensor_write(g->cur, 0, hidden,
                                    (uint64_t)DS4_N_EMBD * sizeof(float)) != 0;
     if (ok) ok = ds4_gpu_begin_commands() != 0;
     if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
         g->output_norm, g->cur, model->map, model->size,
         weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->logits, model, weights->output, DS4_N_EMBD, DS4_N_VOCAB,
         g->output_norm, 1);
     if (ok) ok = ds4_gpu_end_commands() != 0;
@@ -52756,7 +52793,7 @@ static bool qwen_graph_mtp_step(
     const double profile_t0 = profile ? now_sec() : 0.0;
     double input_ms = 0.0, attention_ms = 0.0, ffn_ms = 0.0;
     double head_ms = 0.0, read_ms = 0.0;
-    ds4_gpu_qwen_set_execution_stage(stage, DS4_N_LAYER);
+    const ds4_qwen_execution_context context = {stage, DS4_N_LAYER};
     bool ok = ds4_gpu_begin_commands() != 0;
     if (ok) ok = ds4_gpu_embed_token_quant_tensor(
         g->cur, model->map, model->size, weights->token_embd->abs_offset,
@@ -52767,7 +52804,7 @@ static bool qwen_graph_mtp_step(
     if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
         g->mtp_hnorm_view, hidden_in, model->map, model->size,
         l->nextn_hnorm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->cur, model, l->nextn_eh_proj,
         2u * DS4_N_EMBD, DS4_N_EMBD, g->mtp_concat, 1);
     if (profile && ok) ok = ds4_gpu_synchronize() != 0;
@@ -52776,15 +52813,15 @@ static bool qwen_graph_mtp_step(
     if (ok) ok = ds4_gpu_rms_norm_weight_tensor(
         g->attn_norm, g->cur, model->map, model->size,
         l->attn_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok && !cache_only) ok = metal_graph_matmul_plain_tensor(
+    if (ok && !cache_only) ok = qwen_graph_matmul(context,
         g->q_gate, model, l->qwen_attn_q,
         DS4_N_EMBD, 2u * DS4_N_HEAD * DS4_N_HEAD_DIM,
         g->attn_norm, 1);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->k, model, l->qwen_attn_k,
         DS4_N_EMBD, DS4_N_HEAD_KV * DS4_N_HEAD_DIM,
         g->attn_norm, 1);
-    if (ok) ok = metal_graph_matmul_plain_tensor(
+    if (ok) ok = qwen_graph_matmul(context,
         g->v, model, l->qwen_attn_v,
         DS4_N_EMBD, DS4_N_HEAD_KV * DS4_N_HEAD_DIM,
         g->attn_norm, 1);
@@ -52803,7 +52840,7 @@ static bool qwen_graph_mtp_step(
             l->qwen_attn_k_norm->abs_offset,
             position, g->ctx_cap) != 0;
     }
-    if (ok && !cache_only) ok = metal_graph_matmul_plain_tensor(
+    if (ok && !cache_only) ok = qwen_graph_matmul(context,
         g->attn_out, model, l->attn_output,
         DS4_N_HEAD * DS4_N_HEAD_DIM, DS4_N_EMBD, g->heads, 1);
     if (ok && !cache_only) ok = ds4_gpu_add_tensor(
@@ -52814,16 +52851,16 @@ static bool qwen_graph_mtp_step(
     if (ok && !cache_only) ok = ds4_gpu_rms_norm_weight_tensor(
         g->ffn_norm, g->after_attn, model->map, model->size,
         l->ffn_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok && !cache_only) ok = metal_graph_matmul_plain_tensor(
+    if (ok && !cache_only) ok = qwen_graph_matmul(context,
         g->ffn_gate, model, l->ffn_gate,
         DS4_N_EMBD, DS4_N_FF_DENSE, g->ffn_norm, 1);
-    if (ok && !cache_only) ok = metal_graph_matmul_plain_tensor(
+    if (ok && !cache_only) ok = qwen_graph_matmul(context,
         g->ffn_up, model, l->ffn_up,
         DS4_N_EMBD, DS4_N_FF_DENSE, g->ffn_norm, 1);
     if (ok && !cache_only) ok = ds4_gpu_swiglu_tensor(
         g->ffn_mid, g->ffn_gate, g->ffn_up,
         DS4_N_FF_DENSE, 0.0f, 1.0f) != 0;
-    if (ok && !cache_only) ok = metal_graph_matmul_plain_tensor(
+    if (ok && !cache_only) ok = qwen_graph_matmul(context,
         g->ffn_out, model, l->ffn_down,
         DS4_N_FF_DENSE, DS4_N_EMBD, g->ffn_mid, 1);
     if (ok && !cache_only) ok = ds4_gpu_add_tensor(
@@ -52835,7 +52872,7 @@ static bool qwen_graph_mtp_step(
         g->output_norm, g->next, model->map, model->size,
         l->nextn_shared_head_norm->abs_offset,
         DS4_N_EMBD, DS4_RMS_EPS) != 0;
-    if (ok && !cache_only) ok = metal_graph_matmul_plain_tensor(
+    if (ok && !cache_only) ok = qwen_graph_matmul(context,
         g->logits, model, weights->output,
         DS4_N_EMBD, DS4_N_VOCAB, g->output_norm, 1);
     if (ok && !cache_only && top_out) ok = ds4_gpu_argmax_tensor(

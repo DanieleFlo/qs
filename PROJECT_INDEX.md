@@ -332,7 +332,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   opzionale emette tempi strutturati attention/FFN per fase e layer, consumati
   dal comando profile-network del performance harness.
 - `ds4_qwen.h` — vocabolario interno unico delle fasi di esecuzione Qwen,
-  condiviso fra scheduler C e backend CUDA/Metal/ROCm.
+  contesto stage/layer passato alle proiezioni e dipendenze fra hidden,
+  logits e readback CPU, condivisi fra scheduler e backend.
 - `ds4_gpu.h` — interfaccia tensoriale condivisa fra il grafo C e i backend
   accelerati; descrive tensori opachi, operazioni, attention e batching,
   incluse le due primitive interne Qwen per full-attention gated e Gated
@@ -568,7 +569,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/qwen_mtp_catchup_probe.c` — regressione CUDA con modello reale per
   hidden e coppia token/hidden della cache MTP, senza tracing né output head
   sui token intermedi; verifica anche il passaggio dal prefill a chunk ai
-  token successivi. Accetta target GGUF e sidecar MTP come argomenti.
+  token successivi, output separati e indipendenza dal contesto legacy CUDA.
+  Accetta target GGUF e sidecar MTP come argomenti.
 - `tests/qwen_iq4_dequant_probe.cu` — parità bit-exact delle due varianti
   cooperative IQ4_XS rispetto al decoder scalare F32/F16, su scale half
   finite, nibble estremi e code parziali dei blocchi CUDA.

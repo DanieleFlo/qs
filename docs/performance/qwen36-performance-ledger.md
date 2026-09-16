@@ -36,6 +36,11 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto A, Qwen3.8: contesto stage/layer e consumi hidden/logits/readback
+  espliciti, parità bit-exact anche con contesto legacy alterato. KEEP come
+  refactoring; dieci coppie senza regressioni stabili oltre il 2%, nessun
+  nuovo speedup rivendicato. Gate MTP e build finali PASS, dettagli nel report.
+
 - Audit punto E, Qwen3.8: callback/SSE: 0,080% / 0,036% del tempo nel probe
   locale con client rapido/lento; stop al profilo, nessun nuovo worker I/O.
 
