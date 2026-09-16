@@ -1098,6 +1098,60 @@
           ]
         },
         {
+          "path": "docs/performance/qwen-inference-audit-2026-09-09.md",
+          "sections": [
+            {
+              "title": "Primo intervento utile dall'audit dell'inferenza",
+              "level": 1,
+              "start": 1,
+              "end": 213,
+              "summary": "La modifica mantenuta corregge il carry MTP nel prefill token per token:"
+            },
+            {
+              "title": "Risultato e perimetro",
+              "level": 2,
+              "start": 3,
+              "end": 30,
+              "summary": "La modifica mantenuta corregge il carry MTP nel prefill token per token:"
+            },
+            {
+              "title": "Riproduzione e correttezza",
+              "level": 2,
+              "start": 31,
+              "end": 73,
+              "summary": "`tests/qwen_mtp_catchup_probe.c` controlla senza tracing:"
+            },
+            {
+              "title": "Misure del carry",
+              "level": 2,
+              "start": 74,
+              "end": 143,
+              "summary": "Screening CLI, greedy, `--nothink`, 128 token, contesto allocato 2048,"
+            },
+            {
+              "title": "Bug degli strumenti corretti",
+              "level": 2,
+              "start": 144,
+              "end": 168,
+              "summary": "input differenti, hardware/toolchain incompatibili, contesti effettivi o"
+            },
+            {
+              "title": "Tentativi chiusi",
+              "level": 2,
+              "start": 169,
+              "end": 197,
+              "summary": "Per il punto 2 sono state confrontate anche KV complete e carry su 1, 2,"
+            },
+            {
+              "title": "Artefatti locali",
+              "level": 2,
+              "start": 198,
+              "end": 213,
+              "summary": "Directory sotto `performance-results/`:"
+            }
+          ]
+        },
+        {
           "path": "docs/performance/qwen36-cuda-optimization-progression.md",
           "sections": [
             {
@@ -1927,161 +1981,161 @@
               "title": "Ledger prestazionale Qwen3.6 CUDA",
               "level": 1,
               "start": 1,
-              "end": 669,
+              "end": 678,
               "summary": "Questo è il registro canonico delle ottimizzazioni Qwen3.6 27B Q4_K_S/M su"
             },
             {
               "title": "Contratto",
               "level": 2,
               "start": 8,
-              "end": 27,
-              "summary": "Ogni riga segue:"
+              "end": 36,
+              "summary": "Aggiornamento 2026-09-09: audit operativo Qwen3.8/Qwen3.6."
             },
             {
               "title": "Stato corrente",
               "level": 2,
-              "start": 28,
-              "end": 63,
+              "start": 37,
+              "end": 72,
               "summary": "`ff857ba9f2184d8be408e8cabda12c89ba5adb202fddc1a88b3774d7bb232aca`."
             },
             {
               "title": "Soluzioni mantenute",
               "level": 2,
-              "start": 64,
-              "end": 79,
+              "start": 73,
+              "end": 88,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
             },
             {
               "title": "Soluzioni scartate o non promosse",
               "level": 2,
-              "start": 80,
-              "end": 111,
+              "start": 89,
+              "end": 120,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
             },
             {
               "title": "Parity Q8_1/MMVQ sul riferimento storico, 2026-08-12",
               "level": 2,
-              "start": 112,
-              "end": 374,
+              "start": 121,
+              "end": 383,
               "summary": "Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`"
             },
             {
               "title": "FATTO DIMOSTRATO — dispatch reale",
               "level": 3,
-              "start": 114,
-              "end": 131,
+              "start": 123,
+              "end": 140,
               "summary": "Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`"
             },
             {
               "title": "FATTO DIMOSTRATO — A/B/C al greedy step 3",
               "level": 3,
-              "start": 132,
-              "end": 147,
+              "start": 141,
+              "end": 156,
               "summary": "Configurazione congelata: GGUF Q4_K_S SHA-256 `ff857ba9…232aca`, RTX 3090"
             },
             {
               "title": "FATTO DIMOSTRATO — primitive e quantizer parity",
               "level": 3,
-              "start": 148,
-              "end": 176,
+              "start": 157,
+              "end": 185,
               "summary": "Un entry point diagnostico temporaneo ha alimentato i kernel DS4 e llama.cpp"
             },
             {
               "title": "FATTO DIMOSTRATO — frozen output head e scala FP16",
               "level": 3,
-              "start": 177,
-              "end": 189,
+              "start": 186,
+              "end": 198,
               "summary": "Con lo stesso hidden pre-output-norm, il solo output head F32 riproduce"
             },
             {
               "title": "INFERENZA E DECISIONE",
               "level": 3,
-              "start": 190,
-              "end": 198,
+              "start": 199,
+              "end": 207,
               "summary": "La precisione Q8_1 può cambiare una decisione a margine basso anche quando DS4"
             },
             {
               "title": "FATTO DIMOSTRATO — sensibilità Q4/Q5/Q6",
               "level": 3,
-              "start": 199,
-              "end": 231,
+              "start": 208,
+              "end": 240,
               "summary": "Due selettori temporanei, poi rimossi, hanno separato Q4-only e Q5-only."
             },
             {
               "title": "FATTO DIMOSTRATO — precision staircase",
               "level": 3,
-              "start": 232,
-              "end": 251,
+              "start": 241,
+              "end": 260,
               "summary": "La ricostruzione offline dello stesso `output_norm` F32 e il risultato"
             },
             {
               "title": "FATTO DIMOSTRATO — Q8_1 LSQ offline e proiezione",
               "level": 3,
-              "start": 252,
-              "end": 269,
+              "start": 261,
+              "end": 278,
               "summary": "Sul vero vettore critico, un passo LSQ per blocco da 32 riduce activation MAE"
             },
             {
               "title": "FATTO DIMOSTRATO — residuo diffuso e Q8_1-R8",
               "level": 3,
-              "start": 270,
-              "end": 374,
+              "start": 279,
+              "end": 383,
               "summary": "Il simulatore offline ha decodificato direttamente le righe 310 e 728 del vero"
             },
             {
               "title": "Analisi del residuo a 8K, 2026-08-11",
               "level": 2,
-              "start": 375,
-              "end": 399,
+              "start": 384,
+              "end": 408,
               "summary": "Il conto dei soli byte di peso per operazione è: ricorrente 3,426 GB, full"
             },
             {
               "title": "Esperimenti long-context 2026-08-11",
               "level": 2,
-              "start": 400,
-              "end": 420,
+              "start": 409,
+              "end": 429,
               "summary": "Fonti recuperate: guida locale `problem-to-source.md`, FlashDecoding++,"
             },
             {
               "title": "Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12",
               "level": 2,
-              "start": 421,
-              "end": 472,
+              "start": 430,
+              "end": 481,
               "summary": "È stato ispezionato vLLM al commit fissato"
             },
             {
               "title": "Stabilizzazione R8 long-context e riuso GQA, 2026-08-12",
               "level": 2,
-              "start": 473,
-              "end": 552,
+              "start": 482,
+              "end": 561,
               "summary": "La riproduzione a 10.666 token ha separato due fenomeni che prima venivano"
             },
             {
               "title": "Curva completa 2K–30K e soglia split-K, 2026-08-13",
               "level": 2,
-              "start": 553,
-              "end": 582,
+              "start": 562,
+              "end": 591,
               "summary": "La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,"
             },
             {
               "title": "MTP long-context e crossover split-K, 2026-08-13",
               "level": 2,
-              "start": 583,
-              "end": 628,
+              "start": 592,
+              "end": 637,
               "summary": "La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per"
             },
             {
               "title": "Coda ordinata",
               "level": 2,
-              "start": 629,
-              "end": 651,
+              "start": 638,
+              "end": 660,
               "summary": "1."
             },
             {
               "title": "Template per il prossimo record",
               "level": 2,
-              "start": 652,
-              "end": 669,
+              "start": 661,
+              "end": 678,
               "summary": "ID / data / commit / dirty state:"
             }
           ]

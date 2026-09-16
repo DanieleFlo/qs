@@ -7,6 +7,15 @@ della decisione. Aggiornare questo file anche quando un esperimento fallisce.
 
 ## Contratto
 
+Aggiornamento 2026-09-09: [audit operativo Qwen3.8/Qwen3.6](qwen-inference-audit-2026-09-09.md).
+Corretto il carry MTP dei token di prefill senza logits, riprodotto su GPU.
+Tentativi 1–5 dell'audit chiusi senza promozione dei kernel; misure del beneficio
+funzionale, prove negative, checksum e gate sono nel record dedicato.
+Chiusura 2026-09-16: corretti anche il comparatore permissivo, la baseline R8
+UD incompleta e il calcolo dei costi target/NextN. Il vecchio REJECT FP16
+gate/up qui sotto non descrive il default corrente: quel ramo è attivo nel
+codice esistente e richiede ancora una riqualificazione dedicata.
+
 Ogni riga segue:
 
 ```text

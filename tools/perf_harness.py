@@ -61,8 +61,13 @@ CONTEXT_CURVE_RECOVERY_TOLERANCE_TPS = 1.5
 CONTEXT_CURVE_RECOVERY_TOLERANCE_FRACTION = 0.08
 QUANT_BYTES = {
     "F32": (4, 1), "F16": (2, 1),
+    # Block layouts from cuda/mmq/ggml-common.h, including audited UD weights.
+    "Q4_0": (18, 32), "Q3_K": (110, 256),
     "Q4_K": (144, 256), "Q5_K": (176, 256), "Q6_K": (210, 256),
     "Q8_0": (34, 32),
+    "IQ2_XS": (74, 256), "IQ2_S": (82, 256),
+    "IQ3_XXS": (98, 256), "IQ3_S": (110, 256),
+    "IQ4_NL": (18, 32), "IQ4_XS": (136, 256),
 }
 KNOWN_GPU_SPECS = {
     # Static architectural limits complement driver measurements. Keep the
@@ -208,6 +213,7 @@ def nvidia_query() -> dict[str, Any]:
         return {"available": False, "reason": "nvidia-smi not found"}
     fields = [
         "name", "driver_version", "memory.total", "memory.free", "memory.used",
+        "uuid",
         "temperature.gpu", "power.limit", "power.draw", "clocks.current.sm",
         "clocks.current.memory", "clocks.max.sm", "clocks.max.memory",
         "pstate", "compute_cap", "clocks_event_reasons.active",
@@ -377,6 +383,18 @@ def cached_sha256(path: Path, cache_root: Path) -> str:
 def git_value(*args: str) -> str | None:
     result = run_command(["git", *args], check=False)
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def inference_provenance(env: dict[str, str], *, mtp_model: str | None = None,
+                         mtp: bool = False, thinking: str | None = None,
+                         cache_root: Path = DEFAULT_RESULTS) -> dict[str, Any]:
+    return {
+        "mtp": bool(mtp or mtp_model),
+        "mtp_model_sha256": cached_sha256(Path(mtp_model), cache_root) if mtp_model else None,
+        "thinking": thinking,
+        "mtp_environment": {key: value for key, value in env.items()
+                            if key.startswith("DS4_") and "MTP" in key},
+    }
 
 
 def bench_once(binary: Path, model: Path, prompt: Path,
@@ -1154,15 +1172,31 @@ def model_cost(snapshot: dict[str, Any], *, phase: str, context: int,
     if missing:
         raise HarnessError("snapshot lacks cost metadata: " + ", ".join(missing))
     shape = {name: int(metadata[key]) for name, key in required.items()}
+    nextn_layers = int(metadata.get("qwen35.nextn_predict_layers", 0))
+    if not 0 <= nextn_layers < shape["layers"]:
+        raise HarnessError("invalid embedded NextN layer count")
+    shape["layers"] -= nextn_layers
     vocabulary = int(metadata["tokenizer.ggml.tokens"]["count"])
     full_layers = shape["layers"] // shape["full_interval"]
     recurrent_layers = shape["layers"] - full_layers
     weights = {"embedding": 0, "recurrent_attention": 0,
                "full_attention": 0, "ffn": 0, "output": 0, "other": 0}
     theoretical_f32_weight_bytes = 0
+    excluded_nextn_weight_bytes = 0
+    decode_weight_bytes_by_type: dict[str, int] = {}
     for tensor in snapshot.get("tensors", []):
+        size = tensor_storage_bytes(tensor)
+        layer = re.match(r"blk\.(\d+)\.", tensor["name"])
+        if layer and int(layer.group(1)) >= shape["layers"]:
+            if int(layer.group(1)) >= shape["layers"] + nextn_layers:
+                raise HarnessError("tensor layer exceeds the model block count")
+            excluded_nextn_weight_bytes += size
+            continue
         group = tensor_group(tensor["name"], shape["full_interval"])
-        weights[group] += tensor_storage_bytes(tensor)
+        weights[group] += size
+        if group != "embedding":
+            kind = tensor["type"]
+            decode_weight_bytes_by_type[kind] = decode_weight_bytes_by_type.get(kind, 0) + size
         theoretical_f32_weight_bytes += (
             math.prod(int(dim) for dim in tensor["shape"]) * 4
         )
@@ -1234,6 +1268,7 @@ def model_cost(snapshot: dict[str, Any], *, phase: str, context: int,
         "workload": {"context": context, "batch": batch,
                      "activation_bytes": activation_bytes},
         "model": {**shape, "vocabulary": vocabulary,
+                  "embedded_nextn_layers": nextn_layers,
                   "full_attention_layers": full_layers,
                   "recurrent_layers": recurrent_layers},
         "hardware_assumption": {
@@ -1243,6 +1278,8 @@ def model_cost(snapshot: dict[str, Any], *, phase: str, context: int,
         "weight_bytes_by_operation": weights,
         "theoretical_f32_weight_bytes": theoretical_f32_weight_bytes,
         "effective_quantized_weight_bytes": sum(weights.values()),
+        "excluded_nextn_weight_bytes": excluded_nextn_weight_bytes,
+        "decode_weight_bytes_by_type": decode_weight_bytes_by_type,
         "state": {"full_attention_kv_bytes": kv_bytes,
                   "gdn_recurrent_state_bytes": recurrent_state_bytes,
                   "gdn_conv_state_bytes": conv_state_bytes},
@@ -1603,6 +1640,7 @@ def benchmark_model(args: argparse.Namespace) -> int:
             "model": str(model.resolve()),
             "model_sha256": cached_sha256(model, Path(args.results)),
             "prompt": str(prompt.resolve()), "prompt_sha256": sha256(prompt),
+            "inference": inference_provenance(env),
             "environment_overrides": dict(item.split("=", 1) for item in args.env),
         },
         "hardware": hardware_profile(), "workloads": results,
@@ -2431,6 +2469,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
         "hypothesis": args.hypothesis, "target_metric": "gen_steady_tps",
         "suite": args.suite, "runtime": "ds4-server",
         "repetitions": args.repetitions,
+        "warmup": False,  # Calibration requests are not per-workload warmup.
         "baseline": {
             "kind": "self" if args.baseline_run else "experiment",
             "path": None if args.baseline_run else str(Path(args.baseline).resolve()),
@@ -2444,6 +2483,12 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
             "environment_overrides": dict(item.split("=", 1) for item in args.env),
             "server_home_policy": "isolated-temporary",
             "command": command, "prompt_filler_token_intercept": intercept,
+            "workloads_sha256": hashlib.sha256(json.dumps(
+                {"workloads": workloads, "prompt_pattern": args.prompt_pattern},
+                sort_keys=True).encode()).hexdigest(),
+            "inference": inference_provenance(
+                env, mtp_model=args.mtp_model, mtp=args.mtp, thinking=args.thinking,
+                cache_root=Path(args.results)),
         },
         "hardware": hardware_profile(), "workloads": results,
         "context_curve": analyze_context_curve(results),
@@ -2792,6 +2837,8 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
             "model_sha256": cached_sha256(model, Path(args.results)),
             "workloads": str(workload_path.resolve()),
             "workloads_sha256": sha256(workload_path),
+            "inference": inference_provenance(
+                env, mtp_model=args.mtp_model, cache_root=Path(args.results)),
             "environment_overrides": {
                 **dict(item.split("=", 1) for item in args.env),
                 "DS4_SERVER_PHASE_PROFILE": "1",
@@ -2848,8 +2895,105 @@ def metric_median(workload: dict[str, Any], name: str) -> float | None:
     return float(value) if value is not None else None
 
 
+def measurement_compatibility_issues(baseline: dict[str, Any],
+                                     candidate: dict[str, Any]) -> list[str]:
+    """Fail closed for promotion; still return descriptive timing deltas."""
+    issues = []
+
+    def same_required(label: str, left: Any, right: Any) -> None:
+        if left is None or right is None or left == "" or right == "" or left != right:
+            issues.append(f"missing or incompatible {label}")
+
+    for key in ("schema_version", "suite", "target_metric"):
+        same_required(key, baseline.get(key), candidate.get(key))
+    runtime = baseline.get("runtime", "ds4-bench")
+    same_required("runtime", runtime, candidate.get("runtime", "ds4-bench"))
+    bp, cp = baseline.get("provenance", {}), candidate.get("provenance", {})
+    same_required("model_sha256", bp.get("model_sha256"), cp.get("model_sha256"))
+    input_key = "prompt_sha256" if runtime == "ds4-bench" else "workloads_sha256"
+    same_required(input_key, bp.get(input_key), cp.get(input_key))
+    same_required("inference configuration", bp.get("inference"), cp.get("inference"))
+    for name, provenance in (("baseline", bp), ("candidate", cp)):
+        if not provenance.get("binary_sha256"):
+            issues.append(f"{name} lacks binary_sha256")
+        inference = provenance.get("inference", {})
+        if inference.get("mtp") and not inference.get("mtp_model_sha256"):
+            issues.append(f"{name} MTP sidecar identity is not verified")
+    # Different code is intentional, but an unknown build configuration is not
+    # evidence of a comparable build. Same-binary diagnostic A/B needs no stamp.
+    if bp.get("binary_sha256") != cp.get("binary_sha256"):
+        for key in ("compiler", "cuda_arch", "cflags", "nvccflags"):
+            same_required(f"build.{key}", bp.get("build", {}).get(key),
+                          cp.get("build", {}).get(key))
+    bh, ch = baseline.get("hardware", {}), candidate.get("hardware", {})
+    for key in ("system", "release", "machine"):
+        same_required(f"host.{key}", bh.get("host", {}).get(key), ch.get("host", {}).get(key))
+    device_keys = ("index", "uuid", "name", "driver_version", "memory.total", "compute_cap", "power.limit")
+    devices = []
+    for name, hardware in (("baseline", bh), ("candidate", ch)):
+        rows = hardware.get("gpu", {}).get("devices", [])
+        if not rows or any(row.get(key) is None for row in rows for key in device_keys):
+            issues.append(f"{name} lacks GPU identity/configuration")
+        devices.append([{key: row.get(key) for key in device_keys} for row in rows])
+    same_required("GPU identity/configuration", *devices)
+    same_required("CUDA compiler", bh.get("tools", {}).get("nvcc", {}).get("version_output"),
+                  ch.get("tools", {}).get("nvcc", {}).get("version_output"))
+
+    by_id = []
+    target = candidate.get("target_metric")
+    context_keys = ("ctx_tokens", "actual_ctx_tokens", "prompt_tokens", "prefill_tokens",
+                    "gen_tokens", "gen_steady_tokens", "completion_tokens")
+    for label, record in (("baseline", baseline), ("candidate", candidate)):
+        if record.get("schema_version") != SCHEMA_VERSION:
+            issues.append(f"{label} has unsupported schema_version")
+        if record.get("correctness", {}).get("status") not in {"BASELINE", "PASS"}:
+            issues.append(f"{label} has no valid correctness reference")
+        if record.get("repetitions", 0) < 5:
+            issues.append(f"{label} requires at least five repetitions")
+        if not (record.get("warmup") is True or record.get("warmup_requests", 0) >= 1):
+            issues.append(f"{label} requires explicit warmup")
+        workloads = record.get("workloads", [])
+        indexed = {row["id"]: row for row in workloads}
+        if len(indexed) != len(workloads):
+            issues.append(f"{label} has duplicate workload IDs")
+        by_id.append(indexed)
+        for item in workloads:
+            if item.get("status") != "measured":
+                continue
+            definition = item.get("definition", {})
+            if runtime == "ds4-bench" and any(
+                    key not in definition for key in
+                    ("phase", "batch", "context", "generation_tokens", "backend")):
+                issues.append(f"{label}/{item['id']} has an incomplete workload definition")
+            metric = item.get("metrics", {}).get(target, {})
+            raw = item.get("raw_rows", [])
+            cv = metric.get("coefficient_of_variation")
+            if (metric.get("samples", 0) < 5 or len(raw) < 5 or cv is None or
+                    not math.isfinite(cv) or cv > .05 or metric.get("unstable")):
+                issues.append(f"{label}/{item['id']} has insufficient or unstable samples")
+            if not raw or any(not any(key in row for key in context_keys[:3]) or
+                              not any(key in row for key in context_keys[4:]) for row in raw):
+                issues.append(f"{label}/{item['id']} lacks observed context/generation")
+            if any(not isinstance(row.get(target), (int, float)) or
+                   not math.isfinite(row[target]) or row[target] < 0 for row in raw):
+                issues.append(f"{label}/{item['id']} has invalid raw target measurements")
+    left, right = by_id
+    if left.keys() != right.keys():
+        issues.append("workload sets differ")
+    for key in left.keys() & right.keys():
+        same_required(f"{key} definition", left[key].get("definition"), right[key].get("definition"))
+        same_required(f"{key} status", left[key].get("status"), right[key].get("status"))
+        observed = []
+        for item in (left[key], right[key]):
+            observed.append({tuple(row.get(field) for field in context_keys)
+                             for row in item.get("raw_rows", [])})
+        same_required(f"{key} observed context/generation", *observed)
+    return issues
+
+
 def compare_records(baseline: dict[str, Any],
                     candidate: dict[str, Any]) -> dict[str, Any]:
+    comparison_issues = measurement_compatibility_issues(baseline, candidate)
     base_by_id = {item["id"]: item for item in baseline["workloads"]}
     rows = []
     for current in candidate["workloads"]:
@@ -2911,6 +3055,9 @@ def compare_records(baseline: dict[str, Any],
     if correctness == "FAIL":
         verdict = "REJECT_CANDIDATE"
         reason = "candidate failed a correctness gate"
+    elif comparison_issues:
+        verdict = "NEED_MORE_DATA"
+        reason = "measurement contract is incomplete or incompatible; see comparison_issues"
     elif correctness != "PASS":
         verdict = "NEED_MORE_DATA"
         reason = "performance comparison has no passing correctness report"
@@ -2941,6 +3088,7 @@ def compare_records(baseline: dict[str, Any],
         "candidate": candidate["experiment_id"], "target_metric": target,
         "mean_target_improvement_percent": weighted_improvement,
         "dominant_regressions": dominant_regressions,
+        "comparison_issues": comparison_issues,
         "verdict": verdict, "reason": reason, "workloads": rows,
     }
 

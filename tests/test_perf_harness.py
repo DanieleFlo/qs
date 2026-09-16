@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import array
+import copy
 import json
 import os
 import tempfile
@@ -591,6 +592,7 @@ class PerfHarnessTests(unittest.TestCase):
         script = (ROOT / "tools" / "perf-qwen-r8.sh").read_text(encoding="utf-8")
         self.assertIn("ds4 ds4-bench ds4-server", script)
         self.assertIn("DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1", script)
+        self.assertIn("DS4_CUDA_QWEN38_NO_DECODE_Q8_1_R8=1", script)
 
     def test_binary_freshness_reports_a_newer_build_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -635,7 +637,101 @@ class PerfHarnessTests(unittest.TestCase):
         metrics = result["workloads"][0]["metrics"]
         self.assertAlmostEqual(metrics["gen_steady_tps"]["improvement_percent"], 10.0)
         self.assertAlmostEqual(metrics["gen_first_ms"]["improvement_percent"], 10.0)
+        self.assertEqual(result["verdict"], "NEED_MORE_DATA")
+
+    @staticmethod
+    def comparison_record(name: str, speed: float) -> dict:
+        return {
+            "schema_version": 1, "experiment_id": name, "suite": "slow",
+            "target_metric": "gen_steady_tps", "repetitions": 5, "warmup": True,
+            "correctness": {"status": "PASS"},
+            "provenance": {"model_sha256": "a" * 64, "prompt_sha256": "b" * 64,
+                           "binary_sha256": "c" * 64,
+                           "inference": HARNESS.inference_provenance({})},
+            "hardware": {
+                "host": {"system": "Linux", "release": "6.6", "machine": "x86_64"},
+                "gpu": {"devices": [{"index": 0, "uuid": "GPU-one", "name": "RTX 3090",
+                    "driver_version": "610.62", "memory.total": 24576,
+                    "compute_cap": "8.6", "power.limit": 350}]},
+                "tools": {"nvcc": {"version_output": "CUDA 12.4.131"}},
+            },
+            "workloads": [{
+                "id": "decode", "status": "measured",
+                "definition": {"context": 2048, "generation_tokens": 64, "batch": 1,
+                               "phase": "decode", "backend": "cuda"},
+                "metrics": {"gen_steady_tps": HARNESS.summary([speed] * 5)},
+                "raw_rows": [{"ctx_tokens": 2048, "gen_tokens": 64,
+                              "gen_steady_tps": speed} for _ in range(5)],
+            }],
+        }
+
+    def test_comparison_requires_compatible_confirmed_measurements(self) -> None:
+        baseline = self.comparison_record("base", 10)
+        candidate = self.comparison_record("candidate", 11)
+        result = HARNESS.compare_records(baseline, candidate)
         self.assertEqual(result["verdict"], "KEEP_CANDIDATE")
+        self.assertEqual(result["comparison_issues"], [])
+        changes = [
+            (("provenance", "model_sha256"), "d" * 64),
+            (("provenance", "prompt_sha256"), "d" * 64),
+            (("provenance", "binary_sha256"), "d" * 64),
+            (("provenance", "inference", "mtp"), True),
+            (("hardware", "host", "machine"), "aarch64"),
+            (("hardware", "gpu", "devices", 0, "uuid"), "GPU-two"),
+            (("hardware", "tools", "nvcc", "version_output"), "CUDA 13"),
+            (("workloads", 0, "definition", "context"), 4096),
+            (("workloads", 0, "definition"), {}),
+            (("workloads", 0, "raw_rows", 0, "ctx_tokens"), 4096),
+            (("workloads", 0, "raw_rows", 0, "gen_tokens"), 32),
+            (("workloads", 0, "raw_rows", 0, "gen_steady_tps"), float("nan")),
+            (("workloads", 0, "metrics", "gen_steady_tps", "samples"), 2),
+            (("workloads", 0, "metrics", "gen_steady_tps", "coefficient_of_variation"), .2),
+            (("workloads", 0, "raw_rows"), candidate["workloads"][0]["raw_rows"][:2]),
+            (("workloads", 0, "raw_rows"), [{"ctx_tokens": 2048, "gen_steady_tps": 11}] * 5),
+            (("warmup",), False), (("repetitions",), 2), (("suite",), "direction"),
+        ]
+        for path, value in changes:
+            for side in ("baseline", "candidate"):
+                with self.subTest(path=path, side=side):
+                    left, right = copy.deepcopy(baseline), copy.deepcopy(candidate)
+                    node = left if side == "baseline" else right
+                    for key in path[:-1]:
+                        node = node[key]
+                    node[path[-1]] = value
+                    result = HARNESS.compare_records(left, right)
+                    self.assertEqual(result["verdict"], "NEED_MORE_DATA")
+                    self.assertTrue(result["comparison_issues"])
+
+    def test_comparison_rejects_missing_or_duplicate_workloads(self) -> None:
+        baseline = self.comparison_record("base", 10)
+        candidate = self.comparison_record("candidate", 11)
+        baseline["workloads"].append(copy.deepcopy(baseline["workloads"][0]))
+        self.assertEqual(HARNESS.compare_records(baseline, candidate)["verdict"], "NEED_MORE_DATA")
+        baseline["workloads"][1]["id"] = "missing"
+        self.assertEqual(HARNESS.compare_records(baseline, candidate)["verdict"], "NEED_MORE_DATA")
+
+    def test_comparison_requires_build_metadata_for_different_binaries(self) -> None:
+        baseline = self.comparison_record("base", 10)
+        candidate = self.comparison_record("candidate", 11)
+        candidate["provenance"]["binary_sha256"] = "d" * 64
+        build = {"compiler": "gcc 13", "cuda_arch": "sm_86",
+                 "cflags": "-O3", "nvccflags": "-O3 --use_fast_math"}
+        baseline["provenance"]["build"] = build.copy()
+        candidate["provenance"]["build"] = build.copy()
+        self.assertEqual(HARNESS.compare_records(baseline, candidate)["verdict"], "KEEP_CANDIDATE")
+        candidate["provenance"]["build"]["cuda_arch"] = "sm_80"
+        self.assertEqual(HARNESS.compare_records(baseline, candidate)["verdict"], "NEED_MORE_DATA")
+
+    def test_inference_identity_records_inherited_mtp_flags_and_sidecar_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mtp.gguf"
+            path.write_bytes(b"sidecar")
+            identity = HARNESS.inference_provenance(
+                {"DS4_MTP_DRAFT_TOKENS": "2", "UNRELATED": "value"},
+                mtp_model=str(path), cache_root=Path(directory))
+            self.assertTrue(identity["mtp"])
+            self.assertEqual(identity["mtp_model_sha256"], HARNESS.sha256(path))
+            self.assertEqual(identity["mtp_environment"], {"DS4_MTP_DRAFT_TOKENS": "2"})
 
     def test_json_subset_workload_file_needs_no_yaml_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -824,6 +920,30 @@ class PerfHarnessTests(unittest.TestCase):
     def test_missing_json_is_reported_as_harness_error(self) -> None:
         with self.assertRaises(HARNESS.HarnessError):
             HARNESS.read_json(Path("definitely-missing.json"), "baseline")
+
+    def test_qwen38_cost_supports_ud_and_excludes_embedded_nextn(self) -> None:
+        snapshot = HARNESS.read_json(
+            ROOT / "gguf-tools/quality-testing/data/qwen38-metadata/target.json", "snapshot")
+        cost = HARNESS.model_cost(snapshot, phase="decode", context=2048, batch=1)
+        self.assertEqual(cost["model"]["layers"], 64)
+        self.assertEqual(cost["model"]["recurrent_layers"], 48)
+        self.assertEqual(cost["model"]["full_attention_layers"], 16)
+        self.assertEqual(cost["model"]["embedded_nextn_layers"], 1)
+        target = [tensor for tensor in snapshot["tensors"]
+                  if not tensor["name"].startswith("blk.64.")]
+        snapshot["tensors"] = target
+        snapshot["metadata"]["qwen35.block_count"] = 64
+        snapshot["metadata"].pop("qwen35.nextn_predict_layers")
+        reference = HARNESS.model_cost(snapshot, phase="decode", context=2048, batch=1)
+        for key in ("operations", "state", "weight_bytes_by_operation", "decode_weight_bytes_by_type"):
+            self.assertEqual(cost[key], reference[key])
+        self.assertGreater(cost["excluded_nextn_weight_bytes"], 0)
+        self.assertEqual(reference["excluded_nextn_weight_bytes"], 0)
+        expected_block_sizes = {"IQ2_XS": 74, "IQ2_S": 82, "IQ3_XXS": 98,
+                                "IQ3_S": 110, "IQ4_XS": 136, "Q3_K": 110}
+        for kind, size in expected_block_sizes.items():
+            self.assertEqual(HARNESS.tensor_storage_bytes({"type": kind, "shape": [256, 2]}), 2 * size)
+        self.assertEqual(HARNESS.tensor_storage_bytes({"type": "IQ4_NL", "shape": [32, 2]}), 36)
 
     def test_observed_cost_requires_the_requested_phase(self) -> None:
         cost = {"phase": "prefill", "workload": {"context": 8}, "operations": {}}

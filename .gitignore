@@ -35,6 +35,7 @@
 /tests/agent-ssd-live-kv/
 /tests/agent-ssd-live-server.pid
 /tests/test_agentic_checkpoint
+/tests/qwen_mtp_catchup_probe
 *.o
 *.dSYM/
 __pycache__/

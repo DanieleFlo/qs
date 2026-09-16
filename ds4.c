@@ -52403,7 +52403,9 @@ static bool qwen_graph_forward_token_mode(
     }
     const double prof_output_t0 =
         profile ? now_sec() : 0.0;
-    if (ok && emit_logits) ok = ds4_gpu_rms_norm_weight_tensor(
+    /* Catch-up needs target_h[p] even when an intermediate prefill token does
+     * not need logits. Otherwise the next MTP step receives stale scratch. */
+    if (ok && (emit_logits || g->mtp_ready)) ok = ds4_gpu_rms_norm_weight_tensor(
         g->output_norm, g->cur, model->map, model->size,
         weights->output_norm->abs_offset, DS4_N_EMBD, DS4_RMS_EPS) != 0;
     if (ok && emit_logits) qwen_trace_tensor(

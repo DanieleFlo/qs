@@ -64,7 +64,8 @@ run_pair() {
         --model "$model" --prompt "$prompt" \
         --hypothesis "freeze the exact F32 rollback baseline" \
         --metric gen_steady_tps --baseline-run --results "$results" \
-        --env DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1
+        --env DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8=1 \
+        --env DS4_CUDA_QWEN38_NO_DECODE_Q8_1_R8=1
     $harness run \
         --id "$experiment_id-r8" --suite "$suite" \
         --repetitions "$repetitions" --warmup "$warmup" \

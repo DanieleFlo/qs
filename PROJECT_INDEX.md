@@ -163,6 +163,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/performance/qwen36-performance-ledger.md` — registro canonico e compatto delle
   ottimizzazioni Qwen CUDA mantenute, scartate o ancora da confermare; unifica
   le decisioni disperse nei documenti datati e conserva il ciclo sperimentale.
+- `docs/performance/qwen-inference-audit-2026-09-09.md` — verifica GPU dei primi
+  cinque interventi dell'audit, motivi di rigetto e correzione mantenuta del
+  carry MTP nei token di prefill senza logits, con misure e regressioni.
 - `docs/research/cuda/` — componente della knowledge base dedicato a toolchain,
   profiling, SASS/resource usage, primitive Ampere `sm_86` e mappa delle
   prossime ipotesi CUDA falsificabili per DS4.
@@ -242,6 +245,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   ricerca del crossover split-K e della profondità V(3)/V(2). `server-curve`
   esegue queste matrici via HTTP usando i token effettivi e il tempo di decode
   del server.
+  Il comparatore richiede campioni, warm-up e identità compatibili prima di
+  promuovere; il calcolo statico dei costi supporta UD e separa NextN dal target.
 - `tools/import_jsonschemabench_subset.py` e
   `performance/jsonschemabench-subset.json` — sparse-fetch riproducibile e
   pinned dell'intero corpus esterno, classificazione fail-closed delle 9.558
@@ -560,6 +565,10 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/qwen_numerics_probe.c` — oracle CPU indipendente per GDN, full
   attention Qwen e matvec Q4_K/Q5_K/Q6_K contro i kernel CUDA DS4, incluse le
   politiche Q8_1 e Q8_1-R8; eseguibile con `make qwen-numerics CUDA_ARCH=sm_86`.
+- `tests/qwen_mtp_catchup_probe.c` — regressione CUDA con modello reale per
+  hidden e coppia token/hidden della cache MTP, senza tracing né output head
+  sui token intermedi; verifica anche il passaggio dal prefill a chunk ai
+  token successivi. Accetta target GGUF e sidecar MTP come argomenti.
 - `cuda/mmq/test/test_mmq_parity.cu` — parita' sintetica CPU/CUDA delle primitive
   dense, MoE, pair e vector MMQ; eseguibile con
   `make test-mmq-parity CUDA_ARCH=sm_86`.

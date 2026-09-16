@@ -421,6 +421,26 @@ tempo atteso.
       performance-results/baseline/experiment.json \
       performance-results/candidate/experiment.json
 
+`compare` lascia il verdetto a `NEED_MORE_DATA` senza warm-up, cinque campioni
+effettivi e provenienza compatibile: modello/input, GPU/driver, toolchain,
+workload e contesto misurato, configurazione MTP e hash del sidecar. I record
+storici incompleti restano leggibili per le differenze descrittive. Per due
+binari diversi serve anche `provenance.build` verificato su entrambi i record,
+con gli stessi `compiler`, `cuda_arch`, `cflags` e `nvccflags`; l'harness non
+deduce i flag dalla versione di nvcc. Senza queste informazioni non promuove
+automaticamente una nuova build. La calibrazione del server non conta come
+warm-up del workload. Le suite direction/quick restano esplorative.
+
+La baseline F32 diagnostica dello script R8 disabilita sia
+`DS4_CUDA_QWEN_NO_DECODE_Q8_1_R8` sia
+`DS4_CUDA_QWEN38_NO_DECODE_Q8_1_R8`. Per valutare nuove ottimizzazioni la
+baseline resta invece il default corrente di produzione.
+
+`model-cost` supporta i tipi UD del target Qwen3.8 censito e sottrae i layer
+NextN incorporati dal target. Riporta separatamente i byte NextN esclusi e
+i pesi per tipo del decode, senza embedding; sono conteggi statici del payload,
+non misure di traffico DRAM.
+
 `doctor` controlla anche la freschezza di `ds4`, `ds4-bench` e `ds4-server`: se uno dei
 binari è più vecchio dei sorgenti o degli oggetti da cui dipende, espone gli
 input più recenti in `runtime_binaries.*.newer_inputs` e non dichiara pronto il
