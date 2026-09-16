@@ -36,6 +36,9 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto D, Qwen3.8: due stream: alpha/beta decode +2,05% / −0,045%
+  a 128/2048 nello screening; Q contro K/V sotto soglia al profilo. REJECT.
+
 - Audit punto C, Qwen3.8: enqueue/wait: pilota del punto 2 sotto il 3% TTFT;
   REJECT, nessuna sostituzione globale delle sincronizzazioni.
 

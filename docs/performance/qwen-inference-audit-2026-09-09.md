@@ -406,3 +406,35 @@ sincronizzazioni. Il controllo degli errori asincroni e i confini di attesa
 di produzione restano quelli già validati. La correzione del carry è
 mantenuta separatamente e non viene contata come vantaggio dell'accodamento.
 Fonte: confini di comando DS4 e riferimento MTP llama.cpp del punto 2.
+
+## Punto D — due stream per le proiezioni
+
+**REJECT nello screening.** Prima misurato il costo eliminabile delle due
+configurazioni, con il profiler delle singole proiezioni a 2K:
+
+| Regione da sovrapporre | Prefill | Decode |
+|---|---|---|
+| alpha + beta | 30,91 / 3798,29 ms (0,814%) | 23,13 / 653,60 ms (3,54%) |
+| K + V | 55,91 / 3798,29 ms (1,472%) | 7,55 / 653,60 ms (1,155%) |
+
+Q contro K/V e alpha/beta del prefill non possono raggiungere il 3% anche
+eliminando interamente quei tempi. Implementato quindi solo il pilota
+alpha/beta del decode: secondo stream non bloccante, 5760 byte dedicati per
+packing Q8 e scale, output distinti già presenti nel graph, evento dopo la norm
+produttrice e attesa prima di GDN.
+QKV e Z restano sullo stream principale; layer/stato ricorrente sono seriali.
+Il secondo stream usa soltanto kernel con stream esplicito, senza handle
+cuBLAS condivisi né riuso dello scratch temporaneo globale.
+
+Con dequantizzazione cooperativa già attiva, warm-up e due coppie bilanciate
+direction, i logits del prompt e tutti i logits di 128 token sono bit-exact.
+Riduzione mediana decode: 2,05% a contesto 128 e −0,045% a 2048; la seconda
+forma non guadagna e nessuna mediana supera il 3%. Il prefill, non oggetto
+del prototipo, varia di −1,30% / −2,38% in questo screening.
+Due coppie non promuovono una candidate: stop, senza suite slow né nuovi
+stream nel runtime. Overlap nella timeline, MTP/restore/cancellazione del
+prototipo restano NOT_VERIFIED e non sono presentati come PASS.
+
+Fonti: dipendenze di `qwen_graph_recurrent_attention_rows`, proiezioni CUDA
+Q8_0 esistenti e contratto degli eventi producer/consumer. Artefatti:
+`audit-remaining-20260916/projections*`, `prepare-streams.py`, `streams*`.
