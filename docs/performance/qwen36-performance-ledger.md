@@ -36,6 +36,10 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto 9, Qwen3.8: residuo/RMSNorm a 256 thread bit-exact; il
+  risparmio stimato dei due siti resta sotto il 2% end-to-end richiesto.
+  REJECT dopo microbenchmark e profilo, senza nuovi kernel in produzione.
+
 - Audit punto 8, Qwen3.8: attention prefill online F32 con tile 64/128
   scartata al gate bit-exact rispetto a GEMM; max abs 0,0000516125.
   Nessuna tolleranza modificata e nessuna variante attivata.

@@ -304,3 +304,25 @@ a tile sia impossibile; queste due implementazioni non sono ammissibili.
 Fonti consultate: scheda llama.cpp/fattn e kernel online già presente in DS4;
 nessun port di un'implementazione con KV half. Artefatti locali:
 `audit-remaining-20260916/attention.cu`, `attention.jsonl`, `attention.log`.
+
+## Punto 9 — residuo e RMSNorm
+
+**REJECT al controllo del beneficio recuperabile**, soglia 2% invariata.
+Prototipo a 256 thread con somma F32 esplicita e lo stesso albero di riduzione
+della RMSNorm originale. Residuo e norm passano bit-exact per 1/2/3/128/512
+righe da 5120 elementi, incluse cancellazioni di valori grandi e pesi negativi.
+La fonte concreta è il kernel GLM locale, adattato alla riduzione Qwen senza
+importare la configurazione GLM a 1024 thread.
+
+Cinque coppie di microbenchmark dopo warm-up: su una riga la mediana passa
+da 16,23 µs (somma + norm) a 10,69 µs, circa 5,53 µs recuperati. Ripetuto
+nei 64 layer, il primo sito può risparmiare circa 0,35 ms/token; aggiungere
+il secondo sito del layer successivo porta la stima a circa 0,70 ms/token.
+Rispetto ai 38–41 ms/token misurati, entrambe le stime restano sotto il 2%.
+Il profilo a 2K attribuisce a tutte le somme residue circa 10,27 ms su
+660,51 ms per 16 token (1,55%); a 28K sono 14,96 su 971,78 ms (1,54%).
+
+Queste sono stime diagnostiche e microbenchmark, non speedup end-to-end.
+Non è stato introdotto un nuovo dispatch né completato un gate modello per
+una candidate sotto soglia. Artefatti: `audit-remaining-20260916/residual.cu`,
+`residual.jsonl` e `profile-{2048,28672}.*`.
