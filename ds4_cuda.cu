@@ -30720,6 +30720,52 @@ __global__ static void qwen38_ud_matvec_kernel(
     if (threadIdx.x == 0u) out[tok * out_dim + row] = partial[0];
 }
 
+/* One warp decodes one IQ4_XS block. The two nibbles of each byte belong
+ * to the same scale group, at offsets 0 and 16; preserve the scalar
+ * decoder's two FP32 multiplications before the optional final half cast.
+ * Vector loads help large F16 gate/up matrices; scalar loads coalesce the
+ * smaller matrices and F32 stores better on sm_86. */
+template<typename T, bool VECTOR>
+__global__ static void qwen38_iq4_xs_dequant_kernel(
+        T *out, const cuda_block_iq4_xs *weights, uint64_t blocks) {
+    const uint64_t block = ((uint64_t)blockIdx.x * blockDim.x + threadIdx.x) / 32u;
+    const uint32_t lane = threadIdx.x % 32u;
+    if (block >= blocks) return;
+    const cuda_block_iq4_xs *w = weights + block;
+    const float d = dev_f16_to_f32(w->d);
+    const uint32_t high = w->scales_h;
+    if (!VECTOR) {
+#pragma unroll
+        for (uint32_t j = 0; j < 4u; j++) {
+            const uint32_t group = 2u * j + lane / 16u;
+            const uint32_t packed = w->qs[32u * j + lane];
+            const uint32_t low = w->scales_l[j];
+            const uint32_t scale_bits = ((low >> (4u * (group % 2u))) & 15u) |
+                                        (((high >> (2u * group)) & 3u) << 4u);
+            const float scale = d * (float)((int)scale_bits - 32);
+            const uint64_t index = block * 256u + 32u * group + lane % 16u;
+            out[index] = (T)(scale * (float)cuda_kvalues_iq4nl[packed & 15u]);
+            out[index + 16u] = (T)(scale * (float)cuda_kvalues_iq4nl[packed >> 4u]);
+        }
+    } else {
+        /* GGUF tensor alignment, the 136-byte block stride and the 8-byte
+         * header all preserve the alignment required by this word load. */
+        const uint32_t packed = ((const uint32_t *)w->qs)[lane];
+        const uint32_t group = lane / 4u;
+        const uint32_t low = w->scales_l[group / 2u];
+        const uint32_t scale_bits = ((low >> (4u * (group % 2u))) & 15u) |
+                                    (((high >> (2u * group)) & 3u) << 4u);
+        const float scale = d * (float)((int)scale_bits - 32);
+#pragma unroll
+        for (uint32_t j = 0; j < 4u; j++) {
+            const uint32_t code = (packed >> (8u * j)) & 255u;
+            const uint64_t index = block * 256u + 32u * group + (lane % 4u) * 4u + j;
+            out[index] = (T)(scale * (float)cuda_kvalues_iq4nl[code & 15u]);
+            out[index + 16u] = (T)(scale * (float)cuda_kvalues_iq4nl[code >> 4u]);
+        }
+    }
+}
+
 __global__ static void qwen38_ud_dequant_f32_kernel(
         float *out,
         const unsigned char *w,
@@ -30827,7 +30873,22 @@ static int qwen38_ud_matmul(
             (__half *)((unsigned char *)tmp + xh_offset) : NULL;
         const uint64_t grid = (weight_elems + 255u) / 256u;
         if (grid > UINT32_MAX) return 0;
-        if (f16_gemm) {
+        const bool cooperative_iq4 = weight_type == 23u &&
+            getenv("DS4_CUDA_QWEN_NO_COOPERATIVE_DEQUANT") == NULL;
+        if (cooperative_iq4) {
+            const uint64_t blocks = weight_elems / CUDA_QK_K;
+            const uint32_t cooperative_grid = (uint32_t)((blocks + 7u) / 8u);
+            if (!f16_gemm) {
+                qwen38_iq4_xs_dequant_kernel<float, false><<<cooperative_grid, 256>>>(
+                    wf, (const cuda_block_iq4_xs *)w, blocks);
+            } else if (weight_elems >= 5120ull * 17408u) {
+                qwen38_iq4_xs_dequant_kernel<__half, true><<<cooperative_grid, 256>>>(
+                    wh, (const cuda_block_iq4_xs *)w, blocks);
+            } else {
+                qwen38_iq4_xs_dequant_kernel<__half, false><<<cooperative_grid, 256>>>(
+                    wh, (const cuda_block_iq4_xs *)w, blocks);
+            }
+        } else if (f16_gemm) {
             qwen38_ud_dequant_f16_kernel<<<(uint32_t)grid, 256>>>(
                 wh, w, weight_type, weight_elems);
         } else {

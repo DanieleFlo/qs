@@ -1104,50 +1104,85 @@
               "title": "Primo intervento utile dall'audit dell'inferenza",
               "level": 1,
               "start": 1,
-              "end": 213,
+              "end": 368,
               "summary": "La modifica mantenuta corregge il carry MTP nel prefill token per token:"
             },
             {
               "title": "Risultato e perimetro",
               "level": 2,
               "start": 3,
-              "end": 30,
+              "end": 32,
               "summary": "La modifica mantenuta corregge il carry MTP nel prefill token per token:"
             },
             {
               "title": "Riproduzione e correttezza",
               "level": 2,
-              "start": 31,
-              "end": 73,
+              "start": 33,
+              "end": 75,
               "summary": "`tests/qwen_mtp_catchup_probe.c` controlla senza tracing:"
             },
             {
               "title": "Misure del carry",
               "level": 2,
-              "start": 74,
-              "end": 143,
+              "start": 76,
+              "end": 145,
               "summary": "Screening CLI, greedy, `--nothink`, 128 token, contesto allocato 2048,"
             },
             {
               "title": "Bug degli strumenti corretti",
               "level": 2,
-              "start": 144,
-              "end": 168,
+              "start": 146,
+              "end": 170,
               "summary": "input differenti, hardware/toolchain incompatibili, contesti effettivi o"
             },
             {
               "title": "Tentativi chiusi",
               "level": 2,
-              "start": 169,
-              "end": 197,
+              "start": 171,
+              "end": 199,
               "summary": "Per il punto 2 sono state confrontate anche KV complete e carry su 1, 2,"
             },
             {
               "title": "Artefatti locali",
               "level": 2,
-              "start": 198,
-              "end": 213,
+              "start": 200,
+              "end": 216,
               "summary": "Directory sotto `performance-results/`:"
+            },
+            {
+              "title": "Punto 6 — input R8 condiviso e fusione selettiva (16 settembre)",
+              "level": 2,
+              "start": 217,
+              "end": 249,
+              "summary": "**REJECT per Qwen3.8: guadagno end-to-end sotto il 3%.** Provati separatamente"
+            },
+            {
+              "title": "Punto 7 — dequantizzazione cooperativa IQ4_XS",
+              "level": 2,
+              "start": 250,
+              "end": 302,
+              "summary": "**KEEP e default su richiesta dell'utente**, che accetta per questo punto"
+            },
+            {
+              "title": "Punto 8 — attention prefill a tile senza score globali",
+              "level": 2,
+              "start": 303,
+              "end": 326,
+              "summary": "**REJECT numerico.** Prototipo di fattibilità F32, una query per CTA e tile"
+            },
+            {
+              "title": "Punto 9 — residuo e RMSNorm",
+              "level": 2,
+              "start": 327,
+              "end": 348,
+              "summary": "**REJECT al controllo del beneficio recuperabile**, soglia 2% invariata."
+            },
+            {
+              "title": "Punto 10 — convoluzione causale parallela nel tempo",
+              "level": 2,
+              "start": 349,
+              "end": 368,
+              "summary": "**REJECT prima dell'implementazione**, applicando il limite superiore"
             }
           ]
         },
@@ -1981,7 +2016,7 @@
               "title": "Ledger prestazionale Qwen3.6 CUDA",
               "level": 1,
               "start": 1,
-              "end": 678,
+              "end": 702,
               "summary": "Questo è il registro canonico delle ottimizzazioni Qwen3.6 27B Q4_K_S/M su"
             },
             {
@@ -1995,147 +2030,147 @@
               "title": "Stato corrente",
               "level": 2,
               "start": 37,
-              "end": 72,
-              "summary": "`ff857ba9f2184d8be408e8cabda12c89ba5adb202fddc1a88b3774d7bb232aca`."
+              "end": 96,
+              "summary": "totale a 2K / 28K."
             },
             {
               "title": "Soluzioni mantenute",
               "level": 2,
-              "start": 73,
-              "end": 88,
+              "start": 97,
+              "end": 112,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
             },
             {
               "title": "Soluzioni scartate o non promosse",
               "level": 2,
-              "start": 89,
-              "end": 120,
+              "start": 113,
+              "end": 144,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
             },
             {
               "title": "Parity Q8_1/MMVQ sul riferimento storico, 2026-08-12",
               "level": 2,
-              "start": 121,
-              "end": 383,
+              "start": 145,
+              "end": 407,
               "summary": "Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`"
             },
             {
               "title": "FATTO DIMOSTRATO — dispatch reale",
               "level": 3,
-              "start": 123,
-              "end": 140,
+              "start": 147,
+              "end": 164,
               "summary": "Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`"
             },
             {
               "title": "FATTO DIMOSTRATO — A/B/C al greedy step 3",
               "level": 3,
-              "start": 141,
-              "end": 156,
+              "start": 165,
+              "end": 180,
               "summary": "Configurazione congelata: GGUF Q4_K_S SHA-256 `ff857ba9…232aca`, RTX 3090"
             },
             {
               "title": "FATTO DIMOSTRATO — primitive e quantizer parity",
               "level": 3,
-              "start": 157,
-              "end": 185,
+              "start": 181,
+              "end": 209,
               "summary": "Un entry point diagnostico temporaneo ha alimentato i kernel DS4 e llama.cpp"
             },
             {
               "title": "FATTO DIMOSTRATO — frozen output head e scala FP16",
               "level": 3,
-              "start": 186,
-              "end": 198,
+              "start": 210,
+              "end": 222,
               "summary": "Con lo stesso hidden pre-output-norm, il solo output head F32 riproduce"
             },
             {
               "title": "INFERENZA E DECISIONE",
               "level": 3,
-              "start": 199,
-              "end": 207,
+              "start": 223,
+              "end": 231,
               "summary": "La precisione Q8_1 può cambiare una decisione a margine basso anche quando DS4"
             },
             {
               "title": "FATTO DIMOSTRATO — sensibilità Q4/Q5/Q6",
               "level": 3,
-              "start": 208,
-              "end": 240,
+              "start": 232,
+              "end": 264,
               "summary": "Due selettori temporanei, poi rimossi, hanno separato Q4-only e Q5-only."
             },
             {
               "title": "FATTO DIMOSTRATO — precision staircase",
               "level": 3,
-              "start": 241,
-              "end": 260,
+              "start": 265,
+              "end": 284,
               "summary": "La ricostruzione offline dello stesso `output_norm` F32 e il risultato"
             },
             {
               "title": "FATTO DIMOSTRATO — Q8_1 LSQ offline e proiezione",
               "level": 3,
-              "start": 261,
-              "end": 278,
+              "start": 285,
+              "end": 302,
               "summary": "Sul vero vettore critico, un passo LSQ per blocco da 32 riduce activation MAE"
             },
             {
               "title": "FATTO DIMOSTRATO — residuo diffuso e Q8_1-R8",
               "level": 3,
-              "start": 279,
-              "end": 383,
+              "start": 303,
+              "end": 407,
               "summary": "Il simulatore offline ha decodificato direttamente le righe 310 e 728 del vero"
             },
             {
               "title": "Analisi del residuo a 8K, 2026-08-11",
               "level": 2,
-              "start": 384,
-              "end": 408,
+              "start": 408,
+              "end": 432,
               "summary": "Il conto dei soli byte di peso per operazione è: ricorrente 3,426 GB, full"
             },
             {
               "title": "Esperimenti long-context 2026-08-11",
               "level": 2,
-              "start": 409,
-              "end": 429,
+              "start": 433,
+              "end": 453,
               "summary": "Fonti recuperate: guida locale `problem-to-source.md`, FlashDecoding++,"
             },
             {
               "title": "Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12",
               "level": 2,
-              "start": 430,
-              "end": 481,
+              "start": 454,
+              "end": 505,
               "summary": "È stato ispezionato vLLM al commit fissato"
             },
             {
               "title": "Stabilizzazione R8 long-context e riuso GQA, 2026-08-12",
               "level": 2,
-              "start": 482,
-              "end": 561,
+              "start": 506,
+              "end": 585,
               "summary": "La riproduzione a 10.666 token ha separato due fenomeni che prima venivano"
             },
             {
               "title": "Curva completa 2K–30K e soglia split-K, 2026-08-13",
               "level": 2,
-              "start": 562,
-              "end": 591,
+              "start": 586,
+              "end": 615,
               "summary": "La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,"
             },
             {
               "title": "MTP long-context e crossover split-K, 2026-08-13",
               "level": 2,
-              "start": 592,
-              "end": 637,
+              "start": 616,
+              "end": 661,
               "summary": "La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per"
             },
             {
               "title": "Coda ordinata",
               "level": 2,
-              "start": 638,
-              "end": 660,
+              "start": 662,
+              "end": 684,
               "summary": "1."
             },
             {
               "title": "Template per il prossimo record",
               "level": 2,
-              "start": 661,
-              "end": 678,
+              "start": 685,
+              "end": 702,
               "summary": "ID / data / commit / dirty state:"
             }
           ]

@@ -49,8 +49,10 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
   Nessuna tolleranza modificata e nessuna variante attivata.
 
 - Audit punto 7, Qwen3.8: dequantizzazione IQ4_XS cooperativa F32/F16
-  bit-exact; prefill −3,26% a 2K / −3,40% a 8K su cinque coppie.
-  REJECT rispetto al 5% richiesto; nessun nuovo dispatch in produzione.
+  bit-exact; prefill −3,46% a 2K / −3,32% a 8K, chunk 512, dieci coppie.
+  KEEP e default dopo la soglia del 3% autorizzata dall'utente; confronto
+  interno fino a 30K e MTP PASS. Il beneficio varia con chunk 2048;
+  oracolo cross-engine completo ancora NOT_VERIFIED, dettagli nel report.
 
 - Audit del 16 settembre, punto 6: packing R8 condiviso e gate/up fusi solo
   per un token passano i confronti Qwen3.8 bit-exact, ma riducono il decode

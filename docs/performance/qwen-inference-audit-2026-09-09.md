@@ -249,8 +249,8 @@ restano solo come dati storici e non motivano alcuna modifica.
 
 ## Punto 7 — dequantizzazione cooperativa IQ4_XS
 
-**REJECT rispetto alla soglia del piano del 5% sul prefill**, pur con un
-beneficio misurabile. Due varianti, entrambe esatte: 32 lane per blocco di
+**KEEP e default su richiesta dell'utente**, che accetta per questo punto
+la soglia del 3% invece del 5% iniziale. Due varianti, entrambe esatte: 32 lane per blocco di
 256 pesi, caricamenti scalari cooperativi oppure word allineate da 32 bit.
 Il test iniziale ha intercettato un mapping errato dei sottoblocchi nel
 prototipo; corretto prima dei benchmark, mai inserito nel runtime.
@@ -262,24 +262,43 @@ Parità F32 e F16 su 256, 4352, 52.428.800 e 89.128.960 valori. Sulla matrice
 variante scalare è migliore. La candidate seleziona per dtype e dimensione,
 senza cambiare GEMM, soglie, precisioni o chunk e senza cache di pesi F16.
 
-Con chunk 512, modello residente, warm-up e cinque coppie bilanciate:
+Con chunk 512, modello residente, warm-up e dieci coppie bilanciate in due
+sessioni (tutti i campioni inclusi, nessuna esclusione a posteriori):
 
 | Contesto | Prefill baseline/candidate, mediana | Riduzione appaiata | CI95 | CV baseline/candidate |
 |---|---|---|---|---|
-| 2048 | 3452,90 / 3346,85 ms | 3,26% | [1,50; 3,81]% | 1,02 / 1,17% |
-| 8192 | 14809,09 / 14277,09 ms | 3,40% | [3,00; 4,77]% | 0,70 / 1,02% |
+| 2048 | 3455,31 / 3342,75 ms | 3,46% | [3,26; 3,81]% | 1,96 / 1,27% |
+| 8192 | 14954,43 / 14349,17 ms | 3,32% | [3,11; 4,18]% | 1,69 / 2,69% |
 
 Prompt e tutti i logits di 32 token successivi passano bit-exact in ogni
-coppia. Decode non modificato: delta mediani −1,17% / +0,11%, con campioni
-isolati rumorosi; nessun guadagno decode dichiarato. La conferma sotto soglia
-ferma il punto: nessuna seconda sessione o estensione ad altri formati per
-inseguire significatività. Curva 16K–30K, MTP e oracolo completo non eseguiti
-per questa candidate scartata.
+coppia. Decode non modificato: riduzioni mediane −0,31% / +0,16%, CI95
+[-1,17; -0,01]% / [-0,42; 1,67]%; CV sotto 3,77%. Nessun guadagno decode
+dichiarato. Nella seconda sessione isolata il CI a 8K include zero;
+la decisione usa le dieci coppie previste, senza ulteriori campioni.
+
+Il binario di produzione passa anche il confronto scalare/cooperativo con
+chunk predefinito 2048 ai confini 95/96/97, 127/128/129, 511/512/513,
+2047/2048/2049 e a 8K/16K/28K/30K. Prompt e tutti i logits dei passi
+successivi sono bit-exact (128 passi nei contesti lunghi, 8 nei brevi).
+Con MTP passa a 513/2049/28K/30K: token greedy e logits finali identici.
+Nessun OOM a 30K; nessuna nuova allocazione nel decoder. Queste prove lunghe
+sono gate di correttezza, non conferme statistiche di velocità: con chunk
+2048 il beneficio varia e il 3,3–3,5% non va generalizzato al default chunk.
+
+La regressione permanente `tests/qwen_iq4_dequant_probe.cu` passa 12 casi
+F32/F16, entrambe le varianti, ogni scala half finita e code di CTA.
+Il flag diagnostico `DS4_CUDA_QWEN_NO_COOPERATIVE_DEQUANT=1` permette il
+confronto con lo stesso binario. Build CUDA completa e oggetto CPU riusciti;
+test Python 105 PASS e 3 SKIP. L'oracolo ufficiale completo Qwen3.8 e la
+riqualificazione del ramo FP16 preesistente restano NOT_VERIFIED: la nuova
+primitiva conserva esattamente gli input GEMM della baseline, non ne certifica
+la qualità cross-engine. Prestazioni verificate sulla sola RTX 3090 sm_86.
 
 Fonte: decoder locale `dev_iq4_xs_value`, layout/tabelle del vendor llama.cpp
 e scheda della piattaforma; l'upstream fissato dall'audit non è stato scaricato.
 Artefatti in `performance-results/audit-remaining-20260916/`: `dequant.cu`,
-`prepare-dequant.py`, `dequant*.jsonl` e `dequant-session1.summary.json`.
+`prepare-dequant.py`, `dequant*.jsonl`, `dequant-confirmation.summary.json`,
+`default-primitive.jsonl`, `default-validation.*` e `default-mtp-validation.*`.
 
 ## Punto 8 — attention prefill a tile senza score globali
 

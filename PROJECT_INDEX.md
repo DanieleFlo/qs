@@ -163,9 +163,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/performance/qwen36-performance-ledger.md` — registro canonico e compatto delle
   ottimizzazioni Qwen CUDA mantenute, scartate o ancora da confermare; unifica
   le decisioni disperse nei documenti datati e conserva il ciclo sperimentale.
-- `docs/performance/qwen-inference-audit-2026-09-09.md` — verifica GPU dei primi
-  cinque interventi dell'audit, motivi di rigetto e correzione mantenuta del
-  carry MTP nei token di prefill senza logits, con misure e regressioni.
+- `docs/performance/qwen-inference-audit-2026-09-09.md` — verifica GPU degli
+  interventi dell'audit, motivi di rigetto, correzione del carry MTP e
+  dequantizzazione cooperativa IQ4_XS, con misure e regressioni.
 - `docs/research/cuda/` — componente della knowledge base dedicato a toolchain,
   profiling, SASS/resource usage, primitive Ampere `sm_86` e mappa delle
   prossime ipotesi CUDA falsificabili per DS4.
@@ -569,6 +569,9 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   hidden e coppia token/hidden della cache MTP, senza tracing né output head
   sui token intermedi; verifica anche il passaggio dal prefill a chunk ai
   token successivi. Accetta target GGUF e sidecar MTP come argomenti.
+- `tests/qwen_iq4_dequant_probe.cu` — parità bit-exact delle due varianti
+  cooperative IQ4_XS rispetto al decoder scalare F32/F16, su scale half
+  finite, nibble estremi e code parziali dei blocchi CUDA.
 - `cuda/mmq/test/test_mmq_parity.cu` — parita' sintetica CPU/CUDA delle primitive
   dense, MoE, pair e vector MMQ; eseguibile con
   `make test-mmq-parity CUDA_ARCH=sm_86`.

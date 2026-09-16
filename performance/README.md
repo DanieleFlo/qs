@@ -572,3 +572,20 @@ conferma storica a 24K, prima del nuovo margine, misurava 23,26 → 23,91
 tok/s (+2,79%, CV 0,71%/1,32%, `KEEP_CANDIDATE`). In V(2) i snapshot GDN
 per riga rendono superfluo il pre-snapshot completo; il gate model-backed
 passa reject/rollback, sampling 128/128 identico, gap argmax 0 e fallback 0.
+
+## Dequantizzazione IQ4_XS nel prefill Qwen3.8
+
+Il decoder cooperativo riusa scale e nibble per blocco, mantenendo i pesi
+dequantizzati F32/F16 bit-exact. Non cambia precisioni GEMM, chunk, KV o
+policy MTP. `DS4_CUDA_QWEN_NO_COOPERATIVE_DEQUANT=1` ripristina il decoder
+scalare per i confronti diagnostici con lo stesso binario.
+
+La regressione senza modello si esegue con:
+
+```sh
+make tests/qwen_iq4_dequant_probe CUDA_ARCH=sm_86
+./tests/qwen_iq4_dequant_probe
+```
+
+Misure, perimetro verificato e limiti sono nel
+[report dell'audit](../docs/performance/qwen-inference-audit-2026-09-09.md).
