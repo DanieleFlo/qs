@@ -246,3 +246,37 @@ Artefatti: `performance-results/r8-shared-input-20260916/`, con baseline,
 generatori, probe, `primitive.jsonl`, `direction.jsonl`,
 `fusion-session1.jsonl` e relativo riepilogo. I risultati iniziali Qwen3.6
 restano solo come dati storici e non motivano alcuna modifica.
+
+## Punto 7 — dequantizzazione cooperativa IQ4_XS
+
+**REJECT rispetto alla soglia del piano del 5% sul prefill**, pur con un
+beneficio misurabile. Due varianti, entrambe esatte: 32 lane per blocco di
+256 pesi, caricamenti scalari cooperativi oppure word allineate da 32 bit.
+Il test iniziale ha intercettato un mapping errato dei sottoblocchi nel
+prototipo; corretto prima dei benchmark, mai inserito nel runtime.
+Il mapping DS4 usa gruppi da 32 valori con nibble basso/alto separati da 16.
+
+Parità F32 e F16 su 256, 4352, 52.428.800 e 89.128.960 valori. Sulla matrice
+5120×17408 il tempo mediano F32 scende circa da 812 a 617 µs; in F16 da
+786 a 569 µs con la variante vettoriale. Per le forme F16 più piccole la
+variante scalare è migliore. La candidate seleziona per dtype e dimensione,
+senza cambiare GEMM, soglie, precisioni o chunk e senza cache di pesi F16.
+
+Con chunk 512, modello residente, warm-up e cinque coppie bilanciate:
+
+| Contesto | Prefill baseline/candidate, mediana | Riduzione appaiata | CI95 | CV baseline/candidate |
+|---|---|---|---|---|
+| 2048 | 3452,90 / 3346,85 ms | 3,26% | [1,50; 3,81]% | 1,02 / 1,17% |
+| 8192 | 14809,09 / 14277,09 ms | 3,40% | [3,00; 4,77]% | 0,70 / 1,02% |
+
+Prompt e tutti i logits di 32 token successivi passano bit-exact in ogni
+coppia. Decode non modificato: delta mediani −1,17% / +0,11%, con campioni
+isolati rumorosi; nessun guadagno decode dichiarato. La conferma sotto soglia
+ferma il punto: nessuna seconda sessione o estensione ad altri formati per
+inseguire significatività. Curva 16K–30K, MTP e oracolo completo non eseguiti
+per questa candidate scartata.
+
+Fonte: decoder locale `dev_iq4_xs_value`, layout/tabelle del vendor llama.cpp
+e scheda della piattaforma; l'upstream fissato dall'audit non è stato scaricato.
+Artefatti in `performance-results/audit-remaining-20260916/`: `dequant.cu`,
+`prepare-dequant.py`, `dequant*.jsonl` e `dequant-session1.summary.json`.

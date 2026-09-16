@@ -36,6 +36,10 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto 7, Qwen3.8: dequantizzazione IQ4_XS cooperativa F32/F16
+  bit-exact; prefill −3,26% a 2K / −3,40% a 8K su cinque coppie.
+  REJECT rispetto al 5% richiesto; nessun nuovo dispatch in produzione.
+
 - Audit del 16 settembre, punto 6: packing R8 condiviso e gate/up fusi solo
   per un token passano i confronti Qwen3.8 bit-exact, ma riducono il decode
   di 1,49%/1,70% a 128/2048, sotto il 3% richiesto. REJECT; dettagli nel
