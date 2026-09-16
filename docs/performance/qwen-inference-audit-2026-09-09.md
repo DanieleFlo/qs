@@ -438,3 +438,30 @@ prototipo restano NOT_VERIFIED e non sono presentati come PASS.
 Fonti: dipendenze di `qwen_graph_recurrent_attention_rows`, proiezioni CUDA
 Q8_0 esistenti e contratto degli eventi producer/consumer. Artefatti:
 `audit-remaining-20260916/projections*`, `prepare-streams.py`, `streams*`.
+
+## Punto E — emissione SSE e calcolo successivo
+
+**Chiuso al gate di profilazione, senza worker I/O aggiuntivo.** Probe del
+trasporto reale `sse_chunk` e della callback `openai_sse_stream_update`,
+128 delta da 192 byte, con cadenza simulata di 37 ms derivata dal decode.
+Socket non bloccante, client rapido, client che legge ogni 200 ms e client
+che si disconnette dopo il primo evento. È una prova locale con socketpair,
+non una misura end-to-end di un server con modello caricato o di una WAN.
+
+| Client | Callback + invio cumulativo | Tempo della sequenza | Invio massimo |
+|---|---|---|---|
+| rapido | 3,810 ms | 4753,18 ms | 0,133 ms |
+| lento | 1,689 ms | 4750,19 ms | 0,076 ms |
+| disconnesso | 0,013 ms | 37,19 ms | 0,009 ms |
+
+Il costo recuperabile è rispettivamente 0,080% e 0,036%; anche eliminarlo
+non raggiunge il 3% richiesto. I primi due client ricevono tutti i 24576 byte;
+il terzo riceve il primo evento e l'invio successivo segnala la disconnessione.
+Il probe del solo trasporto conferma la stessa direzione. Un client lento
+che satura a lungo il socket non è rappresentato da questa prova: nessuna
+affermazione universale sull'assenza di backpressure o blocchi di rete.
+
+Non si cambiano sampling, grammatica, parser, ordine degli eventi, stop o
+memoria delle code. Fonte: callback e `send_all` di `ds4_server.c`.
+Artefatti: `audit-remaining-20260916/sse-probe.c`, `sse.jsonl`,
+`sse-callback.c`, `sse-callback.jsonl`; tutti e tre i casi terminano con PASS.

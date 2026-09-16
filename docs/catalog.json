@@ -1104,7 +1104,7 @@
               "title": "Primo intervento utile dall'audit dell'inferenza",
               "level": 1,
               "start": 1,
-              "end": 440,
+              "end": 467,
               "summary": "La modifica mantenuta corregge il carry MTP nel prefill token per token:"
             },
             {
@@ -1202,8 +1202,15 @@
               "title": "Punto D — due stream per le proiezioni",
               "level": 2,
               "start": 410,
-              "end": 440,
+              "end": 441,
               "summary": "**REJECT nello screening.** Prima misurato il costo eliminabile delle due"
+            },
+            {
+              "title": "Punto E — emissione SSE e calcolo successivo",
+              "level": 2,
+              "start": 442,
+              "end": 467,
+              "summary": "**Chiuso al gate di profilazione, senza worker I/O aggiuntivo.** Probe del"
             }
           ]
         },
@@ -2037,7 +2044,7 @@
               "title": "Ledger prestazionale Qwen3.6 CUDA",
               "level": 1,
               "start": 1,
-              "end": 711,
+              "end": 714,
               "summary": "Questo è il registro canonico delle ottimizzazioni Qwen3.6 27B Q4_K_S/M su"
             },
             {
@@ -2051,147 +2058,147 @@
               "title": "Stato corrente",
               "level": 2,
               "start": 37,
-              "end": 105,
-              "summary": "a 128/2048 nello screening; Q contro K/V sotto soglia al profilo."
+              "end": 108,
+              "summary": "locale con client rapido/lento; stop al profilo, nessun nuovo worker I/O."
             },
             {
               "title": "Soluzioni mantenute",
               "level": 2,
-              "start": 106,
-              "end": 121,
+              "start": 109,
+              "end": 124,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
             },
             {
               "title": "Soluzioni scartate o non promosse",
               "level": 2,
-              "start": 122,
-              "end": 153,
+              "start": 125,
+              "end": 156,
               "summary": "Sezione strutturale; consultare il contenuto locale indicato."
             },
             {
               "title": "Parity Q8_1/MMVQ sul riferimento storico, 2026-08-12",
               "level": 2,
-              "start": 154,
-              "end": 416,
+              "start": 157,
+              "end": 419,
               "summary": "Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`"
             },
             {
               "title": "FATTO DIMOSTRATO — dispatch reale",
               "level": 3,
-              "start": 156,
-              "end": 173,
+              "start": 159,
+              "end": 176,
               "summary": "Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`"
             },
             {
               "title": "FATTO DIMOSTRATO — A/B/C al greedy step 3",
               "level": 3,
-              "start": 174,
-              "end": 189,
+              "start": 177,
+              "end": 192,
               "summary": "Configurazione congelata: GGUF Q4_K_S SHA-256 `ff857ba9…232aca`, RTX 3090"
             },
             {
               "title": "FATTO DIMOSTRATO — primitive e quantizer parity",
               "level": 3,
-              "start": 190,
-              "end": 218,
+              "start": 193,
+              "end": 221,
               "summary": "Un entry point diagnostico temporaneo ha alimentato i kernel DS4 e llama.cpp"
             },
             {
               "title": "FATTO DIMOSTRATO — frozen output head e scala FP16",
               "level": 3,
-              "start": 219,
-              "end": 231,
+              "start": 222,
+              "end": 234,
               "summary": "Con lo stesso hidden pre-output-norm, il solo output head F32 riproduce"
             },
             {
               "title": "INFERENZA E DECISIONE",
               "level": 3,
-              "start": 232,
-              "end": 240,
+              "start": 235,
+              "end": 243,
               "summary": "La precisione Q8_1 può cambiare una decisione a margine basso anche quando DS4"
             },
             {
               "title": "FATTO DIMOSTRATO — sensibilità Q4/Q5/Q6",
               "level": 3,
-              "start": 241,
-              "end": 273,
+              "start": 244,
+              "end": 276,
               "summary": "Due selettori temporanei, poi rimossi, hanno separato Q4-only e Q5-only."
             },
             {
               "title": "FATTO DIMOSTRATO — precision staircase",
               "level": 3,
-              "start": 274,
-              "end": 293,
+              "start": 277,
+              "end": 296,
               "summary": "La ricostruzione offline dello stesso `output_norm` F32 e il risultato"
             },
             {
               "title": "FATTO DIMOSTRATO — Q8_1 LSQ offline e proiezione",
               "level": 3,
-              "start": 294,
-              "end": 311,
+              "start": 297,
+              "end": 314,
               "summary": "Sul vero vettore critico, un passo LSQ per blocco da 32 riduce activation MAE"
             },
             {
               "title": "FATTO DIMOSTRATO — residuo diffuso e Q8_1-R8",
               "level": 3,
-              "start": 312,
-              "end": 416,
+              "start": 315,
+              "end": 419,
               "summary": "Il simulatore offline ha decodificato direttamente le righe 310 e 728 del vero"
             },
             {
               "title": "Analisi del residuo a 8K, 2026-08-11",
               "level": 2,
-              "start": 417,
-              "end": 441,
+              "start": 420,
+              "end": 444,
               "summary": "Il conto dei soli byte di peso per operazione è: ricorrente 3,426 GB, full"
             },
             {
               "title": "Esperimenti long-context 2026-08-11",
               "level": 2,
-              "start": 442,
-              "end": 462,
+              "start": 445,
+              "end": 465,
               "summary": "Fonti recuperate: guida locale `problem-to-source.md`, FlashDecoding++,"
             },
             {
               "title": "Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12",
               "level": 2,
-              "start": 463,
-              "end": 514,
+              "start": 466,
+              "end": 517,
               "summary": "È stato ispezionato vLLM al commit fissato"
             },
             {
               "title": "Stabilizzazione R8 long-context e riuso GQA, 2026-08-12",
               "level": 2,
-              "start": 515,
-              "end": 594,
+              "start": 518,
+              "end": 597,
               "summary": "La riproduzione a 10.666 token ha separato due fenomeni che prima venivano"
             },
             {
               "title": "Curva completa 2K–30K e soglia split-K, 2026-08-13",
               "level": 2,
-              "start": 595,
-              "end": 624,
+              "start": 598,
+              "end": 627,
               "summary": "La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,"
             },
             {
               "title": "MTP long-context e crossover split-K, 2026-08-13",
               "level": 2,
-              "start": 625,
-              "end": 670,
+              "start": 628,
+              "end": 673,
               "summary": "La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per"
             },
             {
               "title": "Coda ordinata",
               "level": 2,
-              "start": 671,
-              "end": 693,
+              "start": 674,
+              "end": 696,
               "summary": "1."
             },
             {
               "title": "Template per il prossimo record",
               "level": 2,
-              "start": 694,
-              "end": 711,
+              "start": 697,
+              "end": 714,
               "summary": "ID / data / commit / dirty state:"
             }
           ]

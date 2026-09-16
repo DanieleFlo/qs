@@ -36,6 +36,9 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto E, Qwen3.8: callback/SSE: 0,080% / 0,036% del tempo nel probe
+  locale con client rapido/lento; stop al profilo, nessun nuovo worker I/O.
+
 - Audit punto D, Qwen3.8: due stream: alpha/beta decode +2,05% / −0,045%
   a 128/2048 nello screening; Q contro K/V sotto soglia al profilo. REJECT.
 
