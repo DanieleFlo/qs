@@ -36,6 +36,10 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto 10, Qwen3.8: convoluzione prefill al 0,507% / 0,482% del
+  totale a 2K / 28K. REJECT prima dell'implementazione: il beneficio massimo
+  non può raggiungere il 3% richiesto.
+
 - Audit punto 9, Qwen3.8: residuo/RMSNorm a 256 thread bit-exact; il
   risparmio stimato dei due siti resta sotto il 2% end-to-end richiesto.
   REJECT dopo microbenchmark e profilo, senza nuovi kernel in produzione.

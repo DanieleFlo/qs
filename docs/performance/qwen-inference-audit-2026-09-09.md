@@ -326,3 +326,24 @@ Queste sono stime diagnostiche e microbenchmark, non speedup end-to-end.
 Non è stato introdotto un nuovo dispatch né completato un gate modello per
 una candidate sotto soglia. Artefatti: `audit-remaining-20260916/residual.cu`,
 `residual.jsonl` e `profile-{2048,28672}.*`.
+
+## Punto 10 — convoluzione causale parallela nel tempo
+
+**REJECT prima dell'implementazione**, applicando il limite superiore
+richiesto dall'audit. Con chunk 512 il profilo CUDA event della baseline
+attribuisce alla convoluzione dei 48 layer:
+
+| Contesto reale | Convoluzione | Prefill totale profilato | Quota |
+|---|---|---|---|
+| 2048 | 19,48 ms, 192 chiamate | 3844,69 ms | 0,507% |
+| 28672 | 300,20 ms, 2688 chiamate | 62228,14 ms | 0,482% |
+
+Anche eliminarla interamente non raggiunge il 3% sul prefill. La riduzione
+del totale introdotta dal punto 7 non cambia questa conclusione. I tempi
+sono diagnostici, non benchmark ufficiali di una candidate; nessuna variante
+32/64 viene aggiunta e nessun buffer da 80 MiB viene allocato. Convoluzione
+1–3 righe, snapshot, stato finale e ricorrenza GDN restano invariati.
+Il confronto di riferimento è la convoluzione causale FLA indicata nell'audit;
+la verifica del kernel DS4 conferma che il tempo è seriale ma non dominante.
+Artefatti: `audit-remaining-20260916/profile-{2048,28672}.{jsonl,log}` e
+`prepare-profile.py`; ogni campione usa il modello residente dopo warm-up.
