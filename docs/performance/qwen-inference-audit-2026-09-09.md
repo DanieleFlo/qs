@@ -14,8 +14,10 @@ Misure GPU del 9 settembre 2026; chiusura e correzioni degli strumenti il
 
 È il prerequisito funzionale segnalato nell'audit del 5 settembre, non un
 guadagno da attribuire a un nuovo kernel. I tentativi prestazionali 1–5 sotto
-sono stati chiusi senza promozione; i punti successivi non sono stati avviati
-dopo aver individuato il beneficio del carry corretto.
+sono stati chiusi senza promozione. Il 16 settembre il lavoro è ripreso sui
+punti rimanenti; gli esiti sono registrati sotto, con un commit per punto.
+Da questa ripresa Qwen3.6 è escluso dagli ulteriori approfondimenti, su
+indicazione dell'utente; il target prestazionale è Qwen3.8.
 
 Ambiente: RTX 3090, `sm_86`, WSL Ubuntu 24.04, driver Windows 610.62,
 CUDA 12.4.131, `-O3 -g -lineinfo --use_fast_math -arch=sm_86`.
@@ -211,3 +213,36 @@ Directory sotto `performance-results/`:
 I tempi dei microbenchmark sono misurati fuori dal profiler. Nsight non era
 disponibile: i conteggi statici SASS non sono misure di traffico DRAM.
 Non sono stati modificati golden, tolleranze o manifest per promuovere un esperimento.
+
+## Punto 6 — input R8 condiviso e fusione selettiva (16 settembre)
+
+**REJECT per Qwen3.8: guadagno end-to-end sotto il 3%.** Provati separatamente
+riuso del packing, poi riuso più gate/up/SwiGLU fusi solo per un token. I batch
+2/3 conservano i kernel separati: la fusione li rallenta. Il prototipo usa
+34.560 byte di storage per sessione, con descrittore locale alla proiezione;
+Q8_0 alpha/beta e i percorsi diagnostici incompatibili mantengono il fallback.
+
+Le 72 combinazioni di primitiva passano bit-exact per gate/up, SwiGLU e byte
+impacchettati: IQ4_XS/IQ4_XS, IQ4_XS/Q4_K, Q4_K/Q4_K, Q5_K/Q5_K, 1–3 righe,
+forme 256→7, 4352→7 e 5120→17408. Questo comprende lo scratch interposto;
+non costituisce una certificazione completa del verifier MTP.
+
+Sul target Qwen3.8, dopo warm-up e cinque coppie residenti, la variante
+selettiva produce prompt e tutti i logits di 128 token consecutivi bit-exact.
+Riduzione appaiata mediana del decode: **1,49% a 128**, CI95 bootstrap della
+mediana `[-2,15; 1,93]%`; **1,70% a 2048**, CI95 `[1,16; 6,10]%`.
+CV baseline/candidate rispettivamente `0,26/1,91%` e `2,06/0,85%`.
+Il riuso isolato nello screening non dà una direzione migliore e stabile.
+Nessuna variante entra nel runtime, nemmeno come flag permanente.
+
+Fonte letta: fusione MMVQ in `cuda/mmq/mmvq.cu`, pin del vendor
+`5c0e9468378eba6bf3cc1989ff5d62fbbe4d9e3a`, e scheda ExLlamaV3 locale.
+Il criterio selettivo richiesto dall'utente è stato applicato, ma il vantaggio
+di primitiva non basta per superare la soglia del punto sul target mantenuto.
+I controlli estesi MTP e l'oracolo Qwen3.8 rimangono NOT_VERIFIED per questa
+candidate scartata; non è stato necessario promuoverla per eseguire le prove.
+
+Artefatti: `performance-results/r8-shared-input-20260916/`, con baseline,
+generatori, probe, `primitive.jsonl`, `direction.jsonl`,
+`fusion-session1.jsonl` e relativo riepilogo. I risultati iniziali Qwen3.6
+restano solo come dati storici e non motivano alcuna modifica.

@@ -36,6 +36,12 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit del 16 settembre, punto 6: packing R8 condiviso e gate/up fusi solo
+  per un token passano i confronti Qwen3.8 bit-exact, ma riducono il decode
+  di 1,49%/1,70% a 128/2048, sotto il 3% richiesto. REJECT; dettagli nel
+  [report dell'audit](qwen-inference-audit-2026-09-09.md). Qwen3.6 escluso
+  dagli ulteriori approfondimenti su richiesta dell'utente.
+
 - Hardware: RTX 3090 GA102, `sm_86`, 24 GiB, 936,2 GB/s nominali.
 - Artefatto principale: Q4_K_S SHA-256
   `ff857ba9f2184d8be408e8cabda12c89ba5adb202fddc1a88b3774d7bb232aca`.
