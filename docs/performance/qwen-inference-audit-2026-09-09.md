@@ -389,3 +389,20 @@ Fonte: allocatori `cuda_tmp_alloc` / `cuda_tmp_alloc_on` e proprietà delle
 viste in `ds4_qwen_gpu_graph`. Artefatti: `profile-{2048,28672}.log`
 (`AUDIT_GROW measured=0` soltanto), `default*-validation.*`. La decisione
 segue il criterio del piano di conservare solo separazioni indispensabili.
+
+## Punto C — accodamento e attesa GPU
+
+**REJECT; coincide con il pilota del punto 2.** Il prototipo separava enqueue
+e completamento del catch-up MTP, conservando l'ordine sullo stesso stream e
+l'attesa prima del consumo CPU. Mediana del catch-up su 2048 righe:
+292,54 → 246,90 ms (−15,6%); le due coppie direction davano soltanto
+circa 0,1% e 1,8% sul TTFT. Entrambe sono sotto anche la soglia del 3%
+del punto C, oltre che sotto quelle più alte del punto 2.
+
+Non si ripete lo stesso esperimento come nuovo beneficio. Il prototipo è
+archiviato in `performance-results/mtp-catchup-20260909/`; le verifiche
+interne dello screening non autorizzano una sostituzione globale delle
+sincronizzazioni. Il controllo degli errori asincroni e i confini di attesa
+di produzione restano quelli già validati. La correzione del carry è
+mantenuta separatamente e non viene contata come vantaggio dell'accodamento.
+Fonte: confini di comando DS4 e riferimento MTP llama.cpp del punto 2.

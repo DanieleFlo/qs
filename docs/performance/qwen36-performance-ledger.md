@@ -36,6 +36,9 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto C, Qwen3.8: enqueue/wait: pilota del punto 2 sotto il 3% TTFT;
+  REJECT, nessuna sostituzione globale delle sincronizzazioni.
+
 - Audit punto B, Qwen3.8: workspace: zero crescite dopo warm-up a 2K/28K;
   test a 30K con/senza MTP senza OOM. Nessuna prenotazione aggiuntiva.
 
