@@ -366,3 +366,26 @@ Il confronto di riferimento è la convoluzione causale FLA indicata nell'audit;
 la verifica del kernel DS4 conferma che il tempo è seriale ma non dominante.
 Artefatti: `audit-remaining-20260916/profile-{2048,28672}.{jsonl,log}` e
 `prepare-profile.py`; ogni campione usa il modello residente dopo warm-up.
+
+## Punto B — workspace e durata dei buffer
+
+**Chiuso senza nuova prenotazione.** Il profilo della baseline registra sei
+crescite dello scratch a freddo: 105, 120, 175, 187, 200 e 340 MiB. Dopo il
+warm-up, zero crescite sia durante prefill sia durante decode a 2K e 28K.
+Non è quindi dimostrato un costo di riallocazione nella fase misurata.
+Il decoder cooperativo del punto 7 usa lo stesso workspace e zero byte extra;
+i gate a 28K/30K, chunk 2048 e MTP acceso/spento terminano senza OOM.
+La capacità allocata è 30976, il prompt massimo 30720 e l'output 128 token.
+
+Il graph distingue già scratch delle proiezioni (viste alternative ricorrente
+e full-attention), KV/stato persistente e snapshot MTP. Prenotare nuovamente
+il massimo duplicando questi buffer aumenterebbe solo il consumo. Il packing
+R8 condiviso del punto 6 e il secondo stream del punto D non sono stati
+promossi: non richiedono nuove regioni permanenti. Nessun guadagno percentuale
+o picco VRAM hardware viene attribuito a questo punto; l'assenza di OOM non
+equivale alla misura del picco comprensivo di driver/desktop.
+
+Fonte: allocatori `cuda_tmp_alloc` / `cuda_tmp_alloc_on` e proprietà delle
+viste in `ds4_qwen_gpu_graph`. Artefatti: `profile-{2048,28672}.log`
+(`AUDIT_GROW measured=0` soltanto), `default*-validation.*`. La decisione
+segue il criterio del piano di conservare solo separazioni indispensabili.

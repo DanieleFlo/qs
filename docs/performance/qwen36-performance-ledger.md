@@ -36,6 +36,9 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Audit punto B, Qwen3.8: workspace: zero crescite dopo warm-up a 2K/28K;
+  test a 30K con/senza MTP senza OOM. Nessuna prenotazione aggiuntiva.
+
 - Audit punto 10, Qwen3.8: convoluzione prefill al 0,507% / 0,482% del
   totale a 2K / 28K. REJECT prima dell'implementazione: il beneficio massimo
   non può raggiungere il 3% richiesto.

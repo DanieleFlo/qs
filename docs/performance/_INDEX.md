@@ -26,7 +26,8 @@ La modifica mantenuta corregge il carry MTP nel prefill token per token:
 - righe 250–302: **Punto 7 — dequantizzazione cooperativa IQ4_XS** — **KEEP e default su richiesta dell'utente**, che accetta per questo punto
 - righe 303–326: **Punto 8 — attention prefill a tile senza score globali** — **REJECT numerico.** Prototipo di fattibilità F32, una query per CTA e tile
 - righe 327–348: **Punto 9 — residuo e RMSNorm** — **REJECT al controllo del beneficio recuperabile**, soglia 2% invariata.
-- righe 349–368: **Punto 10 — convoluzione causale parallela nel tempo** — **REJECT prima dell'implementazione**, applicando il limite superiore
+- righe 349–369: **Punto 10 — convoluzione causale parallela nel tempo** — **REJECT prima dell'implementazione**, applicando il limite superiore
+- righe 370–391: **Punto B — workspace e durata dei buffer** — **Chiuso senza nuova prenotazione.** Il profilo della baseline registra sei
 
 ## [Progressione di ottimizzazione CUDA — Qwen3.6 27B Q4_K_S su RTX 3090](qwen36-cuda-optimization-progression.md)
 
@@ -167,27 +168,27 @@ Velocizzare il percorso CUDA di Qwen3.6 27B Q4_K_M senza degradare la
 Aggiornamento 2026-09-09: audit operativo Qwen3.8/Qwen3.6.
 
 - righe 8–36: **Contratto** — Aggiornamento 2026-09-09: audit operativo Qwen3.8/Qwen3.6.
-- righe 37–96: **Stato corrente** — totale a 2K / 28K.
-- righe 97–112: **Soluzioni mantenute** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 113–144: **Soluzioni scartate o non promosse** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 145–407: **Parity Q8_1/MMVQ sul riferimento storico, 2026-08-12** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
-  - righe 147–164: **FATTO DIMOSTRATO — dispatch reale** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
-  - righe 165–180: **FATTO DIMOSTRATO — A/B/C al greedy step 3** — Configurazione congelata: GGUF Q4_K_S SHA-256 `ff857ba9…232aca`, RTX 3090
-  - righe 181–209: **FATTO DIMOSTRATO — primitive e quantizer parity** — Un entry point diagnostico temporaneo ha alimentato i kernel DS4 e llama.cpp
-  - righe 210–222: **FATTO DIMOSTRATO — frozen output head e scala FP16** — Con lo stesso hidden pre-output-norm, il solo output head F32 riproduce
-  - righe 223–231: **INFERENZA E DECISIONE** — La precisione Q8_1 può cambiare una decisione a margine basso anche quando DS4
-  - righe 232–264: **FATTO DIMOSTRATO — sensibilità Q4/Q5/Q6** — Due selettori temporanei, poi rimossi, hanno separato Q4-only e Q5-only.
-  - righe 265–284: **FATTO DIMOSTRATO — precision staircase** — La ricostruzione offline dello stesso `output_norm` F32 e il risultato
-  - righe 285–302: **FATTO DIMOSTRATO — Q8_1 LSQ offline e proiezione** — Sul vero vettore critico, un passo LSQ per blocco da 32 riduce activation MAE
-  - righe 303–407: **FATTO DIMOSTRATO — residuo diffuso e Q8_1-R8** — Il simulatore offline ha decodificato direttamente le righe 310 e 728 del vero
-- righe 408–432: **Analisi del residuo a 8K, 2026-08-11** — Il conto dei soli byte di peso per operazione è: ricorrente 3,426 GB, full
-- righe 433–453: **Esperimenti long-context 2026-08-11** — Fonti recuperate: guida locale `problem-to-source.md`, FlashDecoding++,
-- righe 454–505: **Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12** — È stato ispezionato vLLM al commit fissato
-- righe 506–585: **Stabilizzazione R8 long-context e riuso GQA, 2026-08-12** — La riproduzione a 10.666 token ha separato due fenomeni che prima venivano
-- righe 586–615: **Curva completa 2K–30K e soglia split-K, 2026-08-13** — La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,
-- righe 616–661: **MTP long-context e crossover split-K, 2026-08-13** — La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per
-- righe 662–684: **Coda ordinata** — 1.
-- righe 685–702: **Template per il prossimo record** — ID / data / commit / dirty state:
+- righe 37–99: **Stato corrente** — test a 30K con/senza MTP senza OOM.
+- righe 100–115: **Soluzioni mantenute** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 116–147: **Soluzioni scartate o non promosse** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 148–410: **Parity Q8_1/MMVQ sul riferimento storico, 2026-08-12** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
+  - righe 150–167: **FATTO DIMOSTRATO — dispatch reale** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
+  - righe 168–183: **FATTO DIMOSTRATO — A/B/C al greedy step 3** — Configurazione congelata: GGUF Q4_K_S SHA-256 `ff857ba9…232aca`, RTX 3090
+  - righe 184–212: **FATTO DIMOSTRATO — primitive e quantizer parity** — Un entry point diagnostico temporaneo ha alimentato i kernel DS4 e llama.cpp
+  - righe 213–225: **FATTO DIMOSTRATO — frozen output head e scala FP16** — Con lo stesso hidden pre-output-norm, il solo output head F32 riproduce
+  - righe 226–234: **INFERENZA E DECISIONE** — La precisione Q8_1 può cambiare una decisione a margine basso anche quando DS4
+  - righe 235–267: **FATTO DIMOSTRATO — sensibilità Q4/Q5/Q6** — Due selettori temporanei, poi rimossi, hanno separato Q4-only e Q5-only.
+  - righe 268–287: **FATTO DIMOSTRATO — precision staircase** — La ricostruzione offline dello stesso `output_norm` F32 e il risultato
+  - righe 288–305: **FATTO DIMOSTRATO — Q8_1 LSQ offline e proiezione** — Sul vero vettore critico, un passo LSQ per blocco da 32 riduce activation MAE
+  - righe 306–410: **FATTO DIMOSTRATO — residuo diffuso e Q8_1-R8** — Il simulatore offline ha decodificato direttamente le righe 310 e 728 del vero
+- righe 411–435: **Analisi del residuo a 8K, 2026-08-11** — Il conto dei soli byte di peso per operazione è: ricorrente 3,426 GB, full
+- righe 436–456: **Esperimenti long-context 2026-08-11** — Fonti recuperate: guida locale `problem-to-source.md`, FlashDecoding++,
+- righe 457–508: **Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12** — È stato ispezionato vLLM al commit fissato
+- righe 509–588: **Stabilizzazione R8 long-context e riuso GQA, 2026-08-12** — La riproduzione a 10.666 token ha separato due fenomeni che prima venivano
+- righe 589–618: **Curva completa 2K–30K e soglia split-K, 2026-08-13** — La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,
+- righe 619–664: **MTP long-context e crossover split-K, 2026-08-13** — La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per
+- righe 665–687: **Coda ordinata** — 1.
+- righe 688–705: **Template per il prossimo record** — ID / data / commit / dirty state:
 
 ## [Qwen3.8 agentico: `SEARCH` statica e MTP grammar-aware](qwen38-agent-search-static-2026-08-27.md)
 
