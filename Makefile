@@ -35,7 +35,8 @@ CUDA_HOME ?= $(shell if [ -x /usr/local/cuda/bin/nvcc ]; then \
 	printf '%s' /usr/local/cuda; \
 	fi)
 NVCC ?= $(CUDA_HOME)/bin/nvcc
-CUDA_ARCH ?=
+# Direct binary/test targets must select the local GPU just like cuda-generic.
+CUDA_ARCH ?= native
 ifneq ($(strip $(CUDA_ARCH)),)
 ifneq ($(filter sm_120 sm_120a,$(strip $(CUDA_ARCH))),)
 NVCC_ARCH_FLAGS := -gencode arch=compute_120a,code=sm_120a -DDS4_CUDA_HAVE_MXF4=1
@@ -213,7 +214,7 @@ test-rocm:
 	./tests/test_layer_pack
 	./tests/test_engine_mgpu_placement
 	./tests/test_gpu_args
-	./tests/test_gpu_args_cli.sh
+	bash tests/test_gpu_args_cli.sh
 
 ds4: ds4_cli.o ds4_help.o linenoise.o ds4_gpu_args.o $(CORE_OBJS)
 	$(DS4_LINK) -o $@ $^ $(DS4_LINK_LIBS)
@@ -606,7 +607,7 @@ test: ds4_test ds4_agent_test ds4_server_test ds4-eval q4k-dot-test mxfp4-dot-te
 	./tests/test_layer_pack
 	./tests/test_engine_mgpu_placement
 	./tests/test_gpu_args
-	./tests/test_gpu_args_cli.sh
+	bash tests/test_gpu_args_cli.sh
 	./tests/test_sampling
 
 test-constrained-json-live:
