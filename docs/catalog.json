@@ -3489,7 +3489,7 @@
               "title": "Roadmap: tempi morti CPU/GPU nell'inferenza Qwen",
               "level": 1,
               "start": 1,
-              "end": 162,
+              "end": 185,
               "summary": "Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza"
             },
             {
@@ -3517,7 +3517,7 @@
               "title": "Registro",
               "level": 2,
               "start": 48,
-              "end": 162,
+              "end": 185,
               "summary": "Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review."
             },
             {
@@ -3566,8 +3566,15 @@
               "title": "4. SSE bounded: gate trasporto intermedio",
               "level": 3,
               "start": 154,
-              "end": 162,
+              "end": 163,
               "summary": "Prototipo con writer request-scoped e limite 256 KiB; send/poll nel consumer,"
+            },
+            {
+              "title": "3. Conferma stream-sync/pinned (completato, REJECT)",
+              "level": 3,
+              "start": 164,
+              "end": 185,
+              "summary": "`idle-readback-confirm/results.json`: stesso binario congelato"
             }
           ]
         },

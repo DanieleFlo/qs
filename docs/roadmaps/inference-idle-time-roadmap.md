@@ -160,3 +160,26 @@ Disconnessione e distruzione del writer PASS. Il primo test di disconnessione
 terminava per SIGPIPE: il runner di test non installava l'handler del server;
 allineato il test all'handler reale e ripetuto con successo. Nessun cambiamento
 alla gestione SIGPIPE di produzione. Beneficio HTTP ancora da misurare.
+
+### 3. Conferma stream-sync/pinned (completato, REJECT)
+
+`idle-readback-confirm/results.json`: stesso binario congelato
+`ds4-server-readback`, contesti 2048/8192/16384, 64 token, warm-up per workload,
+cinque campioni misurati, seed 424242. Output identico in tutte le varianti.
+Tempi di decode misurati dal server, non TTFT/prefill inclusi nel tempo HTTP.
+
+| Variante | 2K tok/s | 8K tok/s | 16K tok/s | CV 2K/8K/16K |
+| --- | ---: | ---: | ---: | --- |
+| Baseline | 30.337 | 27.267 | 22.953 | 0.25% / 0.24% / 5.31% |
+| Stream-sync | 28.669 | 23.979 | 21.591 | 2.71% / 7.09% / 2.21% |
+| Pinned/event | 26.739 | 24.714 | 21.091 | 0.92% / 0.19% / 2.77% |
+
+I piccoli vantaggi direzionali non sono confermati. Alcune misure superano il
+5% CV e nel corso del run sono state compilate altre prove CPU: queste misure
+NON dimostrano causalmente un rallentamento della nuova API. Sono sufficienti
+per rifiutare la promozione: nessun miglioramento stabile provato. Non affermare
+che pinned e intrinsecamente piu lento. Il gate bit-exact rimane PASS.
+Il processo gia attivo e stato lasciato completare come richiesto dall'utente.
+Nessuna barriera globale viene sostituita nel codice di produzione.
+La primitiva sperimentale resta nei binari congelati per le prove sampled MTP;
+il codice definitivo verra ripulito dopo l'ultimo verdetto.
