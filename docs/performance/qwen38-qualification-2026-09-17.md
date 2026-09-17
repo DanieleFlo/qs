@@ -83,3 +83,27 @@ Il manifest resta NOT_VERIFIED. La ripetizione indipendente dell'oracolo,
 la verifica del rendering nativo e la localizzazione delle divergenze restano
 da completare; non sono errori corretti dal solo aggiornamento del comparatore.
 Report: `llama-1-vs-default-all.json` e relativo riepilogo.
+
+## FP16 preesistente: qualifica parziale, non bit-exact
+
+Il run `no-k-f16` completa il medesimo corpus disabilitando soltanto
+`DS4_CUDA_QWEN_NO_PREFILL_F16_GATE_UP=1`; il ramo UD mantiene il default.
+Tutte le sequenze greedy coincidono con DS4 default (9 × 32 token), così
+come tutti gli argmax nelle 576 posizioni greedy/teacher-forced. Gli otto
+casi brevi sono bit-exact; il caso lungo differisce già alla prima posizione
+e totalizza 15.891.672 float diversi nelle due passate. Tutti i logits sono
+finiti, overlap top-20 medio 1, cosine media 0,999999999582, errore massimo
+centrato 0,04783344 e MAE teacher-forced delle log-probabilità 1,18e-7.
+
+Il comparatore interno richiede bit-exact e restituisce quindi FAIL.
+L'esperimento isola una differenza di precisione preesistente, non dimostra
+un nuovo guadagno e non risolve le divergenze dei casi brevi con llama.cpp.
+Il default non viene modificato né dichiarato riqualificato. Restano aperti
+il confronto con entrambi i rami FP16 disabilitati e l'analisi della deriva
+contro l'oracolo. Report: `default-vs-no-k-f16-all.json`.
+
+Chiusura su richiesta dell'utente: nessun ulteriore benchmark avviato.
+Regressioni finali: 109 test, 106 PASS e 3 SKIP; controlli documentali 10/10.
+I tre SKIP restano verifiche live non eseguite. Gli errori del compilatore
+e del comparatore descritti sopra sono corretti; le divergenze numeriche e
+la normalizzazione Unicode sono limitazioni aperte, non bug dichiarati risolti.

@@ -15,6 +15,10 @@ Chiusura 2026-09-16: corretti anche il comparatore permissivo, la baseline R8
 UD incompleta e il calcolo dei costi target/NextN. Il vecchio REJECT FP16
 gate/up qui sotto non descrive il default corrente: quel ramo è attivo nel
 codice esistente e richiede ancora una riqualificazione dedicata.
+Verifica 2026-09-17: [corpus completo Qwen3.8](qwen38-qualification-2026-09-17.md)
+eseguito contro llama.cpp, con divergenze in tre sequenze greedy. Disabilitare
+il solo FP16 gate/up mantiene i token ma cambia i logits del caso lungo.
+Nessuna promozione dell'oracolo o riqualificazione bit-exact del ramo FP16.
 
 Ogni riga segue:
 

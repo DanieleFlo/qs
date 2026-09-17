@@ -16,22 +16,22 @@ Una modifica è utile soltanto se migliora il workload dichiarato di DS4 senza
 
 Il piano è stato esaminato fino ai punti A–E.
 
-- righe 3–41: **Risultato e perimetro** — Il piano è stato esaminato fino ai punti A–E.
-- righe 42–84: **Riproduzione e correttezza** — `tests/qwen_mtp_catchup_probe.c` controlla senza tracing:
-- righe 85–154: **Misure del carry** — Screening CLI, greedy, `--nothink`, 128 token, contesto allocato 2048,
-- righe 155–179: **Bug degli strumenti corretti** — input differenti, hardware/toolchain incompatibili, contesti effettivi o
-- righe 180–208: **Tentativi chiusi** — Per il punto 2 sono state confrontate anche KV complete e carry su 1, 2,
-- righe 209–225: **Artefatti locali** — Directory sotto `performance-results/`:
-- righe 226–258: **Punto 6 — input R8 condiviso e fusione selettiva (16 settembre)** — **REJECT per Qwen3.8: guadagno end-to-end sotto il 3%.** Provati separatamente
-- righe 259–311: **Punto 7 — dequantizzazione cooperativa IQ4_XS** — **KEEP e default su richiesta dell'utente**, che accetta per questo punto
-- righe 312–335: **Punto 8 — attention prefill a tile senza score globali** — **REJECT numerico.** Prototipo di fattibilità F32, una query per CTA e tile
-- righe 336–357: **Punto 9 — residuo e RMSNorm** — **REJECT al controllo del beneficio recuperabile**, soglia 2% invariata.
-- righe 358–378: **Punto 10 — convoluzione causale parallela nel tempo** — **REJECT prima dell'implementazione**, applicando il limite superiore
-- righe 379–429: **Punto A — contesto e output espliciti** — **KEEP come refactoring, nessun nuovo speedup rivendicato.** Le proiezioni
-- righe 430–452: **Punto B — workspace e durata dei buffer** — **Chiuso senza nuova prenotazione.** Il profilo della baseline registra sei
-- righe 453–469: **Punto C — accodamento e attesa GPU** — **REJECT; coincide con il pilota del punto 2.** Il prototipo separava enqueue
-- righe 470–501: **Punto D — due stream per le proiezioni** — **REJECT nello screening.** Prima misurato il costo eliminabile delle due
-- righe 502–527: **Punto E — emissione SSE e calcolo successivo** — **Chiuso al gate di profilazione, senza worker I/O aggiuntivo.** Probe del
+- righe 3–43: **Risultato e perimetro** — Il piano è stato esaminato fino ai punti A–E.
+- righe 44–86: **Riproduzione e correttezza** — `tests/qwen_mtp_catchup_probe.c` controlla senza tracing:
+- righe 87–156: **Misure del carry** — Screening CLI, greedy, `--nothink`, 128 token, contesto allocato 2048,
+- righe 157–181: **Bug degli strumenti corretti** — input differenti, hardware/toolchain incompatibili, contesti effettivi o
+- righe 182–210: **Tentativi chiusi** — Per il punto 2 sono state confrontate anche KV complete e carry su 1, 2,
+- righe 211–227: **Artefatti locali** — Directory sotto `performance-results/`:
+- righe 228–260: **Punto 6 — input R8 condiviso e fusione selettiva (16 settembre)** — **REJECT per Qwen3.8: guadagno end-to-end sotto il 3%.** Provati separatamente
+- righe 261–313: **Punto 7 — dequantizzazione cooperativa IQ4_XS** — **KEEP e default su richiesta dell'utente**, che accetta per questo punto
+- righe 314–337: **Punto 8 — attention prefill a tile senza score globali** — **REJECT numerico.** Prototipo di fattibilità F32, una query per CTA e tile
+- righe 338–359: **Punto 9 — residuo e RMSNorm** — **REJECT al controllo del beneficio recuperabile**, soglia 2% invariata.
+- righe 360–380: **Punto 10 — convoluzione causale parallela nel tempo** — **REJECT prima dell'implementazione**, applicando il limite superiore
+- righe 381–431: **Punto A — contesto e output espliciti** — **KEEP come refactoring, nessun nuovo speedup rivendicato.** Le proiezioni
+- righe 432–454: **Punto B — workspace e durata dei buffer** — **Chiuso senza nuova prenotazione.** Il profilo della baseline registra sei
+- righe 455–471: **Punto C — accodamento e attesa GPU** — **REJECT; coincide con il pilota del punto 2.** Il prototipo separava enqueue
+- righe 472–503: **Punto D — due stream per le proiezioni** — **REJECT nello screening.** Prima misurato il costo eliminabile delle due
+- righe 504–529: **Punto E — emissione SSE e calcolo successivo** — **Chiuso al gate di profilazione, senza worker I/O aggiuntivo.** Probe del
 
 ## [Progressione di ottimizzazione CUDA — Qwen3.6 27B Q4_K_S su RTX 3090](qwen36-cuda-optimization-progression.md)
 
@@ -171,28 +171,28 @@ Velocizzare il percorso CUDA di Qwen3.6 27B Q4_K_M senza degradare la
 
 Aggiornamento 2026-09-09: audit operativo Qwen3.8/Qwen3.6.
 
-- righe 8–36: **Contratto** — Aggiornamento 2026-09-09: audit operativo Qwen3.8/Qwen3.6.
-- righe 37–113: **Stato corrente** — espliciti, parità bit-exact anche con contesto legacy alterato.
-- righe 114–129: **Soluzioni mantenute** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 130–161: **Soluzioni scartate o non promosse** — Sezione strutturale; consultare il contenuto locale indicato.
-- righe 162–424: **Parity Q8_1/MMVQ sul riferimento storico, 2026-08-12** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
-  - righe 164–181: **FATTO DIMOSTRATO — dispatch reale** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
-  - righe 182–197: **FATTO DIMOSTRATO — A/B/C al greedy step 3** — Configurazione congelata: GGUF Q4_K_S SHA-256 `ff857ba9…232aca`, RTX 3090
-  - righe 198–226: **FATTO DIMOSTRATO — primitive e quantizer parity** — Un entry point diagnostico temporaneo ha alimentato i kernel DS4 e llama.cpp
-  - righe 227–239: **FATTO DIMOSTRATO — frozen output head e scala FP16** — Con lo stesso hidden pre-output-norm, il solo output head F32 riproduce
-  - righe 240–248: **INFERENZA E DECISIONE** — La precisione Q8_1 può cambiare una decisione a margine basso anche quando DS4
-  - righe 249–281: **FATTO DIMOSTRATO — sensibilità Q4/Q5/Q6** — Due selettori temporanei, poi rimossi, hanno separato Q4-only e Q5-only.
-  - righe 282–301: **FATTO DIMOSTRATO — precision staircase** — La ricostruzione offline dello stesso `output_norm` F32 e il risultato
-  - righe 302–319: **FATTO DIMOSTRATO — Q8_1 LSQ offline e proiezione** — Sul vero vettore critico, un passo LSQ per blocco da 32 riduce activation MAE
-  - righe 320–424: **FATTO DIMOSTRATO — residuo diffuso e Q8_1-R8** — Il simulatore offline ha decodificato direttamente le righe 310 e 728 del vero
-- righe 425–449: **Analisi del residuo a 8K, 2026-08-11** — Il conto dei soli byte di peso per operazione è: ricorrente 3,426 GB, full
-- righe 450–470: **Esperimenti long-context 2026-08-11** — Fonti recuperate: guida locale `problem-to-source.md`, FlashDecoding++,
-- righe 471–522: **Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12** — È stato ispezionato vLLM al commit fissato
-- righe 523–602: **Stabilizzazione R8 long-context e riuso GQA, 2026-08-12** — La riproduzione a 10.666 token ha separato due fenomeni che prima venivano
-- righe 603–632: **Curva completa 2K–30K e soglia split-K, 2026-08-13** — La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,
-- righe 633–678: **MTP long-context e crossover split-K, 2026-08-13** — La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per
-- righe 679–701: **Coda ordinata** — 1.
-- righe 702–719: **Template per il prossimo record** — ID / data / commit / dirty state:
+- righe 8–40: **Contratto** — Aggiornamento 2026-09-09: audit operativo Qwen3.8/Qwen3.6.
+- righe 41–117: **Stato corrente** — espliciti, parità bit-exact anche con contesto legacy alterato.
+- righe 118–133: **Soluzioni mantenute** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 134–165: **Soluzioni scartate o non promosse** — Sezione strutturale; consultare il contenuto locale indicato.
+- righe 166–428: **Parity Q8_1/MMVQ sul riferimento storico, 2026-08-12** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
+  - righe 168–185: **FATTO DIMOSTRATO — dispatch reale** — Il checkout LM Studio esatto `1a064ab0921238c1daa397d6f4a900ef33884de2`
+  - righe 186–201: **FATTO DIMOSTRATO — A/B/C al greedy step 3** — Configurazione congelata: GGUF Q4_K_S SHA-256 `ff857ba9…232aca`, RTX 3090
+  - righe 202–230: **FATTO DIMOSTRATO — primitive e quantizer parity** — Un entry point diagnostico temporaneo ha alimentato i kernel DS4 e llama.cpp
+  - righe 231–243: **FATTO DIMOSTRATO — frozen output head e scala FP16** — Con lo stesso hidden pre-output-norm, il solo output head F32 riproduce
+  - righe 244–252: **INFERENZA E DECISIONE** — La precisione Q8_1 può cambiare una decisione a margine basso anche quando DS4
+  - righe 253–285: **FATTO DIMOSTRATO — sensibilità Q4/Q5/Q6** — Due selettori temporanei, poi rimossi, hanno separato Q4-only e Q5-only.
+  - righe 286–305: **FATTO DIMOSTRATO — precision staircase** — La ricostruzione offline dello stesso `output_norm` F32 e il risultato
+  - righe 306–323: **FATTO DIMOSTRATO — Q8_1 LSQ offline e proiezione** — Sul vero vettore critico, un passo LSQ per blocco da 32 riduce activation MAE
+  - righe 324–428: **FATTO DIMOSTRATO — residuo diffuso e Q8_1-R8** — Il simulatore offline ha decodificato direttamente le righe 310 e 728 del vero
+- righe 429–453: **Analisi del residuo a 8K, 2026-08-11** — Il conto dei soli byte di peso per operazione è: ricorrente 3,426 GB, full
+- righe 454–474: **Esperimenti long-context 2026-08-11** — Fonti recuperate: guida locale `problem-to-source.md`, FlashDecoding++,
+- righe 475–526: **Trasferimento vLLM/Marlin e visibilità R8, 2026-08-12** — È stato ispezionato vLLM al commit fissato
+- righe 527–606: **Stabilizzazione R8 long-context e riuso GQA, 2026-08-12** — La riproduzione a 10.666 token ha separato due fenomeni che prima venivano
+- righe 607–636: **Curva completa 2K–30K e soglia split-K, 2026-08-13** — La nuova suite non rapida `context-curve-full` misura 15 frontiere a passo 2K,
+- righe 637–682: **MTP long-context e crossover split-K, 2026-08-13** — La curva server target-only 0–28K a passo 2K, capacità 28.737, due run per
+- righe 683–705: **Coda ordinata** — 1.
+- righe 706–723: **Template per il prossimo record** — ID / data / commit / dirty state:
 
 ## [Qwen3.8 agentico: `SEARCH` statica e MTP grammar-aware](qwen38-agent-search-static-2026-08-27.md)
 
@@ -211,4 +211,6 @@ Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del
 
 RTX 3090 24 GB, WSL Ubuntu 24.04, CUDA 12.4, sm_86, driver 610.62.
 
-- righe 8–57: **Ambiente e metodo** — RTX 3090 24 GB, WSL Ubuntu 24.04, CUDA 12.4, sm_86, driver 610.62.
+- righe 8–58: **Ambiente e metodo** — RTX 3090 24 GB, WSL Ubuntu 24.04, CUDA 12.4, sm_86, driver 610.62.
+- righe 59–86: **Oracolo completo: esito FAIL, nessuna promozione** — DS4 default e llama.cpp completano tutti i nove casi, con inventari validi
+- righe 87–109: **FP16 preesistente: qualifica parziale, non bit-exact** — Il run `no-k-f16` completa il medesimo corpus disabilitando soltanto
