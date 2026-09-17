@@ -782,7 +782,6 @@ int main(int argc, char **argv) {
     uint64_t ssd_streaming_cache_bytes = 0;
     uint32_t ssd_streaming_preload_experts = 0;
     uint32_t prefill_chunk = 0;
-    bool quality = false;
     const char *output_head_hidden_path = NULL;
     const char *output_head_logits_path = NULL;
 
@@ -798,8 +797,6 @@ int main(int argc, char **argv) {
             cuda_tensor_parallel = true;
         } else if (!strcmp(arg, "--ssd-streaming")) {
             ssd_streaming = true;
-        } else if (!strcmp(arg, "--quality")) {
-            quality = true;
         } else if (!strcmp(arg, "--prefill-chunk")) {
             prefill_chunk = (uint32_t)parse_positive_int(need_arg(&i, argc, argv, arg), arg);
         } else if (!strcmp(arg, "--output-head-hidden")) {
