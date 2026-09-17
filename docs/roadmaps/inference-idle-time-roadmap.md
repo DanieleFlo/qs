@@ -54,3 +54,74 @@ Commit dopo ogni punto completato e verificato, push finale su origin.
   Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
 - `rg` assente in WSL: fallback a grep/find. CUDA presente in /usr/local/cuda.
 - Nessuna modifica al codice e nessun benchmark ancora eseguito.
+
+### 0. Baseline e gate iniziali (completato)
+
+Build esplicita: `make -j2 ds4 ds4-server ds4-bench ds4_test ds4_server_test CUDA_ARCH=sm_86`.
+Su Linux `make` senza target stampa l'help: non costituisce build.
+Binario baseline congelato: `performance-results/idle-time/ds4-server-baseline`,
+SHA256 `14b0671747ea6022b2a40617429445a794caf0352a313eee4c991f83a5ad6d4d`.
+Modello SHA256 `75bc9c8adba2842e72f0ab5201aaa07133c5010b566305c09187fcbdcd364017`.
+
+Artefatti: `performance-results/idle-baseline-curve/experiment.json`,
+`idle-baseline-constrained/experiment.json`, `idle-time/*baseline*.log`.
+Curva direzionale: 64 token, due ripetizioni, contesti effettivi 2048/8192/16384,
+allocazione 16449, prefill chunk 2048, no thinking, prompt technical-explanation.
+A 16K: mediana 21.30 tok/s; seconda misura 3090.905 ms di decode,
+3084.687 ms eval, 5.545 ms sampling, 0.673 ms residuo.
+Nel tool richiesto: 23.48 tok/s e 879.54 ms CPU constraint; JSON: 31.29 tok/s,
+9.76 ms CPU constraint. Sono misure direzionali, non una promozione.
+
+Nota provenienza: l'harness curva calcola l'hash del binario alla fine del run;
+il processo baseline aveva gia caricato l'eseguibile originale quando il link
+successivo ha sostituito ds4-server. Il campo binary_sha256 della prima curva
+indica erroneamente il prototipo begin (2cb894c...). L'identita effettivamente
+eseguita e quella del baseline congelato sopra. Non usare quel report per una
+promozione automatica; i confronti successivi usano solo binari congelati.
+
+Gate: ds4_server_test PASS; ds4_test --server --constraint-trie
+--qwen35-layer-pattern PASS (quest'ultimo nome storico verifica il layout).
+92 test Python: 89 PASS, 3 SKIP, dopo ripetizione a macchina libera.
+Il primo tentativo aveva tre FAIL di compatibilita dovuti al lock del server
+ancora attivo, non a un difetto funzionale: log conservato e rerun passato.
+Non avviati benchmark Qwen3.6. Le fixture di rifiuto sidecar errato verificano
+Qwen3.8 senza eseguire inferenza Qwen3.6.
+
+### 1. Begin/finish + postprocessing (completato, REJECT standalone)
+
+Implementato prototipo batched con enqueue separato da wait. Detokenizzazione,
+append, thinking e tracker JSON/DSML eseguiti durante eval; output/trace dopo
+successo, drain prima di qualunque uscita; testo ripristinato su errore.
+Build senza warning e ds4_server_test PASS.
+Confronto direzionale identico --batched-session 1, context 4096, warm-up 1,
+ripetizioni 2, suite constrained direction:
+
+| Workload | Baseline tok/s | Begin/finish tok/s |
+| --- | ---: | ---: |
+| DSML tool | 21.39 | 20.57 |
+| JSON nested | 27.52 | 27.63 |
+
+Output semantici conservati. Nessun beneficio convincente: non promuovere e
+non spendere una suite slow su questa variante. La curva baseline dimostra
+che il postprocessing puro disponibile e troppo piccolo. Artefatti:
+`idle-batched-baseline`, `idle-batched-begin`; binari in `idle-time`.
+Il supporto begin/finish viene riutilizzato soltanto per il successivo prototipo.
+
+### 2a. Lookahead dei constraint engine-only (completato, REJECT)
+
+L'analisi corrente non e CPU-only rispetto alla sessione: legge logits e
+scrive sample_masked, sample_allowed e seriale dell'analisi. Non e sicuro
+spostarla semplicemente fra begin e finish.
+Provata una variante conservativa: anticipare build_constrained_forced_tokens
+soltanto quando tutte le analisi restano nel vocabolario immutabile dell'engine;
+se serve un'analisi session-scoped, annullare il lookahead e usare il percorso
+normale. Niente logits letti durante eval, niente RNG anticipato.
+Build senza warning, ds4_server_test PASS; output dei due workload invariati.
+DSML 21.28 tok/s, JSON 27.61 tok/s contro 21.39/27.52 baseline.
+Solo ~31.47 ms di CPU riutilizzati su ~893 ms constraint nel tool, 0 nel JSON:
+molto meno del 70-90% atteso. `lookahead_cpu_reused` NON misura overlap GPU
+reale: puo includere CPU dopo completamento GPU e non viene spacciato per tale.
+I contatori di fase del prototipo includono doppio conteggio eval/lookahead;
+non usare il residuo come prova prestazionale. Usare il wall time.
+Patch e riproduttori conservati in `performance-results/idle-time`;
+nessuna di queste modifiche sperimentali e nel codice di produzione.

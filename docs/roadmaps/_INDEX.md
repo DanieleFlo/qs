@@ -182,8 +182,11 @@ Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
 - righe 3–13: **Obiettivo e invarianti** — Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
 - righe 14–26: **Metodo e criteri** — Ogni esperimento registra ipotesi, modifica, comandi, artefatti, correttezza,
 - righe 27–47: **Sequenza** — streaming e sampled MTP.
-- righe 48–56: **Registro** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
-  - righe 50–56: **Preparazione** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
+- righe 48–127: **Registro** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
+  - righe 50–57: **Preparazione** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
+  - righe 58–89: **0. Baseline e gate iniziali (completato)** — Build esplicita: `make -j2 ds4 ds4-server ds4-bench ds4_test ds4_server_test CUDA_ARCH=sm_86`.
+  - righe 90–109: **1. Begin/finish + postprocessing (completato, REJECT standalone)** — Implementato prototipo batched con enqueue separato da wait.
+  - righe 110–127: **2a. Lookahead dei constraint engine-only (completato, REJECT)** — L'analisi corrente non e CPU-only rispetto alla sessione: legge logits e
 
 ## [Roadmap di integrazione Qwen3.8 27B UD-Q4_K_S](qwen38-implementation-roadmap.md)
 
