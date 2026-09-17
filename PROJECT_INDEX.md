@@ -166,6 +166,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/performance/qwen-inference-audit-2026-09-09.md` — verifica GPU degli
   interventi dell'audit, motivi di rigetto, correzione del carry MTP e
   dequantizzazione cooperativa IQ4_XS, con misure e regressioni.
+- `docs/performance/qwen38-qualification-2026-09-17.md` — confronto numerico
+  dell'intero corpus Qwen3.8 con llama.cpp e verifica dei rami FP16 preesistenti.
 - `docs/research/cuda/` — componente della knowledge base dedicato a toolchain,
   profiling, SASS/resource usage, primitive Ampere `sm_86` e mappa delle
   prossime ipotesi CUDA falsificabili per DS4.

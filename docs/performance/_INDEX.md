@@ -206,3 +206,9 @@ Questo ciclo avvicina il decode del server agentico Qwen3.8 alla velocità del
 - righe 157–224: **Matrice temperatura, thinking e MTP** — Il gate `tests/test_server_sampling_matrix.py` esplicita il prodotto cartesiano
 - righe 225–273: **Fonti primarie e scelte implementative** — I valori campionati non sono inventati dal benchmark.
 - righe 274–289: **Test live ripetibile** — `tests/run_agent_story_live.ps1` avvia in sequenza target-only e MTP, abilita il
+
+## [Qualificazione numerica Qwen3.8 — 17 settembre 2026](qwen38-qualification-2026-09-17.md)
+
+RTX 3090 24 GB, WSL Ubuntu 24.04, CUDA 12.4, sm_86, driver 610.62.
+
+- righe 8–57: **Ambiente e metodo** — RTX 3090 24 GB, WSL Ubuntu 24.04, CUDA 12.4, sm_86, driver 610.62.

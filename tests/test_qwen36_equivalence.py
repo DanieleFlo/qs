@@ -135,6 +135,28 @@ class Qwen36EquivalenceTests(unittest.TestCase):
         self.assertAlmostEqual(result["cosine_similarity"], 1.0)
         self.assertAlmostEqual(result["js_divergence"], 0.0)
 
+    def test_matching_native_tokenizers_do_not_hide_canonical_mismatch(self) -> None:
+        values = np.array([[3.0, 2.0, 1.0]], dtype=np.float32)
+        for native_status in ("verified", "tokenizer_only"):
+            with self.subTest(native_status=native_status):
+                runs = [self.make_run(f"{native_status}-{side}", values, native_status=native_status)
+                        for side in ("left", "right")]
+                for run in runs:
+                    path = run / "responses/case.json"
+                    response = load_json(path)
+                    response["native_prompt_token_ids"] = [1, 3, 2]
+                    write_json(path, response)
+                    write_json(run / "prompts/case.tokens.json", [1, 3, 2])
+                    self.refresh_inventory(run)
+                report, code = compare_runs(load_run(runs[0]), load_run(runs[1]),
+                                            self.manifest, "ds4-vs-ds4", 3, False)
+                rendering = report["cases"][0]["rendering"]
+                self.assertTrue(rendering["token_ids_equal"])
+                self.assertFalse(rendering["left_matches_canonical"])
+                self.assertFalse(rendering["right_matches_canonical"])
+                self.assertEqual(report["status"], "FAIL" if native_status == "verified" else "NOT_VERIFIED")
+                self.assertEqual(code, 1 if native_status == "verified" else 3)
+
     def test_ranking_metrics_detect_inversion_and_partial_overlap(self) -> None:
         left = np.array([5.0, 4.0, 3.0, 0.0], dtype=np.float32)
         right = np.array([3.0, 4.0, 0.0, 5.0], dtype=np.float32)

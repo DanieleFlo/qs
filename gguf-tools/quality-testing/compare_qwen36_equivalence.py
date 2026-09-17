@@ -306,6 +306,10 @@ def _rendering_metrics(left: RunData, right: RunData, case_id: str) -> dict[str,
     require(isinstance(left_tokens, list) and isinstance(right_tokens, list), f"{case_id}: native prompt tokens are missing")
     left_status = left_response.get("native_rendering_status", "verified")
     right_status = right_response.get("native_rendering_status", "verified")
+    # Two native tokenizers can agree with each other while both differ from
+    # the upstream canonical input (for example, Unicode NFC normalization).
+    left_canonical_tokens = left_response.get("canonical_prompt_token_ids", left_response.get("prompt_token_ids"))
+    right_canonical_tokens = right_response.get("canonical_prompt_token_ids", right_response.get("prompt_token_ids"))
     return {
         "status": "verified" if left_status == right_status == "verified" else "not_verified",
         "bytes_equal": left_bytes == right_bytes,
@@ -316,6 +320,8 @@ def _rendering_metrics(left: RunData, right: RunData, case_id: str) -> dict[str,
         "right_bytes": len(right_bytes),
         "left_tokens": len(left_tokens),
         "right_tokens": len(right_tokens),
+        "left_matches_canonical": left_bytes == left_canonical and left_tokens == left_canonical_tokens,
+        "right_matches_canonical": right_bytes == right_canonical and right_tokens == right_canonical_tokens,
     }
 
 
@@ -479,6 +485,15 @@ def compare_runs(
                     rendering["first_byte_difference"] if not rendering["bytes_equal"]
                     else rendering["first_token_difference"]
                 )
+        if rendering["status"] == "verified":
+            for side in ("left", "right"):
+                if not rendering[f"{side}_matches_canonical"]:
+                    failures.append(f"{case_id}: {side} native rendering differs from canonical input")
+                    if first_divergence is None:
+                        first_divergence = {
+                            "case_id": case_id, "pass": "rendering", "position": None,
+                            "metric": f"{side}_matches_canonical", "left": True, "right": False,
+                        }
         left_greedy = [int(value) for value in left_response["greedy_token_ids"]]
         right_greedy = [int(value) for value in right_response["greedy_token_ids"]]
         left_greedy_bytes = _decode_hex_bytes(left_response.get("greedy_bytes_hex"), f"{case_id}: left greedy bytes")

@@ -2277,6 +2277,25 @@
               "summary": "`tests/run_agent_story_live.ps1` avvia in sequenza target-only e MTP, abilita il"
             }
           ]
+        },
+        {
+          "path": "docs/performance/qwen38-qualification-2026-09-17.md",
+          "sections": [
+            {
+              "title": "Qualificazione numerica Qwen3.8 — 17 settembre 2026",
+              "level": 1,
+              "start": 1,
+              "end": 57,
+              "summary": "Seguito dell'audit dell'inferenza."
+            },
+            {
+              "title": "Ambiente e metodo",
+              "level": 2,
+              "start": 8,
+              "end": 57,
+              "summary": "RTX 3090 24 GB, WSL Ubuntu 24.04, CUDA 12.4, sm_86, driver 610.62."
+            }
+          ]
         }
       ]
     },

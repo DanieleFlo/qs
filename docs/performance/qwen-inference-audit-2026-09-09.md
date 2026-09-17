@@ -8,6 +8,8 @@ richiesto dall'utente) e il refactoring del contesto/output Qwen (punto A).
 Gli altri punti sono chiusi ai rispettivi gate, con motivi e misure sotto.
 Restano aperti l'oracolo completo Qwen3.8 e la riqualificazione del ramo
 FP16 già presente: non sono stati dichiarati superati dai confronti interni.
+Il [seguito del 17 settembre](qwen38-qualification-2026-09-17.md) esegue
+l'intero corpus contro llama.cpp: emergono divergenze, quindi nessuna promozione.
 
 La correzione iniziale riguarda il carry MTP nel prefill token per token:
 `qwen_graph_forward_token_mode` produce `output_norm` anche quando non servono
