@@ -3489,7 +3489,7 @@
               "title": "Roadmap: tempi morti CPU/GPU nell'inferenza Qwen",
               "level": 1,
               "start": 1,
-              "end": 127,
+              "end": 162,
               "summary": "Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza"
             },
             {
@@ -3517,7 +3517,7 @@
               "title": "Registro",
               "level": 2,
               "start": 48,
-              "end": 127,
+              "end": 162,
               "summary": "Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review."
             },
             {
@@ -3545,8 +3545,29 @@
               "title": "2a. Lookahead dei constraint engine-only (completato, REJECT)",
               "level": 3,
               "start": 110,
-              "end": 127,
+              "end": 128,
               "summary": "L'analisi corrente non e CPU-only rispetto alla sessione: legge logits e"
+            },
+            {
+              "title": "6a. Provenienza dei benchmark server (completato, KEEP correctness)",
+              "level": 3,
+              "start": 129,
+              "end": 139,
+              "summary": "Durante il primo run e emerso che server-curve/constrained-server calcolavano"
+            },
+            {
+              "title": "3. Readback pinned: gate numerico intermedio",
+              "level": 3,
+              "start": 140,
+              "end": 153,
+              "summary": "Prototipo CUDA con un buffer pinned persistente, stream di copia nonblocking,"
+            },
+            {
+              "title": "4. SSE bounded: gate trasporto intermedio",
+              "level": 3,
+              "start": 154,
+              "end": 162,
+              "summary": "Prototipo con writer request-scoped e limite 256 KiB; send/poll nel consumer,"
             }
           ]
         },

@@ -359,6 +359,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def verify_binary_identity(binary: Path, expected_sha256: str) -> str:
+    """Reject a relink during a run instead of attributing its samples to it."""
+    if sha256(binary) != expected_sha256:
+        raise HarnessError(
+            f"server binary changed during benchmark: {binary}; "
+            "rerun with an immutable binary copy"
+        )
+    return expected_sha256
+
+
 def cached_sha256(path: Path, cache_root: Path) -> str:
     """Avoid rereading a multi-GiB GGUF on every kernel iteration."""
     stat = path.stat()
@@ -2294,6 +2304,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
     for path, label in ((binary, "server binary"), (model, "model")):
         if not path.exists():
             raise HarnessError(f"{label} does not exist: {path}")
+    binary_sha256 = sha256(binary)
     workloads = load_workloads(Path(args.workloads), args.suite)
     contexts = [int(item["context"]) for item in workloads]
     generation_tokens = int(workloads[0]["generation_tokens"])
@@ -2477,7 +2488,7 @@ def benchmark_server_curve(args: argparse.Namespace) -> int:
         "provenance": {
             "git_commit": git_value("rev-parse", "HEAD"),
             "git_dirty": bool(git_value("status", "--porcelain")),
-            "binary": str(binary.resolve()), "binary_sha256": sha256(binary),
+            "binary": str(binary.resolve()), "binary_sha256": verify_binary_identity(binary, binary_sha256),
             "model": str(model.resolve()),
             "model_sha256": cached_sha256(model, Path(args.results)),
             "environment_overrides": dict(item.split("=", 1) for item in args.env),
@@ -2524,6 +2535,7 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
     for path, label in ((binary, "server binary"), (model, "model")):
         if not path.exists():
             raise HarnessError(f"{label} does not exist: {path}")
+    binary_sha256 = sha256(binary)
     workload_path = Path(
         args.jsonschemabench_subset
         if args.jsonschemabench_subset else args.workloads
@@ -2832,7 +2844,7 @@ def benchmark_constrained_server(args: argparse.Namespace) -> int:
             "git_commit": git_value("rev-parse", "HEAD"),
             "git_dirty": bool(git_value("status", "--porcelain")),
             "binary": str(binary.resolve()),
-            "binary_sha256": sha256(binary),
+            "binary_sha256": verify_binary_identity(binary, binary_sha256),
             "model": str(model.resolve()),
             "model_sha256": cached_sha256(model, Path(args.results)),
             "workloads": str(workload_path.resolve()),

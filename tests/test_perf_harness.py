@@ -21,6 +21,18 @@ SPEC.loader.exec_module(HARNESS)
 
 
 class PerfHarnessTests(unittest.TestCase):
+    def test_server_binary_relink_cannot_change_result_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "server"
+            binary.write_bytes(b"baseline executable")
+            identity = HARNESS.sha256(binary)
+            self.assertEqual(HARNESS.verify_binary_identity(binary, identity), identity)
+            replacement = binary.with_suffix(".new")
+            replacement.write_bytes(b"candidate executable")
+            replacement.replace(binary)
+            with self.assertRaisesRegex(HARNESS.HarnessError, "changed during benchmark"):
+                HARNESS.verify_binary_identity(binary, identity)
+
     def test_advertised_model_id_uses_the_server_canonical_id(self) -> None:
         payload = {
             "object": "list",

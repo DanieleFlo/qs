@@ -125,3 +125,38 @@ I contatori di fase del prototipo includono doppio conteggio eval/lookahead;
 non usare il residuo come prova prestazionale. Usare il wall time.
 Patch e riproduttori conservati in `performance-results/idle-time`;
 nessuna di queste modifiche sperimentali e nel codice di produzione.
+
+### 6a. Provenienza dei benchmark server (completato, KEEP correctness)
+
+Durante il primo run e emerso che server-curve/constrained-server calcolavano
+l'hash dell'eseguibile dopo la fine della misura. Un link concorrente poteva
+attribuire i risultati del processo originale al nuovo binario. Ora entrambi
+congelano l'hash prima del run e rifiutano il report se il file e cambiato.
+Test di regressione: sostituzione atomica del binario fra lettura iniziale e
+validazione finale; il report deve essere rifiutato. Suite test_perf_harness PASS.
+Questa e una correzione dell'affidabilita delle misure, non uno speedup.
+Tutti i nuovi esperimenti locali usano copie immutabili degli eseguibili.
+
+### 3. Readback pinned: gate numerico intermedio
+
+Prototipo CUDA con un buffer pinned persistente, stream di copia nonblocking,
+evento sullo stream produttore e attesa dell'evento di fine copia. Per il decode
+ordinario basta un buffer: il sampling precedente e terminato prima del riuso.
+Non introdotto double buffering senza un consumatore simultaneo reale.
+Matematica dei kernel invariata; solo il confine finale Qwen usa la variante.
+32 righe full-vocabulary da 248320 float a ciascuno dei contesti 128/2048/8192/
+16384: zero differenze bit-exact e zero valori non finiti (128 righe totali).
+Probe locale: idle-time/readback_probe.c; log readback-correctness.log.
+Il primo tentativo di compilare il probe usava ids anziche v per ds4_tokens:
+corretto prima di eseguire il test. Build del candidato senza warning.
+Conferma end-to-end ancora in corso: nessuna promozione.
+
+### 4. SSE bounded: gate trasporto intermedio
+
+Prototipo con writer request-scoped e limite 256 KiB; send/poll nel consumer,
+ordine FIFO e drain prima della risposta finale. Test diretto di oltre 768 KiB
+su socketpair con buffer piccolo: ordine e completezza PASS, backpressure PASS.
+Disconnessione e distruzione del writer PASS. Il primo test di disconnessione
+terminava per SIGPIPE: il runner di test non installava l'handler del server;
+allineato il test all'handler reale e ripetuto con successo. Nessun cambiamento
+alla gestione SIGPIPE di produzione. Beneficio HTTP ancora da misurare.
