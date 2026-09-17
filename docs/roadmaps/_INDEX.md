@@ -175,6 +175,16 @@ Queste regole sono vincolanti per tutti i macro-task.
 - righe 126–138: **Limiti intenzionali** — al primo `</think>`; subito dopo deve iniziare il documento JSON, senza whitespace
 - righe 139–145: **Ultima verifica model-backed** — Chat e Responses con thinking, tool senza argomenti e tentativi adversariali
 
+## [Roadmap: tempi morti CPU/GPU nell'inferenza Qwen](inference-idle-time-roadmap.md)
+
+Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
+
+- righe 3–13: **Obiettivo e invarianti** — Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
+- righe 14–26: **Metodo e criteri** — Ogni esperimento registra ipotesi, modifica, comandi, artefatti, correttezza,
+- righe 27–47: **Sequenza** — streaming e sampled MTP.
+- righe 48–56: **Registro** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
+  - righe 50–56: **Preparazione** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
+
 ## [Roadmap di integrazione Qwen3.8 27B UD-Q4_K_S](qwen38-implementation-roadmap.md)
 
 Portare `Qwen3.8-27B-UD-Q4_K_S.gguf` allo stesso livello funzionale del target

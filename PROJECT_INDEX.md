@@ -207,6 +207,8 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `docs/hardware/` — inventario della macchina RTX 3090 e note di riferimento
   su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
+- `docs/roadmaps/inference-idle-time-roadmap.md` — roadmap e registro degli esperimenti di sovrapposizione CPU/GPU e riduzione delle attese Qwen3.8.
+
 ### Build ed eseguibili
 
 - `Makefile` — selezione piattaforma, compilazione C/Objective-C/CUDA/ROCm,

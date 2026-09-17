@@ -3483,6 +3483,53 @@
           ]
         },
         {
+          "path": "docs/roadmaps/inference-idle-time-roadmap.md",
+          "sections": [
+            {
+              "title": "Roadmap: tempi morti CPU/GPU nell'inferenza Qwen",
+              "level": 1,
+              "start": 1,
+              "end": 56,
+              "summary": "Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza"
+            },
+            {
+              "title": "Obiettivo e invarianti",
+              "level": 2,
+              "start": 3,
+              "end": 13,
+              "summary": "Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza"
+            },
+            {
+              "title": "Metodo e criteri",
+              "level": 2,
+              "start": 14,
+              "end": 26,
+              "summary": "Ogni esperimento registra ipotesi, modifica, comandi, artefatti, correttezza,"
+            },
+            {
+              "title": "Sequenza",
+              "level": 2,
+              "start": 27,
+              "end": 47,
+              "summary": "streaming e sampled MTP."
+            },
+            {
+              "title": "Registro",
+              "level": 2,
+              "start": 48,
+              "end": 56,
+              "summary": "Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review."
+            },
+            {
+              "title": "Preparazione",
+              "level": 3,
+              "start": 50,
+              "end": 56,
+              "summary": "Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review."
+            }
+          ]
+        },
+        {
           "path": "docs/roadmaps/qwen38-implementation-roadmap.md",
           "sections": [
             {
