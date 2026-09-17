@@ -183,3 +183,33 @@ Il processo gia attivo e stato lasciato completare come richiesto dall'utente.
 Nessuna barriera globale viene sostituita nel codice di produzione.
 La primitiva sperimentale resta nei binari congelati per le prove sampled MTP;
 il codice definitivo verra ripulito dopo l'ultimo verdetto.
+
+### 4. SSE asincrono (completato, REJECT per questi workload)
+
+Risultati `idle-sse-fast/results.json` e `idle-sse-slow/results.json`:
+Qwen3.8 target-only, 64 token, seed fisso, warm-up 1 e due ripetizioni;
+stesso binario con writer abilitato/disabilitato. Output byte-identico PASS,
+marker finale SSE presente. Test coda/ordine/disconnessione sopra: PASS.
+
+| Client e contesto | Baseline decode tok/s | Writer decode tok/s |
+| --- | ---: | ---: |
+| Rapido, 128 | 28.220 | 26.855 |
+| Rapido, 8192 | 23.436 | 23.581 |
+| Lento, 128 | 27.066 | 26.996 |
+
+Client lento: SO_RCVBUF 1024, server SO_SNDBUF 4096, letture da 128 byte con
+30 ms di ritardo. Tempo HTTP mediano completo: 6834.70 ms baseline,
+7073.76 ms writer. La metrica server include il drain della coda, evitando di
+presentare l'accumulo in memoria come miglioramento end-to-end.
+Nessun vantaggio significativo in questi casi: non mantenere thread, TLS,
+coda e nuove condizioni di errore senza un beneficio misurato. Il risultato
+non esclude utilita con client bloccati o WAN; quella non e una dimostrazione
+di speedup per questo target locale. Il socket possiede gia buffering e un
+timeout di stallo di 2 secondi. Non introdotta una modalita di flush a due
+token, dato il residuo trascurabile misurato e l'assenza di un collo di bottiglia.
+
+Fonti usate nell'audit delle dipendenze CUDA: documentazione NVIDIA
+[stream synchronization](https://docs.nvidia.com/cuda/cuda-runtime-api/stream-sync-behavior.html)
+e [event management](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__EVENT.html).
+Lo stream nonblocking non sincronizza implicitamente con quello legacy:
+il prototipo usa quindi eventi produttore/consumatore espliciti.

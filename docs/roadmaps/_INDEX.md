@@ -182,7 +182,7 @@ Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
 - righe 3–13: **Obiettivo e invarianti** — Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
 - righe 14–26: **Metodo e criteri** — Ogni esperimento registra ipotesi, modifica, comandi, artefatti, correttezza,
 - righe 27–47: **Sequenza** — streaming e sampled MTP.
-- righe 48–185: **Registro** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
+- righe 48–215: **Registro** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
   - righe 50–57: **Preparazione** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
   - righe 58–89: **0. Baseline e gate iniziali (completato)** — Build esplicita: `make -j2 ds4 ds4-server ds4-bench ds4_test ds4_server_test CUDA_ARCH=sm_86`.
   - righe 90–109: **1. Begin/finish + postprocessing (completato, REJECT standalone)** — Implementato prototipo batched con enqueue separato da wait.
@@ -190,7 +190,8 @@ Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
   - righe 129–139: **6a. Provenienza dei benchmark server (completato, KEEP correctness)** — Durante il primo run e emerso che server-curve/constrained-server calcolavano
   - righe 140–153: **3. Readback pinned: gate numerico intermedio** — Prototipo CUDA con un buffer pinned persistente, stream di copia nonblocking,
   - righe 154–163: **4. SSE bounded: gate trasporto intermedio** — Prototipo con writer request-scoped e limite 256 KiB; send/poll nel consumer,
-  - righe 164–185: **3. Conferma stream-sync/pinned (completato, REJECT)** — `idle-readback-confirm/results.json`: stesso binario congelato
+  - righe 164–186: **3. Conferma stream-sync/pinned (completato, REJECT)** — `idle-readback-confirm/results.json`: stesso binario congelato
+  - righe 187–215: **4. SSE asincrono (completato, REJECT per questi workload)** — Risultati `idle-sse-fast/results.json` e `idle-sse-slow/results.json`:
 
 ## [Roadmap di integrazione Qwen3.8 27B UD-Q4_K_S](qwen38-implementation-roadmap.md)
 
