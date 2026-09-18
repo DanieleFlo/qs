@@ -554,6 +554,19 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   atomico dei checkpoint mancanti, corrotti o troncati; i casi che verificano
   un nome preciso usano `tool_choice=required` con un unico nome consentito,
   separando il protocollo dalla propensione del modello a chiamare un tool.
+- `tests/test_qs_client_live.py` — accettazione opt-in con `uv run qs`: esegue
+  il prompt originale due volte sullo stesso server riavviando solo il client;
+  verifica tool, skill e ritorno alla profondità zero, poi interrompe solo qs
+  e ripete sul server acceso. `DS4_QS_REQUIRE_COMPLETION=1` abilita anche
+  il gate separato che richiede una risposta finale spontanea.
+- `tests/test_server_resident_frontier.c` — regressione model-backed della cache
+  di sistema residente e dei checkpoint skill: dopo reset o riscrittura della
+  history, verifica logits bit-exact su tutto il vocabolario, rifiuto atomico di
+  file corrotti e rollback compatto per singola risposta. Sistema e skill
+  conservano anche le righe KV full-attention, rispettivamente in RAM e su SSD.
+  I test server coprono inoltre il return da un batch di skill sorelle, senza
+  eliminare i checkpoint delle chiamate ancora pendenti, e verificano che lo
+  scope corrente raggiunga la coda tool delle continuazioni live e dei return.
 - `tests/test_agentic_checkpoint.c` — gate model-backed CUDA Q4_K_S per
   checkpoint/return: casi lunghi 10k, confronto full-vocabulary bit-exact,
   isolamento sessioni, cancellazione, nesting, context boundary, rollback MTP

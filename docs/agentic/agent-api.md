@@ -116,6 +116,11 @@ allowed_skills = skill generabili nello scope corrente
 
 I due insiemi devono essere disgiunti. La loro unione definisce tutte le capability generabili; l'appartenenza ad `allowed_skills` dice inoltre al motore che la call deve aprire una frame e produrre un checkpoint SSD.
 
+Per Qwen lo scope corrente viene aggiunto all'ultimo messaggio user o risultato
+tool. Nelle continuazioni live e nei return deve far parte della nuova coda
+effettivamente valutata, non di un vecchio messaggio saltato dal riuso della KV.
+
+
 ---
 
 # 4. Estensione API
@@ -310,10 +315,10 @@ SkillFrame {
 }
 ```
 
-Per Qwen3.6 la rappresentazione prevista è ibrida:
+Per Qwen il server salva un payload completo temporaneo:
 
-* le righe K/V full-attention del parent restano nella sessione viva e vengono identificate dalla lunghezza della frontiera;
-* lo stato ricorrente Gated DeltaNet, aggiornato distruttivamente dai token child, viene copiato in un checkpoint temporaneo su SSD;
+* le righe K/V full-attention del parent vengono salvate insieme alla frontiera;
+* lo stato ricorrente Gated DeltaNet e lo stato MTP vengono copiati nello stesso checkpoint su SSD;
 * token timeline, posizione e metadati necessari al restore restano nella `SkillFrame` o nel relativo envelope persistito.
 
 L'API esterna non deve dipendere da questa scelta.
@@ -541,8 +546,8 @@ il motore deve:
 2. abbandonare/scartare la KV full-attention della history interna
    successiva alla frontiera logica
 
-3. leggere e verificare dall'SSD lo stato Gated DeltaNet del parent
-   e ripristinarlo nella sessione
+3. leggere e verificare dall'SSD il payload completo del parent
+   e ripristinare full-attention, Gated DeltaNet e stato MTP nella sessione
 
 4. ripristinare la lunghezza logica corretta
    della sequence parent
@@ -641,7 +646,10 @@ Parent sequence
     +---- Child skill sequence
 ```
 
-Il prefix full-attention viene condiviso e non deve essere copiato sul disco.
+La canonicalizzazione post-risposta riscrive il turno assistant e può sovrascrivere
+le righe full-attention del parent. Il server salva quindi anche queste righe nel
+payload SSD; il solo checkpoint ricorrente è sicuro esclusivamente quando il
+prefisso live resta intatto, come nel rollback locale della singola risposta.
 
 Il parent rimane fermo a:
 
@@ -649,18 +657,25 @@ Il parent rimane fermo a:
 ParentHistory + SkillCall
 ```
 
-mentre la child continua. Prima di elaborare il primo token interno, il motore salva su SSD lo stato ricorrente Gated DeltaNet della frontiera parent. Questo stato ha dimensione fissa rispetto alla lunghezza del contesto; nel Qwen3.6 27B corrente è circa 159 MB decimali (circa 152 MiB) per skill attiva.
+mentre la child continua. Prima di elaborare il primo token interno, il server salva
+su SSD il payload completo della frontiera parent. La dimensione comprende circa
+159 MB decimali di stato ricorrente, più le righe full-attention proporzionali
+al prefisso e lo stato MTP se attivo. Il budget SSD considera il payload completo.
 
 Alla chiusura:
 
 ```text
-truncate full-attention alla frontiera parent
-restore Gated DeltaNet dal checkpoint SSD
+verifica dimensione e checksum prima di modificare la sessione
+restore full-attention e Gated DeltaNet dal checkpoint SSD
 append SkillResult
 delete checkpoint SSD
 ```
 
 Il percorso può usare un buffer RAM di staging per il trasferimento GPU/SSD, ma il checkpoint durevole durante la skill deve risiedere su SSD e non occupare permanentemente VRAM o RAM. Scrittura e lettura devono sincronizzare il backend soltanto quanto necessario e le relative latenze devono essere misurate separatamente dal prefill.
+
+Le skill emesse nello stesso batch condividono la frontiera ma sono sorelle:
+un return consuma la skill conclusa e i suoi discendenti, preservando i
+checkpoint delle sorelle ancora pendenti.
 
 Ogni livello annidato possiede il proprio file. Un checkpoint corrotto, troncato, appartenente a un'altra sessione o incompatibile con modello/layout deve essere rifiutato senza alterare la sessione viva. La pubblicazione del file e l'aggiornamento della `SkillFrame` devono essere atomici.
 
@@ -1071,7 +1086,7 @@ call_id already exists
     ↓
 save call_id → parent frontier metadata
     ↓
-write Gated DeltaNet state to session-scoped SSD checkpoint
+write full parent KV payload to session-scoped SSD checkpoint
     ↓
 append only skill-specific new tokens
     ↓
@@ -1086,9 +1101,9 @@ skill_call_id=call_X
     ↓
 lookup checkpoint
     ↓
-truncate full-attention KV to parent frontier
+verify checkpoint size and checksum
     ↓
-restore Gated DeltaNet state from SSD
+restore full-attention, Gated DeltaNet and MTP state from SSD
     ↓
 discard internal skill history
     ↓
@@ -1111,10 +1126,12 @@ Il `call_id` già prodotto dal normale sistema di tool calling deve essere utili
 
 # 31. Implementazione e gate di validazione
 
-L'implementazione usa un envelope checkpoint v3. Oltre allo stato ricorrente
-Gated DeltaNet, conserva timeline e posizione, logits target e, se attivo, lo
-stato draft MTP completo. Dimensione, checksum, fingerprint del modello e
-identità della sessione vengono verificati prima di modificare lo stato vivo.
+Il server usa il payload KV completo della sessione, comprendente full-attention,
+Gated DeltaNet, timeline e posizione, logits target e stato MTP se attivo.
+Dimensione e checksum vengono verificati prima del restore; i metadati in memoria
+legano il file privato al call_id e allo slot che lo ha creato. L'API compatta
+`ds4_session_save_skill_state` con envelope v3 resta disponibile per i chiamanti
+che garantiscono la sopravvivenza delle righe full-attention.
 
 Staging GPU/RAM, scrittura, lettura e restore sono misurati separatamente. Il
 server mantiene inoltre contatori storici di checkpoint/return e byte vivi, in

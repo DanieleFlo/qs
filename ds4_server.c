@@ -4585,8 +4585,7 @@ static void append_qwen_agentic_scope_instruction(chat_msgs *msgs,
                                                    const request *r) {
     const bool zero_arg_required = qwen_requires_closed_zero_arg_tool(r);
     if (!msgs || !r || r->model_syntax != SERVER_MODEL_SYNTAX_QWEN ||
-        (!r->agentic_present && !zero_arg_required) ||
-        r->agentic_return) return;
+        (!r->agentic_present && !zero_arg_required)) return;
     buf scope = {0};
     buf_puts(&scope, "<agent_runtime>\n");
     if (r->agentic_present) {
@@ -4605,9 +4604,15 @@ static void append_qwen_agentic_scope_instruction(chat_msgs *msgs,
         }
         buf_puts(&scope,
                  ". These lists are permissions, not an unconditional request "
-                 "to call a capability. If a preceding system or user instruction "
-                 "requires one of these named capabilities, you MUST invoke it now "
-                 "using DSML instead of substituting a prose answer.\n");
+                 "to call a capability. Use DSML to invoke a permitted capability "
+                 "when needed for unfinished work. Tool and skill results already "
+                 "in the conversation represent completed work: do not repeat "
+                 "successful calls just because the original request mentions them.\n");
+        if (r->agentic_return) {
+            buf_puts(&scope,
+                     "A skill has completed and returned its result. Continue "
+                     "from that result using the current scope above.\n");
+        }
     }
     if (zero_arg_required) {
         buf_puts(&scope,
@@ -4618,13 +4623,14 @@ static void append_qwen_agentic_scope_instruction(chat_msgs *msgs,
     }
     buf_puts(&scope, "</agent_runtime>");
 
-    /* The registry belongs in the stable system prefix, but the allowlist is
-     * per-turn state.  Attach that state to the final user turn so a long
-     * archived history cannot drown it out and so the dynamic bytes remain
-     * outside the durable Qwen agent-system cache boundary. */
+    /* Live continuations evaluate only the new tool-result tail. Put scope
+     * there (including returns), not in an old user message that is skipped
+     * by KV reuse. The registry stays in the stable system cache boundary. */
     chat_msg *target = NULL;
     for (int i = msgs->len - 1; i >= 0; i--) {
-        if (!strcmp(msgs->v[i].role, "user")) {
+        if (!strcmp(msgs->v[i].role, "user") ||
+            !strcmp(msgs->v[i].role, "tool") ||
+            !strcmp(msgs->v[i].role, "function")) {
             target = &msgs->v[i];
             break;
         }
@@ -12699,12 +12705,12 @@ typedef struct {
     size_t visible_len;
 } visible_live_state;
 
-/* Compact, resident Qwen frontier.  Full-attention KV rows are position
- * addressed and remain in the session graph; this snapshot only carries the
- * recurrent/MTP state needed to return to an earlier prefix without reading a
- * complete KV payload from the disk cache. */
+/* System frontiers outlive resets and therefore own a complete KV payload.
+ * Request-local frontiers only rewind a still-live prefix and can retain the
+ * compact recurrent/MTP state, leaving attention rows in the session graph. */
 typedef struct {
     bool valid;
+    bool full_payload;
     ds4_tokens tokens;
     ds4_session_device_frontier *device_state;
     ds4_session_snapshot state;
@@ -12715,6 +12721,7 @@ struct skill_frame {
     char *call_id;
     char *skill_name;
     char *checkpoint_path;
+    uint64_t checkpoint_checksum;
     ds4_tokens frontier;
     uint64_t checkpoint_bytes;
     double stage_ms;
@@ -13080,6 +13087,26 @@ static char *skill_checkpoint_dir_create(const char *base) {
     return tmpl;
 }
 
+/* Validate the whole private payload before a restore can mutate live KV.
+ * Frames are process-local, so their expected size/checksum live in memory. */
+static bool skill_payload_checksum(FILE *fp, uint64_t bytes, uint64_t *out) {
+    unsigned char block[65536];
+    uint64_t hash = UINT64_C(14695981039346656037);
+    if (fseek(fp, 0, SEEK_SET) != 0) return false;
+    while (bytes) {
+        size_t n = bytes < sizeof(block) ? (size_t)bytes : sizeof(block);
+        if (fread(block, 1, n, fp) != n) return false;
+        for (size_t i = 0; i < n; i++) {
+            hash ^= block[i];
+            hash *= UINT64_C(1099511628211);
+        }
+        bytes -= n;
+    }
+    if (fgetc(fp) != EOF || ferror(fp)) return false;
+    *out = hash;
+    return fseek(fp, 0, SEEK_SET) == 0;
+}
+
 static bool skill_frame_save(server *s, server_slot *slot,
                              const tool_call *call,
                              double *write_ms_out,
@@ -13097,7 +13124,7 @@ static bool skill_frame_save(server *s, server_slot *slot,
         snprintf(err, errlen, "duplicate skill call_id: %s", call->id);
         return false;
     }
-    const uint64_t expected_bytes = ds4_session_skill_state_bytes(slot->session);
+    const uint64_t expected_bytes = ds4_session_payload_bytes(slot->session);
     if (s->qwen_session_cache && s->kv.enabled) {
         pthread_mutex_lock(&s->tool_mu);
         uint64_t reserved = s->skill_checkpoint_live_bytes;
@@ -13139,7 +13166,7 @@ static bool skill_frame_save(server *s, server_slot *slot,
         free(final_path);
         return false;
     }
-    FILE *fp = fdopen(fd, "wb");
+    FILE *fp = fdopen(fd, "w+b");
     if (!fp) {
         int saved = errno;
         close(fd);
@@ -13150,12 +13177,15 @@ static bool skill_frame_save(server *s, server_slot *slot,
         free(final_path);
         return false;
     }
-    uint64_t bytes = 0;
+    uint64_t bytes = expected_bytes;
+    uint64_t checksum = 0;
     ds4_skill_state_metrics state_metrics = {0};
     const double t0 = now_sec();
-    int rc = ds4_session_save_skill_state(slot->session, fp, &bytes,
-                                          &state_metrics,
-                                          err, errlen);
+    /* Post-response canonicalization rewrites the sampled assistant turn.
+     * A skill can outlive those writes: unlike a request-local rollback, it
+     * must own attention rows as well as recurrent state. */
+    int rc = ds4_session_save_payload(slot->session, fp, err, errlen);
+    state_metrics.stage_ms = (now_sec() - t0) * 1000.0;
     if (rc == 0 && fflush(fp) != 0) {
         snprintf(err, errlen, "failed to flush skill checkpoint: %s",
                  strerror(errno));
@@ -13164,6 +13194,10 @@ static bool skill_frame_save(server *s, server_slot *slot,
     if (rc == 0 && fsync(fileno(fp)) != 0) {
         snprintf(err, errlen, "failed to sync skill checkpoint: %s",
                  strerror(errno));
+        rc = 1;
+    }
+    if (rc == 0 && !skill_payload_checksum(fp, bytes, &checksum)) {
+        snprintf(err, errlen, "failed to checksum skill checkpoint");
         rc = 1;
     }
     if (fclose(fp) != 0 && rc == 0) {
@@ -13192,6 +13226,7 @@ static bool skill_frame_save(server *s, server_slot *slot,
     f->skill_name = xstrdup(call->name);
     f->checkpoint_path = final_path;
     f->checkpoint_bytes = bytes;
+    f->checkpoint_checksum = checksum;
     f->stage_ms = state_metrics.stage_ms;
     f->write_ms = write_ms;
     ds4_tokens_copy(&f->frontier, ds4_session_tokens(slot->session));
@@ -13238,10 +13273,22 @@ static bool skill_frame_restore(server_slot *slot, skill_frame *target,
                  strerror(errno));
         return false;
     }
-    int rc = ds4_session_load_skill_state(slot->session, fp,
-                                          &target->frontier,
-                                          metrics,
-                                          err, errlen);
+    const double t0 = now_sec();
+    uint64_t checksum = 0;
+    if (!skill_payload_checksum(fp, target->checkpoint_bytes, &checksum) ||
+        checksum != target->checkpoint_checksum) {
+        fclose(fp);
+        snprintf(err, errlen, "corrupt or truncated skill checkpoint");
+        return false;
+    }
+    const double verified = now_sec();
+    int rc = ds4_session_load_payload(slot->session, fp,
+                                      target->checkpoint_bytes, err, errlen);
+    if (metrics) {
+        metrics->checkpoint_bytes = target->checkpoint_bytes;
+        metrics->read_ms = (verified - t0) * 1000.0;
+        metrics->restore_ms = (now_sec() - verified) * 1000.0;
+    }
     if (fclose(fp) != 0 && rc == 0) {
         snprintf(err, errlen, "failed to close skill checkpoint: %s",
                  strerror(errno));
@@ -13254,10 +13301,20 @@ static bool skill_frames_consume_through_locked(server *s, server_slot *slot,
                                                 skill_frame *target) {
     if (!s || !slot || !target) return false;
     bool deleted = true;
-    while (slot->skills) {
-        skill_frame *f = slot->skills;
-        slot->skills = f->next;
-        bool done = f == target;
+    skill_frame **link = &slot->skills;
+    while (*link) {
+        skill_frame *f = *link;
+        const bool done = f == target;
+        /* Calls emitted in one assistant batch share an exact frontier. They
+         * are siblings awaiting execution, not descendants discarded by return. */
+        if (!done && f->frontier.len == target->frontier.len &&
+            f->frontier.len > 0 &&
+            !memcmp(f->frontier.v, target->frontier.v,
+                    (size_t)f->frontier.len * sizeof(f->frontier.v[0]))) {
+            link = &f->next;
+            continue;
+        }
+        *link = f->next;
         if (s->skill_checkpoint_live_bytes >= f->checkpoint_bytes) {
             s->skill_checkpoint_live_bytes -= f->checkpoint_bytes;
         } else {
@@ -13661,17 +13718,18 @@ static FILE *resident_kv_frontier_open_write(
     return fp;
 }
 
-/* ds4_session_save_skill_state() is deliberately a compact Qwen checkpoint:
- * it omits position-addressed full-attention rows and serializes only the
- * recurrent frontier, logits, and MTP state.  Back it with memory here so the
- * hot system prompt never has to make a round trip through the SSD cache. */
+/* Only request-local rollback may omit attention rows. The shared system
+ * cache must survive graph invalidation, prompt changes, and disk restores;
+ * a compact skill checkpoint would silently combine saved recurrent state
+ * with zeroed or unrelated attention KV after any of those operations. */
 static bool resident_kv_frontier_capture(ds4_session *session,
                                          resident_kv_frontier *frontier,
-                                         bool prefer_device,
+                                         bool request_local,
                                          char *err, size_t errlen) {
     if (!session || !frontier) return false;
     frontier->valid = false;
-    if (prefer_device) {
+    frontier->full_payload = !request_local;
+    if (request_local) {
         if (ds4_session_capture_device_frontier(session,
                                                 &frontier->device_state,
                                                 err, errlen) == 0) {
@@ -13689,14 +13747,21 @@ static bool resident_kv_frontier_capture(ds4_session *session,
         ds4_session_device_frontier_free(frontier->device_state);
         frontier->device_state = NULL;
     }
-    const uint64_t bytes = ds4_session_skill_state_bytes(session);
+    const uint64_t bytes = frontier->full_payload ?
+        ds4_session_payload_bytes(session) : ds4_session_skill_state_bytes(session);
     frontier->valid = false;
     FILE *fp = resident_kv_frontier_open_write(&frontier->state, bytes,
                                                 err, errlen);
     if (!fp) return false;
     uint64_t written = 0;
-    int rc = ds4_session_save_skill_state(session, fp, &written, NULL,
+    int rc;
+    if (frontier->full_payload) {
+        rc = ds4_session_save_payload(session, fp, err, errlen);
+        if (rc == 0) written = bytes;
+    } else {
+        rc = ds4_session_save_skill_state(session, fp, &written, NULL,
                                            err, errlen);
+    }
     if (fclose(fp) != 0 && rc == 0) {
         if (errlen) snprintf(err, errlen,
                              "failed to finalize resident KV frontier");
@@ -13716,6 +13781,13 @@ static bool resident_kv_frontier_restore(ds4_session *session,
     if (!session || !frontier || !frontier->valid) {
         return false;
     }
+    /* A compact request checkpoint cannot restore rows erased by a stop,
+     * cancellation, or a failed eval. Let the caller rebuild from system KV. */
+    if (!frontier->full_payload &&
+        ds4_session_common_prefix(session, &frontier->tokens) != frontier->tokens.len) {
+        if (errlen) snprintf(err, errlen, "compact frontier lost its live KV prefix");
+        return false;
+    }
     if (frontier->device_state) {
         return ds4_session_restore_device_frontier(
                    session, frontier->device_state, &frontier->tokens,
@@ -13730,8 +13802,10 @@ static bool resident_kv_frontier_restore(ds4_session *session,
                              "failed to open resident KV frontier");
         return false;
     }
-    int rc = ds4_session_load_skill_state(session, fp, &frontier->tokens,
-                                           NULL, err, errlen);
+    int rc = frontier->full_payload ?
+        ds4_session_load_payload(session, fp, frontier->state.len, err, errlen) :
+        ds4_session_load_skill_state(session, fp, &frontier->tokens,
+                                     NULL, err, errlen);
     if (fclose(fp) != 0 && rc == 0) {
         if (errlen) snprintf(err, errlen,
                              "failed to close resident KV frontier");
@@ -15682,12 +15756,12 @@ static bool resident_system_boundary_needs_sync(int live_pos,
 
 static bool server_resident_frontier_capture(
         server *s, server_slot *slot, resident_kv_frontier *frontier,
-        bool prefer_device,
+        bool request_local,
         char *err, size_t errlen) {
     if (!s || !slot || !frontier || !server_prefill_enter(s, slot))
         return false;
     bool ok = resident_kv_frontier_capture(slot->session, frontier,
-                                           prefer_device,
+                                           request_local,
                                            err, errlen);
     server_prefill_leave(s);
     return ok;
@@ -15706,8 +15780,8 @@ static bool server_resident_frontier_restore(
 
 /* Capture the stable system boundary once per resident slot.  Splitting the
  * first prefill at this boundary does not evaluate any token twice; it merely
- * gives us a compact recurrent frontier that later chats sharing the same
- * system prompt can restore from RAM instead of loading a multi-GiB KV file. */
+ * gives us a complete system frontier that later chats can restore from RAM
+ * even after a failed request or unrelated chat destroyed the live KV rows. */
 static bool ensure_resident_system_frontier(
         server *s, server_slot *slot, const ds4_tokens *prompt,
         char *err, size_t errlen) {
@@ -22283,6 +22357,38 @@ static void test_render_qwen_chatml_prompt_and_tool_history(void) {
     chat_msgs_free(&msgs);
 }
 
+static void test_qwen_agentic_scope_reaches_live_tool_tail(void) {
+    for (int returning = 0; returning < 2; returning++) {
+        chat_msgs msgs = {0};
+        chat_msgs_push(&msgs, (chat_msg){.role = xstrdup("user"),
+                                        .content = xstrdup("test capabilities")});
+        chat_msg assistant = {.role = xstrdup("assistant")};
+        tool_calls_push(&assistant.calls, (tool_call){
+            .id = xstrdup("call_skill"), .name = xstrdup("mock-skill"),
+            .arguments = xstrdup("{}")});
+        chat_msgs_push(&msgs, assistant);
+        chat_msgs_push(&msgs, (chat_msg){.role = xstrdup("tool"),
+            .content = xstrdup("skill result"), .tool_call_id = xstrdup("call_skill")});
+        request r;
+        request_init(&r, REQ_CHAT, 128);
+        r.api = API_RESPONSES;
+        r.model_syntax = SERVER_MODEL_SYNTAX_QWEN;
+        r.agentic_present = true;
+        r.agentic_return = returning != 0;
+        id_list_push_unique(&r.allowed_tools, returning ? "mock-tool" : "mock-sub-tool");
+        append_qwen_agentic_scope_instruction(&msgs, &r);
+        responses_prepare_live_continuation(&r, &msgs);
+        TEST_ASSERT(!strcmp(msgs.v[0].content, "test capabilities"));
+        TEST_ASSERT(r.responses_live_suffix_text != NULL);
+        TEST_ASSERT(r.responses_live_suffix_text &&
+                    strstr(r.responses_live_suffix_text, returning ?
+                        "Allowed ordinary tools: mock-tool" :
+                        "Allowed ordinary tools: mock-sub-tool"));
+        request_free(&r);
+        chat_msgs_free(&msgs);
+    }
+}
+
 static void test_qwen_agentic_scope_targets_latest_user_turn(void) {
     chat_msgs msgs = {0};
     chat_msg old_user = {0};
@@ -22323,7 +22429,7 @@ static void test_qwen_agentic_scope_targets_latest_user_turn(void) {
     TEST_ASSERT(strstr(msgs.v[2].content,
                        "Allowed skills: exit-with-info") != NULL);
     TEST_ASSERT(strstr(msgs.v[2].content,
-                       "MUST invoke it now using DSML") != NULL);
+                       "when needed for unfinished work") != NULL);
     TEST_ASSERT(strstr(msgs.v[2].content,
                        "single available zero-argument tool") != NULL);
 
@@ -23528,6 +23634,42 @@ static void test_tool_checkpoint_canonicalization_gate_exact_replay(void) {
     TEST_ASSERT(should_canonicalize_tool_checkpoint(&s, &calls));
 
     tool_calls_free(&calls);
+}
+
+static void test_skill_return_preserves_pending_sibling(void) {
+    server s = {0};
+    server_slot slot = {0};
+    skill_frame *parent = calloc(1, sizeof(*parent));
+    skill_frame *first = calloc(1, sizeof(*first));
+    skill_frame *sibling = calloc(1, sizeof(*sibling));
+    skill_frame *child = calloc(1, sizeof(*child));
+    ds4_tokens_push(&parent->frontier, 10);
+    ds4_tokens_push(&first->frontier, 10);
+    ds4_tokens_push(&first->frontier, 20);
+    ds4_tokens_copy(&sibling->frontier, &first->frontier);
+    ds4_tokens_copy(&child->frontier, &first->frontier);
+    ds4_tokens_push(&child->frontier, 30);
+    parent->checkpoint_bytes = first->checkpoint_bytes =
+        sibling->checkpoint_bytes = child->checkpoint_bytes = 100;
+    first->next = parent;
+    sibling->next = first;
+    child->next = sibling;
+    slot.skills = child;
+    s.skill_checkpoint_live_bytes = 400;
+    /* first and sibling were emitted together; child belongs to first. */
+    TEST_ASSERT(skill_frames_consume_through_locked(&s, &slot, first));
+    TEST_ASSERT(slot.skills == sibling);
+    if (slot.skills != sibling) {
+        skill_frames_clear_locked(&s, &slot);
+        return;
+    }
+    TEST_ASSERT(sibling->next == parent);
+    TEST_ASSERT(s.skill_checkpoint_live_bytes == 200);
+    TEST_ASSERT(skill_frames_consume_through_locked(&s, &slot, sibling));
+    TEST_ASSERT(slot.skills == parent);
+    TEST_ASSERT(s.skill_checkpoint_live_bytes == 100);
+    skill_frames_clear_locked(&s, &slot);
+    TEST_ASSERT(s.skill_checkpoint_live_bytes == 0);
 }
 
 static void test_resident_system_frontier_matches_shared_prompt_only(void) {
@@ -27753,6 +27895,7 @@ static void ds4_server_unit_tests_run(void) {
     test_render_chat_prompt_text_renders_tools_before_system();
     test_render_qwen_chatml_prompt_and_tool_history();
     test_render_qwen_live_tool_tail();
+    test_qwen_agentic_scope_reaches_live_tool_tail();
     test_qwen_agentic_scope_targets_latest_user_turn();
     test_render_glm_chat_prompt_text();
     test_render_glm_drops_old_reasoning_without_tools();
@@ -27812,6 +27955,7 @@ static void ds4_server_unit_tests_run(void) {
     test_anthropic_full_replay_allows_unknown_live_id();
     test_anthropic_tool_use_parses_before_role();
     test_tool_checkpoint_canonicalization_gate_exact_replay();
+    test_skill_return_preserves_pending_sibling();
     test_resident_system_frontier_matches_shared_prompt_only();
     test_resident_system_frontier_replaces_unrelated_live_state();
     test_resident_frontier_memory_stream_preserves_last_byte();

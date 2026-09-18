@@ -657,6 +657,20 @@ mxfp4-dot-test: tests/test_mxfp4_dot.c
 	$(CC) -O2 -Wall -Wextra -std=c99 -o tests/test_mxfp4_dot tests/test_mxfp4_dot.c -lm
 	./tests/test_mxfp4_dot
 
+tests/test_server_resident_frontier.o: tests/test_server_resident_frontier.c ds4_server.c ds4.h
+	$(CC) $(CFLAGS) -Wno-unused-function -I. -c -o $@ $<
+
+tests/test_server_resident_frontier: tests/test_server_resident_frontier.o ds4_help.o ds4_gpu_args.o ds4_kvstore.o rax.o $(CORE_OBJS)
+ifeq ($(UNAME_S),Darwin)
+	$(CC) $(CFLAGS) -o $@ $^ $(METAL_LDLIBS)
+else
+	$(DS4_LINK) -o $@ $^ $(DS4_LINK_LIBS)
+endif
+
+.PHONY: test-server-resident-frontier
+test-server-resident-frontier: tests/test_server_resident_frontier
+	./tests/test_server_resident_frontier "$(DS4_TEST_MODEL)"
+
 clean:
-	rm -f tests/qwen_mtp_catchup_probe tests/qwen_iq4_dequant_probe
+	rm -f tests/test_server_resident_frontier tests/qwen_mtp_catchup_probe tests/qwen_iq4_dequant_probe
 	rm -f ds4 ds4-server ds4-bench ds4-eval ds4-agent ds4_cpu ds4_native ds4_server_test ds4_test ds4_agent_test gguf-tools/quality-testing/score_official gguf-tools/quality-testing/score_official.o speed-bench/metal_decode_schedule_bench speed-bench/metal_prefill_variant_bench speed-bench/*.o tests/test_q4k_dot tests/test_mmq_parity tests/test_mxfp4_dot tests/test_mxfp4_metal tests/test_mxfp4_rocm tests/test_mxfp4_cuda tests/test_metal_session_batch tests/test_gpu_xdev tests/test_gpu_model_cache tests/test_gpu_lookup_cache_strict tests/test_engine_mgpu_refusal tests/test_engine_mgpu_runtime tests/test_engine_correctness tests/test_sampling tests/test_cuda_session_batch tests/test_cuda_mixed_batch tests/test_agentic_checkpoint tests/*.o *.o tests/cuda_long_context_smoke tests/cuda_long_context_smoke.o tests/qwen_numerics_probe

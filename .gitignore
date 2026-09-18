@@ -35,6 +35,7 @@
 /tests/agent-ssd-live-kv/
 /tests/agent-ssd-live-server.pid
 /tests/test_agentic_checkpoint
+/tests/test_server_resident_frontier
 /tests/qwen_mtp_catchup_probe
 /tests/qwen_iq4_dequant_probe
 *.o
