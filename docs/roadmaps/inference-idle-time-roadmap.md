@@ -26,23 +26,23 @@ Commit dopo ogni punto completato e verificato, push finale su origin.
 
 ## Sequenza
 
-- [ ] 0. Congelare baseline, leggere harness e profilare testo / JSON / tool,
+- [x] 0. Congelare baseline, leggere harness e profilare testo / JSON / tool,
   streaming e sampled MTP. Verificare build e gate preesistenti.
-- [ ] 1. Separare begin/finish nel server batched e sovrapporre postprocessing
+- [x] 1. Separare begin/finish nel server batched e sovrapporre postprocessing
   CPU; drain obbligatorio prima di invalidazione, riuso o fine richiesta.
   Conservare commit dell'output solo dopo eval riuscita.
-- [ ] 2. Verificare preparazione anticipata constraint: distinguere stato
+- [x] 2. Verificare preparazione anticipata constraint: distinguere stato
   grammaticale dai dati dipendenti dai logits; non leggere sessione in flight.
   Misurare CPU esposta e realmente sovrapposta, senza contare due volte le fasi.
-- [ ] 3. A/B del flag CUDA stream-sync esistente; poi variante di readback
+- [x] 3. A/B del flag CUDA stream-sync esistente; poi variante di readback
   pinned asincrono se la diagnosi ne giustifica il costo. Audit SSD/multi-GPU
   e lifetime. Niente sostituzione globale non dimostrata delle barriere.
-- [ ] 4. Valutare SSE producer/consumer bounded: client rapido/lento,
+- [x] 4. Valutare SSE producer/consumer bounded: client rapido/lento,
   cancellazione, backpressure, errori e ordine di invio. Verificare se il
   socket costituisce davvero un collo di bottiglia nel workload misurato.
-- [ ] 5. Sampled MTP: bulk verifier-row readback e, se utile, pipeline per riga;
+- [x] 5. Sampled MTP: bulk verifier-row readback e, se utile, pipeline per riga;
   confrontare acceptance alta/bassa, identita RNG/output, contesti diversi.
-- [ ] 6. Provare altre riduzioni di attese emerse dai profili; confermare
+- [x] 6. Provare altre riduzioni di attese emerse dai profili; confermare
   candidati mantenuti, aggiornare ledger/indici, commit e push finale.
 
 ## Registro
@@ -363,3 +363,62 @@ Ripristinati ds4.c, ds4.h, ds4_server.c e tests/ds4_test.c dalla baseline.
 La matrice live aggiuntiva era stata predisposta ma non e stata eseguita dopo
 il rifiuto prestazionale: NOT_VERIFIED per quel prototipo, non PASS implicito.
 Nessuna nuova variante diagnostica o API di inferenza rimane in produzione.
+
+
+### 6. Chiusura tecnica e altre idee
+
+Il callback post-submission e il readback realmente segmentato sono le due
+revisioni aggiuntive emerse dall'audit; risultati riportati sopra. Non estesa
+la ricerca a kernel, quantizzazione o modifiche numeriche fuori obiettivo.
+Il residuo CPU fuori eval nel decode libero era inferiore al millisecondo per
+64 token nel caso 16K iniziale: limita il beneficio possibile del solo
+postprocessing, senza dimostrare assenza di attese interne alla GPU.
+
+**Unica modifica di codice mantenuta:** controllo dell'identita del binario
+nell'harness server/constrained. Evita di attribuire un benchmark a un binario
+rilinkato durante la misura; nessuna pretesa di accelerare l'inferenza.
+Tutti i prototipi e i relativi test sperimentali sono stati rimossi dai sorgenti
+release. Questo segue la soglia dichiarata e il costo di manutenzione, non
+trasforma un piccolo effetto positivo in una regressione dimostrata.
+
+[Evidenze compatte versionate](../../performance/idle-time-qwen38-2026-09-17.json):
+22 esperimenti, metriche e dispersione, hash degli output e provenienza.
+La prima curva baseline conserva un'avvertenza esplicita sul vecchio hash errato;
+non usarla per promozioni. Log completi, binari immutabili e patch dei tentativi
+rimangono localmente in performance-results/idle-time/ e nelle directory
+performance-results/idle-*; non sono golden nuovi.
+
+Validazione finale in corso: build CPU e CUDA PASS; make test con modello e
+sidecar Qwen3.8 espliciti, cuda-regression e suite Python accodati. Metal,
+SSD streaming Metal, ROCm e distribuito: NOT_VERIFIED su questo host.
+
+
+### 6. Validazione finale completata (2026-09-18)
+
+Sorgenti di inferenza finali identici alla baseline iniziale. Comandi e log
+in performance-results/idle-time/final-qa.json e final-*.log:
+
+- `make -j2 cpu`: PASS.
+- Build CUDA esplicita di ds4, server, bench, eval, agent e test: PASS.
+- `make -j2 test CUDA_ARCH=sm_86` con DS4_TEST_MODEL Qwen3.8 e sidecar
+  DS4_TEST_MTP Qwen3.8, DS4_TEST_QWEN_MTP_PATHS=1, DS4_TEST_MTP_CTX=4096:
+  PASS. Contesto lungo, tool-call quality, think-tool recovery, equivalenza
+  tensor sul backend locale, MTP verify-depth, trie, server, agent, placement,
+  GPU args e sampling. CLI args: 53 PASS / 0 FAIL.
+- `make cuda-regression CUDA_ARCH=sm_86`: PASS (long-context smoke, 32768).
+- Suite Python harness/docs/Qwen3.8/fixture sampling: primo run 93 test,
+  un FAIL dovuto agli indici documentali non rigenerati dopo l'aggiornamento
+  del ledger. Rigenerazione e nuova esecuzione riportate nel log
+  final-python-recheck.log: 93 test, 90 PASS e 3 SKIP. Nessun problema del codice di inferenza.
+
+Gli OK del runner aggregato non annullano gli skip interni: vettori ufficiali
+DeepSeek, golden Flash Metal, SSD streaming e DSpark non eseguiti; Metal/ROCm/
+distribuito non verificati su questa macchina. Tre gate Python opt-in (live,
+performance, checksum) risultano SKIP nella suite, non PASS. I checksum del
+modello e sidecar sono stati comunque acquisiti negli esperimenti separati.
+Il binario smoke tracciato dal repository e stato ripristinato dopo il test:
+non si commettono artefatti di build locali.
+
+Conclusione: nessuno speedup generale dimostrato oltre la soglia concordata
+nel piano; tutti i tentativi documentati, nessuna modifica sperimentale nel
+runtime. Mantenuta soltanto la correzione di provenienza dei benchmark.

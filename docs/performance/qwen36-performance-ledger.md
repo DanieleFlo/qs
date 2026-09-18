@@ -40,6 +40,19 @@ sono `docs/performance/qwen36-performance-experiments-2026-08-05.md`,
 
 ## Stato corrente
 
+- Tempi morti **Qwen3.8**, 2026-09-17/18: **REJECT** per begin/finish batched,
+  lookahead constraint engine-only, callback constraint dopo submission,
+  stream-sync/pinned logits, writer SSE bounded e bulk/segmented MTP readback.
+  [Registro completo](../roadmaps/inference-idle-time-roadmap.md) e
+  [misure versionate](../../performance/idle-time-qwen38-2026-09-17.json).
+  RTX 3090, contesti 128/2K/8K/16K dove applicabili; warm-up + cinque campioni
+  per le conferme. Il callback ripulito ottiene circa +1.9% decode e -1.1%
+  tempo HTTP sul tool, sotto la soglia pratica dichiarata 2-3%; non mantenuto.
+  Gate numerici bit-exact e output identici nei casi descritti nel registro.
+  **KEEP** solo per la protezione dell'harness contro il cambio del binario
+  durante una misura: test dedicato di sostituzione atomica PASS. Nessun nuovo
+  percorso di inferenza, flag o API rilasciato. Qwen3.6 non testato in questo ciclo.
+
 - Audit punto A, Qwen3.8: contesto stage/layer e consumi hidden/logits/readback
   espliciti, parità bit-exact anche con contesto legacy alterato. KEEP come
   refactoring; dieci coppie senza regressioni stabili oltre il 2%, nessun

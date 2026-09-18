@@ -208,6 +208,7 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
   su GA102, compute capability 8.6, memoria, numerica CUDA e determinismo.
 
 - `docs/roadmaps/inference-idle-time-roadmap.md` — roadmap e registro degli esperimenti di sovrapposizione CPU/GPU e riduzione delle attese Qwen3.8.
+- `performance/idle-time-qwen38-2026-09-17.json` — evidenze compatte dei 22 esperimenti su tempi morti Qwen3.8, identita dei binari/output, dispersione e avvertenze di provenienza.
 
 ### Build ed eseguibili
 
