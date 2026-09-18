@@ -213,3 +213,120 @@ Fonti usate nell'audit delle dipendenze CUDA: documentazione NVIDIA
 e [event management](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__EVENT.html).
 Lo stream nonblocking non sincronizza implicitamente con quello legacy:
 il prototipo usa quindi eventi produttore/consumatore espliciti.
+
+### 2b. Revisione constraint: callback dopo submission (gate intermedi)
+
+Dopo il rifiuto del lookahead engine-only, provata una sola revisione piu ampia:
+callback CPU dopo submission Qwen e prima del readback. Prepara il prossimo
+stato grammaticale usando i vecchi logits host, quindi riapplica la maschera
+ai logits nuovi prima del sampling. Nessun thread aggiunto e nessun cambio RNG.
+Variante diagnostica `DS4_SERVER_CONSTRAINT_LOOKAHEAD=1`, solo server unbatched.
+Binario congelato `ds4-server-callback`, SHA256
+`ea8c9c3d569163efee690b02ac40cd68b2b4166c47b0d012c16df1cb6b4f8c4a`.
+
+Direzione (`idle-callback-baseline` / `idle-callback-candidate`): tool
+21.49 -> 21.78 tok/s, JSON 27.20 -> 28.61 tok/s (baseline JSON instabile).
+`idle-callback-oracle`: confronto esaustivo dell'analisi, zero divergenze,
+schema valido e output identico ai due casi baseline. Build e test server PASS.
+Circa 590 ms di preparazione tool sono eseguiti dentro eval, ma NON sono una
+misura di CPU realmente nascosta: le fasi diagnostiche si sovrappongono.
+Usare esclusivamente decode wall e tempo HTTP per il confronto prestazionale.
+
+Conferma 1 (`idle-callback-confirm-*`), warm-up 1 e cinque campioni:
+
+| Workload | Baseline tok/s | Callback tok/s | CV baseline / callback |
+| --- | ---: | ---: | --- |
+| Tool required enum/const | 21.785 | 22.494 | 2.36% / 3.83% |
+| JSON nested required array | 28.596 | 30.403 | 2.06% / 5.57% |
+
+Output SHA256 identici e schema valido. Il +3.25% tool e confrontabile con la
+dispersione e il JSON e instabile: nessuna promozione. In corso una seconda
+serie a ordine invertito, senza compilazioni concomitanti. Il prototipo richiede
+anche un cleanup del rollback dello stato testuale su errore eval e metriche non
+additive esplicite prima di un'eventuale promozione; non e codice release.
+
+### 5. MTP sampled: bulk e segmentazione (gate intermedi)
+
+Variante CUDA circoscritta al verifier sampled: staging pinned persistente,
+evento produttore sullo stream compute, copie su stream nonblocking e attesa
+per riga. Nessuna modifica dei kernel o dell'ordine del sampling. Bulk e
+segmentato sono confrontati con lo stesso binario e flag disabilitati.
+
+Prima direzione `idle-mtp-readback-direction`: bulk 32.549 / 32.718 / 29.659
+tok/s contro baseline 33.254 / 34.484 / 29.861 a 128 / 2048 / 8192 token.
+Il primo prototipo segmentato conservava una sincronizzazione globale dopo
+l'accodamento delle copie: corretto questo limite prima di giudicare l'idea.
+Le letture dei logits/top-index drenano lo stream compute; gli eventi per riga
+proteggono separatamente le copie. Il cleanup drena prima di liberare tensor e
+staging. Un'eventuale release deve mantenere esplicita anche la dipendenza prima
+del riuso del buffer verifier, senza affidarsi alle sincronizzazioni del catchup.
+
+Seconda direzione `idle-mtp-real-segment`, temperature 0.7, seed 424242,
+64 token, warm-up 1 + due campioni, output identico in tutte le varianti:
+
+| Contesto | Baseline tok/s | Bulk tok/s | Segmentato tok/s |
+| --- | ---: | ---: | ---: |
+| 128 | 31.952 | 32.688 | 35.070 |
+| 2048 | 36.152 | 36.217 | 37.472 |
+
+Gate `DS4_TEST_QWEN_MTP_PATHS=1 DS4_QWEN_BULK_VERIFIER=1
+DS4_READBACK_SEGMENTED=1 ./ds4_test --mtp-verify-depth` con modello e sidecar
+Qwen3.8 espliciti: PASS. Verifica forced reject, partial, raw-copy/full,
+128 token sampled con seed fisso identici al target; logits prompt MTP
+abilitato/disabilitato bit-exact su 248320 float. Log `mtp-depth-segmented.log`.
+Il vantaggio direzionale richiede conferma: accodata serie a ordine invertito
+su contesti 128/2048/8192/16384, warm-up 1 + cinque campioni. Nessun KEEP ancora.
+### 2b. Conferma a ordine invertito e candidato ripulito
+
+`idle-callback-reverse-candidate` eseguito prima di
+`idle-callback-reverse-baseline`, senza compilazioni o altri modelli concorrenti,
+warm-up 1 e cinque campioni. Output identico ai precedenti run.
+
+| Workload | Baseline tok/s | Callback tok/s | CV baseline / callback | HTTP baseline / callback ms |
+| --- | ---: | ---: | --- | --- |
+| Tool | 20.560 | 21.372 | 1.78% / 1.14% | 7700.671 / 7452.137 |
+| JSON | 27.764 | 27.929 | 0.59% / 0.76% | 2175.532 / 2170.402 |
+
+Il +3.95% tool (+3.25% nella prima conferma) giustifica la pulizia e i gate
+release; il +0.59% JSON non dimostra un miglioramento pratico. Questi sono
+prompt brevi con capacita sessione 4096: NON chiamarli prompt lunghi 4K.
+
+Il candidato ripulito prepara su copie private di testo/thinking/tracker/lexer;
+il postprocessing originale commette solo dopo eval riuscita. Riutilizza il
+controllo di cancellazione e il mutex gia presenti. Nessun callback GPU su
+Metal/ROCm/CPU/distribuito: li il callback viene saltato e la preparazione
+resta nel punto originale della successiva iterazione. Il batching
+mantiene il percorso esistente. `DS4_SERVER_NO_CONSTRAINT_LOOKAHEAD=1` e un
+interruttore diagnostico per confrontare lo stesso eseguibile, non una variante
+semantica. La somma delle fasi sottrae il lavoro preparato gia incluso in eval;
+`prepared_cpu` non rappresenta overlap GPU misurato. I campi legacy exposed /
+overlapped restano una stima conservativa (nessun overlap attribuito).
+
+Aggiunti gate per maschera riapplicata ai nuovi logits, token disabilitato con
+argmax alto, cambi della disponibilita di valori finiti, analisi scaduta,
+consumo RNG e cancellazione prima del callback. Preparato probe full-vocabulary
+su 128/2048/8192/16384: verifica callback eseguita una volta, host logits vecchi
+intatti durante submission, logits finali bit-exact e sampling mascherato
+identico preparando prima/dopo eval. Build, probe e suite slow accodati solo
+dopo la fine dei benchmark MTP, per non contaminarli.
+### 5. Conferma MTP sampled (completato, REJECT)
+
+`idle-mtp-segment-confirm/results.json`, stesso binario congelato
+`ds4-server-real-segment`, ordine segmentato -> baseline, temperature 0.7,
+64 token, warm-up 1 + cinque campioni per contesto, nessuna compilazione
+concomitante. Identita degli output: PASS.
+
+| Contesto | Baseline tok/s | Segmentato tok/s | CV baseline / segmentato |
+| --- | ---: | ---: | --- |
+| 128 | 32.090 | 32.010 | 0.58% / 1.06% |
+| 2048 | 33.352 | 33.150 | 3.61% / 5.44% |
+| 8192 | 29.641 | 30.106 | 3.31% / 0.32% |
+| 16384 | 23.295 | 23.177 | 1.00% / 0.87% |
+
+Il +1.57% a 8K non supera la soglia pratica e la dispersione della baseline;
+negli altri contesti il vantaggio direzionale scompare. Nessuna promozione,
+nonostante i gate numerici verdi. Eliminati readback pinned, eventi e stream
+aggiunti nel prototipo: ds4_cuda.cu e ds4_gpu.h tornano identici alla baseline.
+La copertura forced reject/partial/full dimostra correttezza nei percorsi testati;
+non e una misura prestazionale distinta per ogni regime di acceptance.
+Patch e binari degli esperimenti restano in performance-results/idle-time/.

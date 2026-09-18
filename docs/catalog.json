@@ -3489,7 +3489,7 @@
               "title": "Roadmap: tempi morti CPU/GPU nell'inferenza Qwen",
               "level": 1,
               "start": 1,
-              "end": 215,
+              "end": 332,
               "summary": "Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza"
             },
             {
@@ -3517,7 +3517,7 @@
               "title": "Registro",
               "level": 2,
               "start": 48,
-              "end": 215,
+              "end": 332,
               "summary": "Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review."
             },
             {
@@ -3580,8 +3580,36 @@
               "title": "4. SSE asincrono (completato, REJECT per questi workload)",
               "level": 3,
               "start": 187,
-              "end": 215,
+              "end": 216,
               "summary": "Risultati `idle-sse-fast/results.json` e `idle-sse-slow/results.json`:"
+            },
+            {
+              "title": "2b. Revisione constraint: callback dopo submission (gate intermedi)",
+              "level": 3,
+              "start": 217,
+              "end": 247,
+              "summary": "Dopo il rifiuto del lookahead engine-only, provata una sola revisione piu ampia:"
+            },
+            {
+              "title": "5. MTP sampled: bulk e segmentazione (gate intermedi)",
+              "level": 3,
+              "start": 248,
+              "end": 278,
+              "summary": "Variante CUDA circoscritta al verifier sampled: staging pinned persistente,"
+            },
+            {
+              "title": "2b. Conferma a ordine invertito e candidato ripulito",
+              "level": 3,
+              "start": 279,
+              "end": 311,
+              "summary": "`idle-callback-reverse-candidate` eseguito prima di"
+            },
+            {
+              "title": "5. Conferma MTP sampled (completato, REJECT)",
+              "level": 3,
+              "start": 312,
+              "end": 332,
+              "summary": "`idle-mtp-segment-confirm/results.json`, stesso binario congelato"
             }
           ]
         },
