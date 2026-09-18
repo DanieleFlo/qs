@@ -182,7 +182,7 @@ Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
 - righe 3–13: **Obiettivo e invarianti** — Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
 - righe 14–26: **Metodo e criteri** — Ogni esperimento registra ipotesi, modifica, comandi, artefatti, correttezza,
 - righe 27–47: **Sequenza** — streaming e sampled MTP.
-- righe 48–332: **Registro** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
+- righe 48–365: **Registro** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
   - righe 50–57: **Preparazione** — Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review.
   - righe 58–89: **0. Baseline e gate iniziali (completato)** — Build esplicita: `make -j2 ds4 ds4-server ds4-bench ds4_test ds4_server_test CUDA_ARCH=sm_86`.
   - righe 90–109: **1. Begin/finish + postprocessing (completato, REJECT standalone)** — Implementato prototipo batched con enqueue separato da wait.
@@ -195,7 +195,8 @@ Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza
   - righe 217–247: **2b. Revisione constraint: callback dopo submission (gate intermedi)** — Dopo il rifiuto del lookahead engine-only, provata una sola revisione piu ampia:
   - righe 248–278: **5. MTP sampled: bulk e segmentazione (gate intermedi)** — Variante CUDA circoscritta al verifier sampled: staging pinned persistente,
   - righe 279–311: **2b. Conferma a ordine invertito e candidato ripulito** — `idle-callback-reverse-candidate` eseguito prima di
-  - righe 312–332: **5. Conferma MTP sampled (completato, REJECT)** — `idle-mtp-segment-confirm/results.json`, stesso binario congelato
+  - righe 312–333: **5. Conferma MTP sampled (completato, REJECT)** — `idle-mtp-segment-confirm/results.json`, stesso binario congelato
+  - righe 334–365: **2b. Gate del candidato ripulito (completato, REJECT)** — Build, test server e nuovi test maschera/RNG/cancellazione: PASS.
 
 ## [Roadmap di integrazione Qwen3.8 27B UD-Q4_K_S](qwen38-implementation-roadmap.md)
 

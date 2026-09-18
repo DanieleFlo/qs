@@ -330,3 +330,36 @@ aggiunti nel prototipo: ds4_cuda.cu e ds4_gpu.h tornano identici alla baseline.
 La copertura forced reject/partial/full dimostra correttezza nei percorsi testati;
 non e una misura prestazionale distinta per ogni regime di acceptance.
 Patch e binari degli esperimenti restano in performance-results/idle-time/.
+
+### 2b. Gate del candidato ripulito (completato, REJECT)
+
+Build, test server e nuovi test maschera/RNG/cancellazione: PASS.
+Probe callback full-vocabulary: 32 passi a ciascuno dei contesti
+128/2048/8192/16384, 248320 logits per passo, zero differenze bit-exact,
+zero valori non finiti, sampling mascherato identico. Callback una volta per
+passo e vecchi logits host invariati durante la preparazione: PASS.
+Log `callback-correctness.log`; patch locale `clean-callback.patch`.
+La build segnalava un wrapper statico divenuto inutilizzato: rimosso durante
+la review. Il binario congelato misurato precede questa rimozione senza effetti
+sul percorso eseguito. Non promuovere quel warning a nuova baseline release.
+
+Suite **slow**, warm-up 1 + cinque campioni, stesso eseguibile congelato e
+interruttore diagnostico, senza compilazioni concorrenti:
+`idle-callback-clean-baseline` / `idle-callback-clean-candidate`.
+
+| Workload | Baseline tok/s | Callback tok/s | CV baseline / callback | HTTP baseline / callback ms |
+| --- | ---: | ---: | --- | --- |
+| Tool | 21.006 | 21.404 | 0.51% / 0.45% | 7583.919 / 7500.138 |
+| JSON | 27.092 | 27.612 | 1.61% / 0.86% | 2225.318 / 2182.735 |
+
+Output identico, schema valido, zero divergenze: PASS. Il comparatore non trova
+incompatibilita di misurazione, ma emette NEED_MORE_DATA: miglioramento medio
+1.907%, sotto la soglia pratica 2%. Il tool guadagna 1.90% nel decode e 1.10%
+nel tempo HTTP completo. Non si nega il piccolo effetto misurato: si rifiuta
+la promozione delle nuove API e dello stato aggiuntivo dopo l'unica revisione
+seria prevista, perche il beneficio finale non raggiunge la soglia 2-3%.
+I precedenti +3-4% non sono il risultato del codice finale e non vanno pubblicizzati.
+Ripristinati ds4.c, ds4.h, ds4_server.c e tests/ds4_test.c dalla baseline.
+La matrice live aggiuntiva era stata predisposta ma non e stata eseguita dopo
+il rifiuto prestazionale: NOT_VERIFIED per quel prototipo, non PASS implicito.
+Nessuna nuova variante diagnostica o API di inferenza rimane in produzione.

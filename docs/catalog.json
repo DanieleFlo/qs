@@ -3489,7 +3489,7 @@
               "title": "Roadmap: tempi morti CPU/GPU nell'inferenza Qwen",
               "level": 1,
               "start": 1,
-              "end": 332,
+              "end": 365,
               "summary": "Migliorare il tempo end-to-end a contesti diversi tramite scheduling, senza"
             },
             {
@@ -3517,7 +3517,7 @@
               "title": "Registro",
               "level": 2,
               "start": 48,
-              "end": 332,
+              "end": 365,
               "summary": "Letture via PowerShell/WSL fuori dal sandbox riuscite con auto-review."
             },
             {
@@ -3608,8 +3608,15 @@
               "title": "5. Conferma MTP sampled (completato, REJECT)",
               "level": 3,
               "start": 312,
-              "end": 332,
+              "end": 333,
               "summary": "`idle-mtp-segment-confirm/results.json`, stesso binario congelato"
+            },
+            {
+              "title": "2b. Gate del candidato ripulito (completato, REJECT)",
+              "level": 3,
+              "start": 334,
+              "end": 365,
+              "summary": "Build, test server e nuovi test maschera/RNG/cancellazione: PASS."
             }
           ]
         },
