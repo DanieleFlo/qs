@@ -50,3 +50,5 @@ __pycache__/
 /agent/*
 !/agent/start-ds4-server.sh
 !/agent/start.sh
+
+/tests/test_qwen_mtp_callback

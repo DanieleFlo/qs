@@ -380,6 +380,12 @@ tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h ds4_q
 tests/qwen_numerics_probe.o: tests/qwen_numerics_probe.c ds4_gpu.h ds4_qwen.h
 	$(CC) $(QUALITY_CFLAGS) -I. -c -o $@ tests/qwen_numerics_probe.c
 
+tests/test_qwen_mtp_callback.o: tests/test_qwen_mtp_callback.c ds4.c ds4.h ds4_gpu.h ds4_qwen.h
+	$(CC) $(CFLAGS) -I. -c -o $@ $<
+
+tests/test_qwen_mtp_callback: tests/test_qwen_mtp_callback.o $(filter-out ds4.o,$(CORE_OBJS))
+	$(DS4_LINK) -o $@ $^ $(DS4_LINK_LIBS)
+
 tests/qwen_mtp_catchup_probe.o: tests/qwen_mtp_catchup_probe.c ds4.c ds4.h ds4_gpu.h ds4_qwen.h
 	$(CC) $(CFLAGS) -I. -c -o $@ $<
 
@@ -672,5 +678,5 @@ test-server-resident-frontier: tests/test_server_resident_frontier
 	./tests/test_server_resident_frontier "$(DS4_TEST_MODEL)"
 
 clean:
-	rm -f tests/test_server_resident_frontier tests/qwen_mtp_catchup_probe tests/qwen_iq4_dequant_probe
+	rm -f tests/test_qwen_mtp_callback tests/test_server_resident_frontier tests/qwen_mtp_catchup_probe tests/qwen_iq4_dequant_probe
 	rm -f ds4 ds4-server ds4-bench ds4-eval ds4-agent ds4_cpu ds4_native ds4_server_test ds4_test ds4_agent_test gguf-tools/quality-testing/score_official gguf-tools/quality-testing/score_official.o speed-bench/metal_decode_schedule_bench speed-bench/metal_prefill_variant_bench speed-bench/*.o tests/test_q4k_dot tests/test_mmq_parity tests/test_mxfp4_dot tests/test_mxfp4_metal tests/test_mxfp4_rocm tests/test_mxfp4_cuda tests/test_metal_session_batch tests/test_gpu_xdev tests/test_gpu_model_cache tests/test_gpu_lookup_cache_strict tests/test_engine_mgpu_refusal tests/test_engine_mgpu_runtime tests/test_engine_correctness tests/test_sampling tests/test_cuda_session_batch tests/test_cuda_mixed_batch tests/test_agentic_checkpoint tests/*.o *.o tests/cuda_long_context_smoke tests/cuda_long_context_smoke.o tests/qwen_numerics_probe

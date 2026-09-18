@@ -71798,7 +71798,14 @@ static int ds4_session_qwen_mtp_spec_cycle(
                         *sampling->rng = verify_rng_start;
                         if (sampling->next_token) *sampling->next_token = -1;
                     }
-                } else if (accepted_drafts == draft_n) {
+                }
+                /* A constrained sampler may decline a row at a reasoning/tool
+                 * boundary. The batch itself succeeded: keep only its first
+                 * target row, just as for a rejected draft. V(2) deliberately
+                 * omits the pre-batch snapshot, but owns this row's recurrent
+                 * state, logits and hidden carry; cancellation is not a GPU
+                 * failure and must not invalidate the session. */
+                if (sampled_rows_ok && accepted_drafts == draft_n) {
                     target_done = true;
                 } else {
                     const double rollback_t0 = now_sec();

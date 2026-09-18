@@ -2,6 +2,7 @@
 
 Set DS4_QS_ROOT to the qs checkout and DS4_QS_BASE_URL to its /v1 endpoint.
 The test runs the reported prompt twice, interrupting/restarting only the client.
+Set DS4_QS_MIN_ROOT_RETURNS=2 to exercise two complete skill cycles per client.
 Set DS4_QS_REQUIRE_COMPLETION=1 to also require a spontaneous final answer.
 """
 import os
@@ -15,6 +16,22 @@ import unittest
 
 
 PROMPT = "testa una skill e un tool, anche il tool nella skill, fai un check completo delle capacità"
+
+
+def capabilities_exercised(text: str, minimum_returns: int = 1) -> bool:
+    root_return = "tool_end: exit_agent (depth=0, path=/)"
+    returns = text.count(root_return)
+    completed = "Completed node run: node=main depth=0" in text
+    return (
+        "tool_end: mock-tool" in text
+        and "tool_start: mock-skill" in text
+        and any("tool_end: " + name in text for name in
+                ("mock-sub-tool", "shared-tool", "nested-sub-tool"))
+        and returns > 0
+        # A normal final answer is success, even before the stress-test quota.
+        and (returns >= minimum_returns or completed)
+        and "Continuation recorded:" in text.rsplit(root_return, 1)[-1]
+    )
 
 
 @unittest.skipUnless(os.getenv("DS4_QS_ROOT") and os.getenv("DS4_QS_BASE_URL"),
@@ -51,13 +68,8 @@ class QsClientLiveTests(unittest.TestCase):
                             text = path.read_text(encoding="utf-8", errors="replace")
                             self.assertNotIn("Traceback (most recent call last)", text)
                             self.assertNotIn("Provider response failed", text)
-                            ready = (
-                                "tool_end: mock-tool" in text
-                                and "tool_start: mock-skill" in text
-                                and any("tool_end: " + name in text for name in
-                                        ("mock-sub-tool", "shared-tool", "nested-sub-tool"))
-                                and "tool_end: exit_agent (depth=0, path=/)" in text
-                            )
+                            minimum = int(os.getenv("DS4_QS_MIN_ROOT_RETURNS", "1"))
+                            ready = capabilities_exercised(text, minimum)
                             if ready:
                                 # A completed call chain has reached root; the
                                 # next client must recover even if decode is active.

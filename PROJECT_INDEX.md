@@ -557,8 +557,14 @@ l'interno. Ogni capitolo presuppone quelli precedenti.
 - `tests/test_qs_client_live.py` — accettazione opt-in con `uv run qs`: esegue
   il prompt originale due volte sullo stesso server riavviando solo il client;
   verifica tool, skill e ritorno alla profondità zero, poi interrompe solo qs
-  e ripete sul server acceso. `DS4_QS_REQUIRE_COMPLETION=1` abilita anche
+  e ripete sul server acceso; attende la risposta server dopo il return.
+  `DS4_QS_MIN_ROOT_RETURNS=2` estende la prova a due cicli per client.
+  `DS4_QS_REQUIRE_COMPLETION=1` abilita anche
   il gate separato che richiede una risposta finale spontanea.
+- `tests/test_qwen_mtp_callback.c` — regressione CUDA/MTP oltre 2K token:
+  il callback può declinare una riga draft o bonus del verifier V(2); verifica
+  ripristino bit-exact dell'intero payload e del generatore casuale, senza errore
+  CUDA. Eseguire con target GGUF e sidecar MTP come argomenti.
 - `tests/test_server_resident_frontier.c` — regressione model-backed della cache
   di sistema residente e dei checkpoint skill: dopo reset o riscrittura della
   history, verifica logits bit-exact su tutto il vocabolario, rifiuto atomico di
